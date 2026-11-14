@@ -16,7 +16,7 @@ from makro import config as C
 from makro import logic as L
 from makro import ui, views
 from makro.fred import FredFehler, lade_serie
-from makro.storage import GoogleTabelleStore, LocalStore, SpeicherFehler
+from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
 
 st.set_page_config(page_title="Makro-Dashboard USA", page_icon="🇺🇸", layout="wide")
 ui.css()
