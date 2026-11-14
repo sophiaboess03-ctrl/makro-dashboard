@@ -4,6 +4,7 @@ Start lokal:  streamlit run app.py
 """
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
@@ -15,7 +16,7 @@ from makro import config as C
 from makro import logic as L
 from makro import ui, views
 from makro.fred import FredFehler, lade_serie
-from makro.storage import TABELLEN, GoogleSheetsStore, LocalStore
+from makro.storage import GoogleTabelleStore, LocalStore, SpeicherFehler
 
 st.set_page_config(page_title="Makro-Dashboard USA", page_icon="🇺🇸", layout="wide")
 ui.css()
@@ -47,21 +48,34 @@ if pw and not st.session_state.get("ok"):
 # ---------------------------------------------------------------------------
 # Speicher & Daten
 # ---------------------------------------------------------------------------
-@st.cache_resource
+@st.cache_resource(show_spinner="Verbinde mit der Google-Tabelle …")
+def verbinde_google(url: str, token: str):
+    return GoogleTabelleStore(url, token)
+
+
 def get_store():
-    creds, url = secret("gcp_service_account"), secret("sheet_url")
-    if creds and url:
-        return GoogleSheetsStore(creds, url)
-    return LocalStore("daten")
+    url, token = secret("script_url"), secret("script_token")
+    if not url or "HIER" in str(url):
+        return LocalStore("daten"), ("Noch keine Google-Tabelle verbunden: in den Secrets fehlt die script_url."
+                                     if secret("app_password") else None)
+    try:
+        return verbinde_google(str(url), str(token or "")), None
+    except SpeicherFehler as e:
+        return LocalStore("daten"), f"Google-Tabelle nicht verbunden: {e}"
+    except Exception as e:  # noqa: BLE001
+        return LocalStore("daten"), f"Google-Tabelle nicht verbunden ({type(e).__name__})."
 
 
-store = get_store()
+store, store_fehler = get_store()
 st.session_state["store_name"] = store.name
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def lese_tabelle(name: str) -> pd.DataFrame:
-    return store.lesen(name)
+def lese_alle(store_name: str) -> dict:
+    try:
+        return store.alle(), None
+    except Exception as e:  # noqa: BLE001
+        return LocalStore("daten").alle(), f"Lesen aus der Google-Tabelle fehlgeschlagen: {e}"
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Lade aktuelle Daten von FRED …")
@@ -93,14 +107,16 @@ def speichern(tabelle: str, zeilen: list[dict], meldung: str = "Gespeichert."):
     except Exception as e:  # noqa: BLE001
         st.error(f"Speichern fehlgeschlagen: {e}")
         return
-    lese_tabelle.clear()
+    lese_alle.clear()
     st.session_state["meldung"] = meldung
     st.rerun()
 
 
 serien = sorted({i["series"] for i in C.INDIKATOREN if i["quelle"] == "fred"} | {"GDPC1", "GDPPOT", C.REZESSION_SERIE})
 fred, fred_fehler, fred_zeit = lade_fred(tuple(serien), secret("fred_api_key"))
-tabellen = {t: lese_tabelle(t) for t in TABELLEN}
+tabellen, lese_fehler = lese_alle(store.name)
+if lese_fehler:
+    store_fehler = lese_fehler
 
 daten = L.Daten(fred, tabellen["werte"])
 status = L.status(daten)
@@ -120,9 +136,11 @@ with st.sidebar:
     else:
         person = st.text_input("Dein Name (für Einträge)", key="person") or "Unbekannt"
     st.caption(f"Speicher: {store.name}  \nFRED: {len(fred)} von {len(serien)} Reihen · {fred_zeit}")
+    if store_fehler:
+        st.error(store_fehler, icon="🔌")
     if isinstance(store, LocalStore):
-        st.warning("Lokaler Speicher: Online gehen Einträge beim Neustart verloren. Für das Team Google Sheets "
-                   "einrichten (siehe ANLEITUNG.md).", icon="⚠️")
+        st.warning("Lokaler Speicher: Online gehen Einträge beim Neustart verloren. Für das Team die Google-Tabelle "
+                   "verbinden (siehe ANLEITUNG.md).", icon="⚠️")
 
 if msg := st.session_state.pop("meldung", None):
     st.toast(msg, icon="✅")
