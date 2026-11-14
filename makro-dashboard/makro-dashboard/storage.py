@@ -1,10 +1,9 @@
 """Speicher für Team-Eingaben.
 
-- GoogleTabelleStore: gemeinsame Google-Tabelle über ein kleines Apps-Script (siehe google-script.txt)
+- GoogleTabelleStore: gemeinsame Google-Tabelle über ein kleines Apps-Script
 - LocalStore: CSV-Dateien im Ordner "daten/" (zum lokalen Testen)
 
 Es wird nie etwas überschrieben: jede Eingabe ist eine neue Zeile mit Zeitstempel und Person.
-So bleibt der ganze Verlauf erhalten; die App nimmt jeweils den neusten Eintrag.
 """
 from __future__ import annotations
 
