@@ -329,19 +329,29 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
         _formular(ctx, fred, lade_kurse)
         roh = tab.get("transaktionen")
         if roh is not None and not roh.empty:
-            aktuell = roh.sort_values("zeit").drop_duplicates("id", keep="last").sort_values("datum", ascending=False)
+            liste = transaktionsliste(roh)
             st.markdown("**Alle Transaktionen**")
-            for _, r in aktuell.iterrows():
-                storno = str(r["storniert"]).strip() in ("1", "1.0", "True")
-                c1, c2 = st.columns([6, 1])
-                c1.markdown(f"<span class='klein'>{'~~' if storno else ''}{r['datum']} · {r['art']} · {r['klasse']} · "
-                            f"<b>{html.escape(str(r['ticker']))}</b> {html.escape(str(r['name'] or ''))} · {r['menge']} @ {r['kurs']}"
-                            f"{' %' if r['klasse'] == 'Treasury' else ' USD'} · {html.escape(str(r['person']))}"
-                            f"{'~~ (storniert)' if storno else ''}</span>", unsafe_allow_html=True)
-                if not storno and c2.button("Stornieren", key=f"st_{r['id']}"):
+            st.dataframe(liste.drop(columns=["id"]), hide_index=True, width="stretch",
+                         column_config={"Begründung": st.column_config.TextColumn(width="large")})
+            c1, c2, c3 = st.columns([2.2, 1, 1.3])
+            offen = liste[liste["Status"] == "aktiv"]
+            if len(offen):
+                wahl = c1.selectbox("Transaktion stornieren", offen["id"], format_func=lambda i: (
+                    lambda r: f"{r['Datum']} · {r['Art']} {r['Titel']} · {r['Menge']}")(offen.set_index("id").loc[i]),
+                    key="storno_wahl")
+                if c2.button("Stornieren", key="storno_btn"):
+                    r = roh.sort_values("zeit").drop_duplicates("id", keep="last").set_index("id").loc[wahl]
                     zeile = {k: r[k] for k in r.index}
-                    zeile.update(zeit=jetzt(), person=ctx.person, storniert="1")
+                    zeile.update(id=wahl, zeit=jetzt(), person=ctx.person, storniert="1")
                     ctx.speichern("transaktionen", [zeile], "Transaktion storniert.")
+            if c3.button("📄 PDF erstellen", key="tx_pdf_btn"):
+                try:
+                    st.session_state["tx_pdf"] = transaktionen_pdf(liste, b, cash, total, kapital, aktien, treas, ctx)
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"PDF konnte nicht erstellt werden: {e}")
+            if st.session_state.get("tx_pdf"):
+                c3.download_button("📥 Transaktionsübersicht", st.session_state["tx_pdf"],
+                                   f"Transaktionen_Portfolio_{pd.Timestamp.today():%Y-%m-%d}.pdf", "application/pdf")
 
     with st.expander("⚙️ Einstellungen Portfolio (Startkapital, S&P-500-Sektorgewichte)"):
         with st.form("pf_einst"):
@@ -361,38 +371,209 @@ def _wdur(b: pd.DataFrame) -> float:
     return float((t["duration"] * t["wert"]).sum() / t["wert"].sum()) if len(t) and t["wert"].sum() else 0.0
 
 
+GICS_DE = {"Information Technology": "IT", "Health Care": "Gesundheit", "Financials": "Finanzen",
+           "Consumer Discretionary": "Zykl. Konsum", "Communication Services": "Kommunikation", "Industrials": "Industrie",
+           "Consumer Staples": "Basiskonsum", "Energy": "Energie", "Utilities": "Versorger", "Real Estate": "Immobilien",
+           "Materials": "Grundstoffe"}
+YAHOO_DE = {"Technology": "IT", "Healthcare": "Gesundheit", "Financial Services": "Finanzen", "Consumer Cyclical": "Zykl. Konsum",
+            "Communication Services": "Kommunikation", "Industrials": "Industrie", "Consumer Defensive": "Basiskonsum",
+            "Energy": "Energie", "Utilities": "Versorger", "Real Estate": "Immobilien", "Basic Materials": "Grundstoffe"}
+SP500_LISTE = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def sp500_liste() -> dict:
+    """Ticker → (Name, Sektor) aus der öffentlichen S&P-500-Liste (GICS). Leer, falls nicht erreichbar."""
+    try:
+        import io
+
+        import requests
+
+        r = requests.get(SP500_LISTE, timeout=15)
+        df = pd.read_csv(io.StringIO(r.text))
+        sym = next(c for c in df.columns if c.lower() in ("symbol", "ticker"))
+        name = next((c for c in df.columns if c.lower() in ("security", "name")), sym)
+        sek = next(c for c in df.columns if "sector" in c.lower())
+        return {str(z[sym]).upper().replace(".", "-"): (str(z[name]), GICS_DE.get(str(z[sek]), ""))
+                for _, z in df.iterrows()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def yahoo_info(ticker: str) -> tuple[str, str]:
+    try:
+        import yfinance as yf
+
+        i = yf.Ticker(ticker).info or {}
+        return str(i.get("shortName") or i.get("longName") or ""), YAHOO_DE.get(str(i.get("sector") or ""), "")
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
+def ticker_info(ticker: str) -> dict:
+    """Name, Sektor und ob im S&P 500 – zuerst aus der GICS-Liste, sonst von Yahoo Finance."""
+    t = ticker.strip().upper().replace(".", "-")
+    if not t:
+        return {}
+    liste = sp500_liste()
+    if t in liste:
+        name, sektor = liste[t]
+        return dict(ticker=t, name=name, sektor=sektor, im_index=True, quelle="S&P-500-Liste (GICS)")
+    name, sektor = yahoo_info(t)
+    return dict(ticker=t, name=name, sektor=sektor, im_index=False if liste else None, quelle="Yahoo Finance" if sektor else "")
+
+
+def transaktionsliste(roh: pd.DataFrame) -> pd.DataFrame:
+    d = roh.sort_values("zeit").drop_duplicates("id", keep="last").copy()
+    d["_datum"] = pd.to_datetime(d["datum"], errors="coerce")
+    d = d.sort_values(["_datum", "zeit"], ascending=False)
+    zeilen = []
+    for _, r in d.iterrows():
+        menge, kurs = zahl(r["menge"]), zahl(r["kurs"])
+        treas = r["klasse"] == "Treasury"
+        betrag = menge * kurs / (100 if treas else 1) if menge is not None and kurs is not None else None
+        storno = str(r["storniert"]).strip() in ("1", "1.0", "True")
+        zeilen.append({"id": r["id"], "Datum": pd.Timestamp(r["_datum"]).strftime("%d.%m.%Y") if pd.notna(r["_datum"]) else r["datum"],
+                       "Art": r["art"], "Klasse": r["klasse"],
+                       "Titel": str(r["ticker"]) + (f" – {r['name']}" if r["name"] and str(r["name"]) != "nan" else ""),
+                       "Sektor": r["sektor"] if r["sektor"] and str(r["sektor"]) != "nan" else "",
+                       "Menge": ui.de(menge, 0) if menge is not None else "",
+                       "Kurs": (ui.de(kurs, 2) + (" %" if treas else " USD")) if kurs is not None else "",
+                       "Betrag": _usd(betrag) if betrag is not None else "",
+                       "Begründung": r["notiz"] if r["notiz"] and str(r["notiz"]) != "nan" else "– (keine Begründung erfasst)",
+                       "Erfasst von": r["person"], "Status": "storniert" if storno else "aktiv"})
+    return pd.DataFrame(zeilen)
+
+
+def transaktionen_pdf(liste: pd.DataFrame, b: pd.DataFrame, cash, total, kapital, aktien, treas, ctx) -> bytes:
+    from fpdf import FPDF
+    from fpdf.fonts import FontFace
+
+    from bericht import _t
+
+    class P(FPDF):
+        def header(self):
+            self.set_font("Helvetica", "B", 9)
+            self.set_text_color(120, 130, 150)
+            self.cell(0, 6, _t("Portfoliosimulation FHGR - Transaktionsübersicht"), align="L")
+            self.cell(0, 6, _t(pd.Timestamp.now().strftime("%d.%m.%Y %H:%M")), align="R", new_x="LMARGIN", new_y="NEXT")
+            self.set_text_color(0, 0, 0)
+
+        def footer(self):
+            self.set_y(-12)
+            self.set_font("Helvetica", "", 8)
+            self.cell(0, 6, f"Seite {self.page_no()}", align="C")
+
+    def tabelle(pdf, kopf, zeilen, breiten, gross=8):
+        pdf.set_font("Helvetica", "", gross)
+        with pdf.table(col_widths=breiten, text_align="LEFT", line_height=4.2, first_row_as_headings=True,
+                       headings_style=FontFace(emphasis="BOLD", fill_color=(238, 240, 243))) as t:
+            r = t.row()
+            for k in kopf:
+                r.cell(_t(k))
+            for z in zeilen:
+                r = t.row()
+                for v in z:
+                    r.cell(_t(v))
+
+    def titel(pdf, text):
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(47, 93, 168)
+        pdf.cell(0, 7, _t(text), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+
+    pdf = P(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(True, margin=14)
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 17)
+    pdf.cell(0, 9, _t("Transaktionsübersicht Portfolio"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    r = (total / kapital - 1) * 100 if kapital else 0
+    pdf.multi_cell(0, 4.8, _t(
+        f"Stand {pd.Timestamp.today():%d.%m.%Y}, erstellt von {ctx.person}. Portfoliowert {ui.de(total, 0)} USD "
+        f"({ui.de(r, 2, True)} % seit Start, Startkapital {ui.de(kapital, 0)} USD). Aktien {ui.de(aktien / total * 100 if total else 0, 1)} % · "
+        f"Treasuries {ui.de(treas / total * 100 if total else 0, 1)} % · Cash {ui.de(cash / total * 100 if total else 0, 1)} %. "
+        f"Empfehlung Dashboard: {ctx.alloc['aktien']:.0f} / {ctx.alloc['anleihen']:.0f} / {ctx.alloc['cash']:.0f} %."),
+        new_x="LMARGIN", new_y="NEXT")
+
+    if len(b):
+        titel(pdf, "Positionen")
+        tabelle(pdf, ["Klasse", "Titel", "Sektor", "Menge/Nominal", "Kurs", "Marktwert USD", "Gewicht", "G/V inkl. Zinsen USD"],
+                [[z["klasse"], z["ticker"] + (f" - {z['name']}" if z["name"] else ""), z["sektor"] or "",
+                  ui.de(z["menge"], 0), ui.de(z["kurs"], 2) + (" %" if z["klasse"] == "Treasury" else ""),
+                  ui.de(z["wert"], 0), ui.de(z["wert"] / total * 100 if total else 0, 1) + " %",
+                  ui.de(z["wert"] + z["zins"] - z["einstand"], 0)] for _, z in b.iterrows()],
+                (20, 70, 28, 30, 25, 35, 20, 40))
+
+    titel(pdf, "Transaktionen mit Begründung")
+    tabelle(pdf, ["Datum", "Art", "Titel", "Sektor", "Menge", "Kurs", "Betrag", "Begründung", "Von", "Status"],
+            [[z["Datum"], z["Art"], z["Titel"], z["Sektor"], z["Menge"], z["Kurs"], z["Betrag"], z["Begründung"],
+              z["Erfasst von"], z["Status"]] for _, z in liste.iterrows()],
+            (19, 14, 42, 22, 20, 22, 28, 75, 18, 17), gross=7.5)
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.multi_cell(0, 4, _t("Treasuries bewertet über die US-Zinskurve (FRED) mit konstantem Abstand seit Kauf (Näherung); Aktien "
+                            "mit Schlusskursen von Yahoo Finance. Kuponerträge vereinfacht. Stornierte Transaktionen sind "
+                            "aufgeführt, fliessen aber nicht in die Bewertung ein."))
+    return bytes(pdf.output())
+
+
 def _formular(ctx, fred, lade_kurse):
     st.markdown("**Transaktion erfassen**")
-    klasse = st.radio("Anlageklasse", ["Aktie", "Treasury"], horizontal=True, key="tx_klasse")
+    c0, c00 = st.columns([1, 2])
+    klasse = c0.radio("Anlageklasse", ["Aktie", "Treasury"], horizontal=True, key="tx_klasse")
+    info = {}
+    if klasse == "Aktie":
+        tk = c00.text_input("Ticker (S&P 500)", placeholder="z. B. MSFT – Enter drücken", key="tx_ticker")
+        info = ticker_info(tk) if tk.strip() else {}
+        if info:
+            if info.get("sektor"):
+                txt = f"✓ {info['name']} · **{info['sektor']}** (Quelle: {info['quelle']})"
+                st.markdown(txt)
+            else:
+                st.warning("Sektor nicht gefunden – bitte unten von Hand wählen.")
+            if info.get("im_index") is False:
+                st.warning(f"{info['ticker']} steht nicht in der aktuellen S&P-500-Liste – Simulationsregel prüfen.")
     with st.form("tx", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         art = c1.radio("Art", ["Kauf", "Verkauf"], horizontal=True)
         datum = c2.date_input("Handelsdatum", value=pd.Timestamp.today().date(), format="DD.MM.YYYY")
         if klasse == "Aktie":
-            ticker = c3.text_input("Ticker (S&P 500)", placeholder="z. B. MSFT")
+            ticker = info.get("ticker", "")
             c4, c5, c6 = st.columns(3)
-            sektor = c4.selectbox("Sektor", C.SEKTOREN)
+            sek_idx = C.SEKTOREN.index(info["sektor"]) if info.get("sektor") in C.SEKTOREN else None
+            sektor = c4.selectbox("Sektor (automatisch, änderbar)", C.SEKTOREN, index=sek_idx,
+                                  placeholder="Sektor wählen")
             menge = c5.number_input("Stück", min_value=0.0, step=10.0, format="%.0f")
             kurs = c6.text_input("Kurs USD (leer = Schlusskurs automatisch)")
-            name, kupon, faell = st.text_input("Name (optional)"), None, None
+            name, kupon, faell = info.get("name", ""), None, None
         else:
+            c3, c4, c5, c6, c7 = st.columns([2, 1, 1, 1.2, 1.2])
             ticker = c3.text_input("Bezeichnung / CUSIP", placeholder="z. B. UST 4,25 % 15.11.2029")
-            c4, c5, c6, c7 = st.columns(4)
             kupon = c4.number_input("Kupon % p.a.", min_value=0.0, max_value=15.0, step=0.125, format="%.3f")
             faell = c5.date_input("Fälligkeit", value=(pd.Timestamp.today() + pd.DateOffset(years=3)).date(), format="DD.MM.YYYY")
             menge = c6.number_input("Nominal USD", min_value=0.0, step=100000.0, format="%.0f")
             kurs = c7.text_input("Kurs in % (leer = aus Zinskurve)")
             sektor, name = "", ""
-        notiz = st.text_input("Notiz / Begründung (optional)")
+        begruendung = st.text_area("Begründung (Pflicht) – z. B. Bezug zu Szenario, Signal oder Sektorvotum, mit Quelle",
+                                   height=80)
         if st.form_submit_button("Transaktion speichern", type="primary"):
-            if not ticker.strip() or not menge:
-                st.error("Bitte Ticker/Bezeichnung und Menge angeben.")
+            if not str(ticker).strip() or not menge:
+                st.error("Bitte Ticker/Bezeichnung (oben) und Menge angeben.")
+                return
+            if len(begruendung.strip()) < 10:
+                st.error("Bitte eine Begründung angeben (mindestens ein Satz) – sie ist Pflicht.")
+                return
+            if klasse == "Aktie" and not sektor:
+                st.error("Bitte den Sektor wählen.")
                 return
             k = zahl(kurs)
             d = pd.Timestamp(datum)
             if k is None and klasse == "Aktie":
-                kk, _, _ = lade_kurse((ticker.strip().upper(),))
-                s = kk.get(ticker.strip().upper())
+                kk, _, _ = lade_kurse((str(ticker).upper(),))
+                s = kk.get(str(ticker).upper())
                 s = s[s.index <= d] if s is not None else None
                 k = float(s.iloc[-1]) if s is not None and len(s) else None
             if k is None and klasse == "Treasury":
@@ -404,12 +585,12 @@ def _formular(ctx, fred, lade_kurse):
                 return
             ctx.speichern("transaktionen", [dict(zeit=jetzt(), person=ctx.person, id=uuid.uuid4().hex[:10],
                                                  datum=d.date().isoformat(), art=art, klasse=klasse,
-                                                 ticker=ticker.strip().upper() if klasse == "Aktie" else ticker.strip(),
-                                                 name=name.strip(), sektor=sektor, menge=menge, kurs=round(k, 4),
+                                                 ticker=str(ticker).strip().upper() if klasse == "Aktie" else str(ticker).strip(),
+                                                 name=name.strip(), sektor=sektor or "", menge=menge, kurs=round(k, 4),
                                                  kupon=kupon if kupon is not None else "",
                                                  faelligkeit=pd.Timestamp(faell).date().isoformat() if faell else "",
-                                                 notiz=notiz.strip(), storniert="")],
-                          f"{art} {ticker.strip()} gespeichert (Kurs {ui.de(k, 2)}).")
+                                                 notiz=begruendung.strip(), storniert="")],
+                          f"{art} {str(ticker).strip()} gespeichert (Kurs {ui.de(k, 2)}).")
 
 
 def zusammenfassung(tabellen: dict, fred: dict, lade_kurse, alloc: dict) -> dict | None:
