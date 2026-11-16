@@ -1,0 +1,34 @@
+[theme]
+base = "light"
+primaryColor = "#1F4E8C"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F6F8"
+textColor = "#1D2533"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+headingFontSizes = ["2rem", "1.4rem", "1.12rem", "1rem", "0.9rem", "0.85rem"]
+baseFontSize = 15
+baseRadius = "0.55rem"
+borderColor = "#E3E6EB"
+dataframeBorderColor = "#E3E6EB"
+dataframeHeaderBackgroundColor = "#F5F6F8"
+showWidgetBorder = true
+linkColor = "#1F4E8C"
+redColor = "#B93A32"
+greenColor = "#2F855A"
+orangeColor = "#B7791F"
+yellowColor = "#B7791F"
+blueColor = "#1F4E8C"
+grayColor = "#6B7685"
+chartCategoricalColors = ["#1F4E8C", "#B08D57", "#2F7F7A", "#8FA6C4", "#8E5572", "#9AA3AF"]
+
+[theme.sidebar]
+backgroundColor = "#F7F8FA"
+secondaryBackgroundColor = "#FFFFFF"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
