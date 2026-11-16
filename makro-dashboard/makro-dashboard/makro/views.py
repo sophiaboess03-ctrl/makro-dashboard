@@ -61,7 +61,7 @@ def _zaehler(st_df: pd.DataFrame, ids: list[str]) -> dict:
 def _zaehler_html(z: dict) -> str:
     teile = []
     for k in (L.ROT, L.GELB, L.GRUEN):
-        teile.append(f'<span class="pill" style="background:{ui.HELL[k]}; color:{ui.FARBE[k]}; font-weight:700">'
+        teile.append(f'<span class="pill" style="background:{ui.HELL[k]}; color:{ui.FARBE[k]}; border-color:{ui.RAND[k]}">'
                      f'{z[k]} {k}</span>')
     return "".join(teile)
 
@@ -93,14 +93,13 @@ def _signal_box(s: dict):
 
 def _ind_tabelle(ctx: Ctx, ids: list[str]):
     d = ctx.status.loc[ids].copy()
-    d["Ampel"] = d["ampel"].map(lambda a: {"Rot": "🔴 Rot", "Gelb": "🟡 Gelb", "Grün": "🟢 Grün",
-                                             "Kontext": "⚪ Kontext"}.get(a, "– keine Daten"))
+    d["Ampel"] = d["ampel"].map(ui.ampel_txt)
     d["Trend"] = d["pfeil"] + " " + d["trend"].replace({"neutral": ""})
     d["Stand"] = d["datum"].map(ui.datum_txt)
     d["Herkunft"] = d["herkunft"] + d["person"].map(lambda p: f" ({p})" if p else "")
     out = d[["name", "anzeige", "Ampel", "Trend", "vor_anzeige", "Stand", "schwelle", "Herkunft"]]
     out.columns = ["Indikator", "Wert", "Ampel", "Trend", "Vorwert", "Stand", "Schwelle", "Herkunft"]
-    st.dataframe(out, hide_index=True, width="stretch")
+    st.dataframe(ui.ampel_stil(out, ["Ampel"]), hide_index=True, width="stretch")
 
 
 def eingabe_formular(ctx: Ctx, ind_id: str | None = None, key: str = "f"):
@@ -110,7 +109,7 @@ def eingabe_formular(ctx: Ctx, ind_id: str | None = None, key: str = "f"):
                                                                       [k["id"] for k in C.KAPITEL].index(i["kapitel"])))
                     if i["quelle"] != "berechnet"]
         ind_id = st.selectbox("Indikator", optionen, key=f"sel_{key}", format_func=lambda i: (
-            f"{C.KAPITEL_BY_ID[C.IND_BY_ID[i]['kapitel']]['icon']} {C.IND_BY_ID[i]['name']} "
+            f"{C.IND_BY_ID[i]['name']} · {C.KAPITEL_BY_ID[C.IND_BY_ID[i]['kapitel']]['name']} "
             f"({'manuell' if C.IND_BY_ID[i]['quelle'] == 'manuell' else 'FRED – Überschreiben möglich'})"))
         r = ctx.status.loc[ind_id]
         st.caption(f"Aktuell: {r['anzeige']} (Stand {ui.datum_txt(r['datum'])}, {r['herkunft']}) · "
@@ -140,8 +139,7 @@ def eingabe_formular(ctx: Ctx, ind_id: str | None = None, key: str = "f"):
 # Gesamtbild
 # ---------------------------------------------------------------------------
 def seite_gesamtbild(ctx: Ctx):
-    st.title("🇺🇸 Makrolage USA – Gesamtbild")
-    st.caption(f"Portfoliosimulation FHGR · Dez. 2026 – Feb. 2027 · {ctx.fred_stand}")
+    ui.seitenkopf("Makrolage USA – Gesamtbild", f"Anlagehorizont Dez. 2026 – Feb. 2027 · USD 10 Mio. · S&P 500 und US-Treasuries · {ctx.fred_stand}")
     if ctx.fred_fehler:
         st.warning(f"{len(ctx.fred_fehler)} FRED-Reihen konnten nicht geladen werden – dort werden die Werte aus der "
                    f"Analyse bzw. Team-Einträge gezeigt. ({', '.join(ctx.fred_fehler[:6])}{' …' if len(ctx.fred_fehler) > 6 else ''})")
@@ -156,34 +154,33 @@ def seite_gesamtbild(ctx: Ctx):
     ui.kopf_kpis([
         ("Zyklusphase (Team)", html.escape(L.phase((team_von + team_bis) / 2)),
          f"Team {ui.de(team_von, 2)}–{ui.de(team_bis, 2)} · Modell: {html.escape(zm['phase'])}"),
-        ("Ampeln", f'<span style="color:{ui.FARBE[L.ROT]}">{z[L.ROT]}</span> · <span style="color:{ui.FARBE[L.GELB]}">{z[L.GELB]}</span>'
-                   f' · <span style="color:{ui.FARBE[L.GRUEN]}">{z[L.GRUEN]}</span>',
+        ("Ampeln", f'<span style="color:{ui.FARBE[L.ROT]}">{z[L.ROT]}</span><span style="color:#C5CAD3"> / </span>'
+                   f'<span style="color:{ui.FARBE[L.GELB]}">{z[L.GELB]}</span><span style="color:#C5CAD3"> / </span>'
+                   f'<span style="color:{ui.FARBE[L.GRUEN]}">{z[L.GRUEN]}</span>',
          f"Rot · Gelb · Grün von {len(alle)} Indikatoren ({z[L.KONTEXT]} Kontext)"),
         ("Aktive Signale", str(len(signale)), "rote Indikatoren, Kombi-Signale, Risiko-Warnsignale"),
         ("Tage bis Abgabe", str(tage) if tage >= 0 else "vorbei", "Abgabe Portfoliosimulation 28.02.2027"),
     ])
 
     st.subheader("Kapitel auf einen Blick")
-    for zeile in range(0, len(C.KAPITEL), 4):
-        cols = st.columns(4)
-        for col, kap in zip(cols, C.KAPITEL[zeile:zeile + 4]):
-            ids = [i["id"] for i in C.INDIKATOREN if i["kapitel"] == kap["id"]]
-            zz = _zaehler(ctx.status, ids)
-            kern = [i for i in ids if C.IND_BY_ID[i]["kern"]][:3] or ids[:3]
-            n_sig = len(_signale(ctx, kap["id"]))
-            with col.container(border=True):
-                st.markdown(f'<div class="kap-titel">{kap["icon"]} {html.escape(kap["name"])}</div>'
-                            f'<div style="margin:4px 0 6px">{_zaehler_html(zz)}'
-                            f'{"<span class=pill style=background:#FBE9E9;color:#D64545>⚠ " + str(n_sig) + " Signal(e)</span>" if n_sig else ""}</div>',
-                            unsafe_allow_html=True)
-                for i in kern:
-                    r = ctx.status.loc[i]
-                    st.markdown(f'<div class="klein">{ui.badge(r["ampel"])} {html.escape(r["name"])}: '
-                                f'<b>{html.escape(r["anzeige"])}</b> <span style="color:{ui.TREND_FARBE[r["trend"]]}">{r["pfeil"]}</span></div>',
-                                unsafe_allow_html=True)
-                fazit, _ = _fazit(ctx, kap["id"])
-                st.markdown(f'<div class="klein" style="margin-top:6px">{html.escape(fazit[:170])}{"…" if len(fazit) > 170 else ""}</div>',
-                            unsafe_allow_html=True)
+    karten = []
+    for kap in C.KAPITEL:
+        ids = [i["id"] for i in C.INDIKATOREN if i["kapitel"] == kap["id"]]
+        zz = _zaehler(ctx.status, ids)
+        kern = [i for i in ids if C.IND_BY_ID[i]["kern"]][:3] or ids[:3]
+        n_sig = len(_signale(ctx, kap["id"]))
+        sig = (f'<span class="pill" style="background:#fff; color:{ui.FARBE[L.ROT]}; border-color:{ui.RAND[L.ROT]}">'
+               f'{n_sig} Signal{"e" if n_sig != 1 else ""}</span>' if n_sig else "")
+        zeilen = "".join(
+            f'<div class="karte-zeile"><span><span class="punkt" style="background:{ui.FARBE.get(ctx.status.loc[i, "ampel"], ui.MUTED)}"></span>'
+            f'{html.escape(ctx.status.loc[i, "name"].split(" (")[0])}</span>'
+            f'<span>{html.escape(ctx.status.loc[i, "anzeige"])} <span style="color:{ui.TREND_FARBE[ctx.status.loc[i, "trend"]]}">'
+            f'{ctx.status.loc[i, "pfeil"]}</span></span></div>' for i in kern)
+        fazit, _ = _fazit(ctx, kap["id"])
+        karten.append(f'<div class="karte"><div class="karte-titel">{html.escape(kap["name"])}</div>'
+                      f'<div style="margin-bottom:9px">{_zaehler_html(zz)}{sig}</div>{zeilen}'
+                      f'<div class="karte-text">{html.escape(fazit[:165])}{"…" if len(fazit) > 165 else ""}</div></div>')
+    st.markdown(f'<div class="karten">{"".join(karten)}</div>', unsafe_allow_html=True)
 
     st.divider()
     l, r = st.columns([1.05, 1])
@@ -243,12 +240,13 @@ def seite_gesamtbild(ctx: Ctx):
 # ---------------------------------------------------------------------------
 def seite_kapitel(ctx: Ctx, kap_id: str):
     kap = C.KAPITEL_BY_ID[kap_id]
-    st.title(f"{kap['icon']} {kap['name']}")
     ids = _ind_ids(kap_id)
     eigene = [i for i in ids if C.IND_BY_ID[i]["kapitel"] == kap_id]
     fazit, wer = _fazit(ctx, kap_id)
+    nr = [k["id"] for k in C.KAPITEL].index(kap_id) + 1
+    ui.seitenkopf(kap["name"], f"{_zaehler_html(_zaehler(ctx.status, eigene))}&nbsp; {len(ids)} Indikatoren · {ctx.fred_stand}",
+                  over=f"Kapitel {nr} von {len(C.KAPITEL)} · Makroanalyse USA")
     st.markdown(f"> {html.escape(fazit)}\n\n<span class='klein'>{wer}</span>", unsafe_allow_html=True)
-    st.markdown(_zaehler_html(_zaehler(ctx.status, eigene)), unsafe_allow_html=True)
 
     sig = _signale(ctx, kap_id)
     if sig:
@@ -272,7 +270,7 @@ def seite_kapitel(ctx: Ctx, kap_id: str):
             st.markdown(f"**Modell:** {zm['phase']} (Position {ui.de(zm['pos'], 2)})")
             st.caption(f"{sum(x for _, x in zm['spaet'])} von {len(zm['spaet'])} Spätzyklus-Merkmalen erfüllt, "
                        f"{zm['n_rez']} Rezessionsmerkmal(e). Ohne Rezessionsmerkmal: Position 0,30 + 0,27 × Anteil Spätzyklus.")
-            st.markdown("<div class='klein'>" + "<br>".join(f"{'✅' if ok else '▫️'} {html.escape(n)}"
+            st.markdown("<div class='klein'>" + "<br>".join(f"<span style='color:{ui.FARBE[L.GRUEN] if ok else '#C5CAD3'}'>{'■' if ok else '□'}</span> {html.escape(n)}"
                                                            for n, ok in zm["spaet"] + zm["rezession"]) + "</div>",
                         unsafe_allow_html=True)
             st.markdown("<div class='klein' style='margin-top:8px'>" + "<br>".join(
@@ -285,8 +283,8 @@ def seite_kapitel(ctx: Ctx, kap_id: str):
                                  key=f"jahre_{kap_id}") or 5
     for n_i, i in enumerate(ids):
         ind, r = C.IND_BY_ID[i], ctx.status.loc[i]
-        icon = {"Rot": "🔴", "Gelb": "🟡", "Grün": "🟢", "Kontext": "⚪"}.get(r["ampel"], "▫️")
-        with st.expander(f"{icon} {ind['name']} — {r['anzeige']}", expanded=n_i == 0):
+        farbe = {"Rot": "red", "Gelb": "orange", "Grün": "green", "Kontext": "gray"}.get(r["ampel"], "gray")
+        with st.expander(f":{farbe}[●]&nbsp; {ind['name']} — {r['anzeige']}", expanded=n_i == 0):
             c1, c2 = st.columns([1.7, 1])
             with c1:
                 ui.indikator_chart(ind, ctx.daten.reihe(i), ctx.rezession, jahre)
@@ -307,7 +305,7 @@ def seite_kapitel(ctx: Ctx, kap_id: str):
                                 f"{html.escape(str(r['quelle1']))}; {html.escape(str(r['quelle2']))}</span>",
                                 unsafe_allow_html=True)
             if ind["quelle"] != "berechnet":
-                with st.popover("➕ Neuen Wert eintragen"):
+                with st.popover("Neuen Wert eintragen", icon=":material/add:"):
                     eingabe_formular(ctx, i, key=f"{kap_id}_{i}")
 
     themen = [t["id"] for t in C.THEMEN if kap_id in t["kapitel"]]
@@ -340,11 +338,11 @@ def _szenario_tabelle(ctx: Ctx, themen):
 def _risiko_tabelle(ris: pd.DataFrame):
     d = ris.copy()
     d["W."] = d["p"].map(lambda x: "–" if pd.isna(x) else f"{x:.0f} %")
-    d["Ausw."] = d["impact"].map(lambda x: "–" if pd.isna(x) else f"{x:.1f}")
-    d["Signal"] = d["signal"].map(lambda x: "🔴 aktiv" if x else "–")
+    d["Ausw."] = d["impact"].map(lambda x: "–" if pd.isna(x) else ui.de(x, 1))
+    d["Signal"] = d["signal"].map(lambda x: "● aktiv" if x else "–")
     out = d[["name", "W.", "Ausw.", "Signal", "p_text", "warnsignal", "reaktion", "basis"]]
     out.columns = ["Risiko", "Wahrsch.", "Auswirkung", "Warnsignal", "Analyse", "Warnsignale", "Reaktion", "Basis"]
-    st.dataframe(out, hide_index=True, width="stretch")
+    st.dataframe(ui.ampel_stil(out, ["Warnsignal"]), hide_index=True, width="stretch")
 
 
 def _notizen(ctx: Ctx, kap_id: str):
@@ -365,8 +363,7 @@ def _notizen(ctx: Ctx, kap_id: str):
 # Szenarien & Risiken
 # ---------------------------------------------------------------------------
 def seite_szenarien_risiken(ctx: Ctx):
-    st.title("🎲 Szenarien & Risiken")
-    st.caption("Wahrscheinlichkeiten = Durchschnitt der neusten Schätzung jeder Person (pro Thema auf 100 % normiert). "
+    ui.seitenkopf("Szenarien & Risiken", "Wahrscheinlichkeiten = Durchschnitt der neusten Schätzung jeder Person (pro Thema auf 100 % normiert). "
                "Bewerten könnt ihr auf der Seite «Bewerten».")
     ui.szenario_chart(ctx.szen)
     _szenario_tabelle(ctx, [t["id"] for t in C.THEMEN])
@@ -386,8 +383,7 @@ def seite_szenarien_risiken(ctx: Ctx):
 # ---------------------------------------------------------------------------
 def seite_allokation(ctx: Ctx):
     a = ctx.alloc
-    st.title("🧭 Allokation – Gesamtempfehlung")
-    st.caption("Regelbasiert aus euren Aktionen je Indikator, den Team-Wahrscheinlichkeiten und den Warnsignalen. "
+    ui.seitenkopf("Allokation – Gesamtempfehlung", "Regelbasiert aus euren Aktionen je Indikator, den Team-Wahrscheinlichkeiten und den Warnsignalen. "
                "Sie ersetzt nicht eure Entscheidung, sondern zeigt, wohin die Signale zusammen zeigen.")
     ui.kopf_kpis([
         ("Aktien (S&P 500)", f"{a['aktien']:.0f} %", f"{ui.de(a['aktien_tilt'], 0, True)} PP vs. neutral {a['neutral']['aktien']:.0f} %"),
@@ -416,7 +412,7 @@ def seite_allokation(ctx: Ctx):
 
     st.markdown("#### Signale und ihre Wirkung")
     reg = pd.DataFrame(a["regeln"])
-    reg["Status"] = reg["aktiv"].map(lambda x: "🔴 aktiv" if x else "–")
+    reg["Status"] = reg["aktiv"].map(lambda x: "● aktiv" if x else "–")
     reg["Aktien"] = reg["aktien"].map(lambda x: f"{ui.de(x, 0, True)} PP" if x else "")
     reg["Duration"] = reg["duration"].map(lambda x: f"{ui.de(x)} J." if x is not None and not pd.isna(x) else "")
     reg["TIPS"] = reg["tips"].map(lambda x: f"{x:g} %" if x is not None and not pd.isna(x) else "")
@@ -424,7 +420,7 @@ def seite_allokation(ctx: Ctx):
     reg = reg.sort_values("aktiv", ascending=False)
     out = reg[["Status", "name", "Aktien", "Duration", "TIPS", "Sektoren", "grund", "herkunft"]]
     out.columns = ["Status", "Signal", "Aktien", "Duration-Ziel", "TIPS-Ziel", "Sektoren", "Auslöser", "Herkunft"]
-    st.dataframe(out, hide_index=True, width="stretch")
+    st.dataframe(ui.ampel_stil(out, ["Status"]), hide_index=True, width="stretch")
     st.caption("«Grösse: Vorschlag» = die Richtung kommt aus eurer Analyse, die Höhe (z. B. −5 PP) hat Claude ergänzt – "
                "im Team prüfen und in makro/logic.py anpassen.")
 
@@ -450,9 +446,8 @@ def _letzte(df: pd.DataFrame, person: str, key: str, item: str, feld: str):
 
 
 def seite_bewerten(ctx: Ctx):
-    st.title("🗳️ Bewerten")
-    st.caption(f"Du bewertest als **{ctx.person}**. Gespeichert wird jeweils deine neuste Einschätzung; "
-               "die App mittelt über alle Personen.")
+    ui.seitenkopf("Bewerten", f"Du bewertest als <b>{html.escape(ctx.person)}</b>. Gespeichert wird jeweils deine neuste "
+                  "Einschätzung; die App mittelt über alle Personen.")
     t1, t2, t3 = st.tabs(["Szenarien", "Risiken", "Zyklus"])
     with t1:
         for th in C.THEMEN:
@@ -495,7 +490,7 @@ def seite_bewerten(ctx: Ctx):
                 zeilen.append(dict(zeit=jetzt(), person=ctx.person, risiko=rid, p=p, impact=imp, signal=int(sig), kommentar=kom))
             if st.form_submit_button("Alle Risiken speichern", type="primary"):
                 ctx.speichern("risiko_votes", zeilen, "Risikobewertung gespeichert.")
-        with st.expander("➕ Neues Risiko hinzufügen"):
+        with st.expander("Neues Risiko hinzufügen", icon=":material/add:"):
             with st.form("neues_risiko", clear_on_submit=True):
                 name = st.text_input("Name")
                 kap = st.selectbox("Kapitel", [k["id"] for k in C.KAPITEL], index=7,
@@ -524,7 +519,7 @@ def seite_bewerten(ctx: Ctx):
 # Daten eintragen, Termine, Protokoll, Einstellungen
 # ---------------------------------------------------------------------------
 def seite_eintragen(ctx: Ctx):
-    st.title("✏️ Daten eintragen")
+    ui.seitenkopf("Daten eintragen", "Neue Werte für manuelle Indikatoren oder Überschreiben eines FRED-Werts.")
     st.markdown("Für Indikatoren, die nicht auf FRED sind (ISM, Conference Board, NFIB, BofA-Umfrage, Forward-KGV, "
                 "Forward-EPS, DXY) – oder um einen FRED-Wert mit einer neueren Zahl zu überschreiben. "
                 "**Der Wert mit dem neusten Datum gilt.** Ampel, Trend, Allokation und Gesamtbild passen sich sofort an.")
@@ -565,7 +560,7 @@ def _termine_tabelle(n: int | None = None):
 
 
 def seite_termine(ctx: Ctx):
-    st.title("📅 Termine bis Abgabe")
+    ui.seitenkopf("Termine bis Abgabe", "Datenveröffentlichungen, Fed-Sitzungen und Fristen bis zur Abgabe am 28.02.2027.")
     _termine_tabelle()
     if TERMINE_INFO:
         st.caption(TERMINE_INFO)
@@ -574,8 +569,7 @@ def seite_termine(ctx: Ctx):
 
 
 def seite_protokoll(ctx: Ctx):
-    st.title("🧾 Protokoll")
-    st.caption("Alle Team-Eingaben, neuste zuerst. Nichts wird überschrieben – Korrekturen sind einfach neue Einträge.")
+    ui.seitenkopf("Protokoll", "Alle Team-Eingaben, neuste zuerst. Nichts wird überschrieben – Korrekturen sind einfach neue Einträge.")
     namen = {"werte": "Werte", "szenario_votes": "Szenario-Bewertungen", "risiko_votes": "Risiko-Bewertungen",
              "zyklus_votes": "Zyklus", "notizen": "Notizen", "einstellungen": "Einstellungen", "risiken_neu": "Neue Risiken", "sektorvoten": "Sektorvoten",
              "transaktionen": "Transaktionen", "entscheide": "Entscheide", "sektordaten": "Sektordaten"}
@@ -595,7 +589,7 @@ def seite_protokoll(ctx: Ctx):
 
 
 def seite_einstellungen(ctx: Ctx):
-    st.title("⚙️ Einstellungen")
+    ui.seitenkopf("Einstellungen", "Neutrale Ausgangsallokation und Datenquellen.")
     n = ctx.alloc["neutral"]
     st.markdown("Neutrale Ausgangsallokation – gilt für das ganze Team. Die Signale verschieben die Empfehlung davon weg.")
     with st.form("neutral"):

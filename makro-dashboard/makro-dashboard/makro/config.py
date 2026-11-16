@@ -19,56 +19,56 @@ KAPITEL = [
     {
         "id": "wachstum",
         "name": "Wachstum & Zyklus",
-        "icon": "📈",
+        "icon": ":material/trending_up:",
         "fazit": "Fortgeschrittene Expansion: BIP Q3 +3,4 % annualisiert, Output Gap +1,7 %, "
                  "ISM-Neuaufträge seit 10 Monaten expansiv. Gegenpol: hoher Kostendruck (ISM-Preise über 75).",
     },
     {
         "id": "arbeitsmarkt",
         "name": "Arbeitsmarkt",
-        "icon": "👷",
+        "icon": ":material/work:",
         "fazit": "Robust: Arbeitslosenquote 4,1 % und seit Q4 2025 sinkend, +165'000 Stellen im Oktober, "
                  "Lohnwachstum 3,1 %. Kein Rezessionssignal für die nächsten 3 Monate, wenig lohnseitiger Inflationsdruck.",
     },
     {
         "id": "inflation",
         "name": "Inflation & Fed",
-        "icon": "🏛️",
+        "icon": ":material/price_change:",
         "fazit": "Inflation hartnäckig über Ziel: Kern-PCE 3,1 %, Kern-CPI +0,3 % zum Vormonat (≈ 3,6 % annualisiert). "
                  "Die Fed erhöht; unsere Wahrscheinlichkeit bis 28.02.: Erhöhung 85 %, Halten 14 %, Senkung 1 %.",
     },
     {
         "id": "zinsen",
         "name": "Zinsen & Anleihen",
-        "icon": "💵",
+        "icon": ":material/stacked_line_chart:",
         "fazit": "Lange Zinsen hoch (10 J. 5,10 %) wegen Defizit ≈ 6 % des BIP und schwacher Auktionen. "
                  "Bear Flattening (10 J. − 2 J. +22 bp): lange Laufzeiten bringen kaum Mehrrendite → Schwerpunkt 1–7 J., nichts über 10 J.",
     },
     {
         "id": "kredit",
         "name": "Kredit & Finanzbedingungen",
-        "icon": "🏦",
+        "icon": ":material/account_balance:",
         "fazit": "Finanzbedingungen locker (NFCI −0,46), Spreads sehr eng (BB 184 bp, BBB 107 bp); Stress nur im CCC-Segment. "
                  "Öl und starker Dollar belasten.",
     },
     {
         "id": "konsum",
         "name": "Konsum & Stimmung",
-        "icon": "🛒",
+        "icon": ":material/shopping_cart:",
         "fazit": "Konsum aus Ersparnis: Sparquote 3,8 % (tiefster Stand seit Okt. 2022), Realkonsum stagniert, Realeinkommen −0,3 %. "
                  "Stimmung schwach – getrieben von Preisen, nicht von Jobangst.",
     },
     {
         "id": "gewinne",
         "name": "Gewinne & Bewertung",
-        "icon": "📊",
+        "icon": ":material/monitoring:",
         "fazit": "Bewertung fair (Forward-KGV 17,8 unter dem 10-J.-Schnitt von 19,1), aber Aktienrisikoprämie nur +0,51 PP. "
                  "Positionierung einseitig: Fondsmanager-Cash 3,9 %, Tech-Übergewicht netto 37 %.",
     },
     {
         "id": "geopolitik",
         "name": "Geopolitik & Extremrisiken",
-        "icon": "🌍",
+        "icon": ":material/public:",
         "fazit": "Iran-Krieg/Hormus hält Brent bei 85–100 USD; Handelsfrieden USA–China läuft ≈ 10.01.2027 aus. "
                  "Weitere Risiken: Cyber, Russland–NATO, Protektionismus/USMCA und Tail Risks.",
     },
