@@ -25,6 +25,7 @@ TABELLEN = {
     "notizen": ["zeit", "person", "kapitel", "typ", "text"],
     "einstellungen": ["zeit", "person", "schluessel", "wert"],
     "risiken_neu": ["zeit", "person", "id", "name", "kapitel", "warnsignal", "reaktion"],
+    "sektorvoten": ["zeit", "person", "sektor", "votum", "datenpunkte", "gegenargument"],
 }
 
 
@@ -57,6 +58,9 @@ class LocalStore:
         df = pd.DataFrame([{k: z.get(k, "") for k in TABELLEN[tabelle]} for z in zeilen])
         p = self._pfad(tabelle)
         df.to_csv(p, mode="a", header=not os.path.exists(p), index=False)
+
+
+LocalStore.newsletter = lambda self: []
 
 
 class SpeicherFehler(Exception):
@@ -108,6 +112,16 @@ class GoogleTabelleStore:
                     df[c] = ""
             out[t] = df[kopf].astype(str)
         return out
+
+    def newsletter(self) -> list[dict]:
+        """E-Mails mit dem Gmail-Label «Dashboard» (letzte 10 Tage), neuste zuerst."""
+        try:
+            return self._rufe({"aktion": "newsletter"}).get("mails", [])
+        except SpeicherFehler as e:
+            if "Unbekannte Aktion" in str(e):
+                raise SpeicherFehler("Das Google-Skript ist noch die alte Version ohne Newsletter-Funktion. "
+                                     "Neuen Code einfügen und als «Neue Version» bereitstellen.") from None
+            raise
 
     def anhaengen(self, tabelle: str, zeilen: list[dict]):
         kopf = TABELLEN[tabelle]

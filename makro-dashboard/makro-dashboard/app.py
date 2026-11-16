@@ -16,6 +16,7 @@ from makro import config as C
 from makro import logic as L
 from makro import ui, views
 import markt
+import ic
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
 
@@ -193,14 +194,17 @@ markt_info = f"Kurse geladen {yahoo_zeit} (Yahoo Finance {len(yahoo)}/{len(markt
 
 def _seite_news():
     news, news_fehler, news_zeit = markt.lade_news()
+    mails, nl_fehler = markt.lade_newsletter(store, store.name if not store_fehler else "-")
     markt.seite_news(markt_tab, news, news_fehler, news_zeit, alloc, views._signale(ctx), speichern, person,
-                     tabellen["notizen"], secret("anthropic_api_key"), secret("anthropic_model", "claude-haiku-5-5"))
+                     tabellen["notizen"], secret("anthropic_api_key"), secret("anthropic_model", "claude-haiku-5-5"),
+                     mails, nl_fehler)
 
 
 def _seite_verbindung():
     _, news_fehler, _ = markt.lade_news()
+    mails, nl_fehler = markt.lade_newsletter(store, store.name if not store_fehler else "-")
     markt.seite_verbindung(store, store_fehler, TEAM_MODUS, len(fred), len(serien), len(yahoo), len(markt.YAHOO),
-                           news_fehler, verbindung_testen)
+                           news_fehler, verbindung_testen, len(mails), nl_fehler)
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +212,9 @@ def _seite_verbindung():
 # ---------------------------------------------------------------------------
 seiten = {
     "Überblick": [st.Page(partial(views.seite_gesamtbild, ctx), title="Gesamtbild", icon="🇺🇸", url_path="gesamtbild",
-                          default=True)],
+                          default=True),
+                  st.Page(lambda: ic.seite_ic(ctx, markt_tab, list(secret("team", []) or [])), title="Investment Committee",
+                          icon="🏛️", url_path="ic")],
     "Täglich": [
         st.Page(partial(markt.seite_maerkte, markt_tab, yahoo, fred, markt_info, alloc), title="Märkte heute", icon="🌐",
                 url_path="maerkte"),

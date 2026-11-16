@@ -6,6 +6,7 @@ Optional: KI-Zusammenfassung über die Claude-API (Secret anthropic_api_key).
 from __future__ import annotations
 
 import html
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -158,23 +159,112 @@ def lade_news(stunden: int = 30):
     return out, fehler, datetime.now().strftime("%d.%m.%Y %H:%M")
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner="KI fasst den Tag zusammen …")
-def ki_zusammenfassung(tag: str, prompt: str, api_key: str, modell: str):
+SYSTEM_KI = ("Du schreibst auf Deutsch (Schweizer Rechtschreibung, ss statt ß) für ein studentisches Team, das in einer "
+             "Portfoliosimulation USD 10 Mio. in S&P-500-Aktien und US-Treasuries verwaltet. Nüchtern, präzise, keine Floskeln. "
+             "Nur Fakten aus dem gelieferten Material verwenden, nichts erfinden.")
+
+
+def _claude(prompt: str, api_key: str, modell: str, max_tokens: int = 900):
     try:
         r = requests.post("https://api.anthropic.com/v1/messages", timeout=90,
                           headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
                                    "content-type": "application/json"},
-                          json={"model": modell, "max_tokens": 900,
-                                "system": ("Du schreibst ein kurzes tägliches Makro-Update auf Deutsch (Schweizer Rechtschreibung, "
-                                           "ss statt ß) für ein studentisches Team, das in einer Portfoliosimulation USD 10 Mio. "
-                                           "in S&P-500-Aktien und US-Treasuries verwaltet. Nüchtern, präzise, keine Floskeln. "
-                                           "Nur Fakten aus den gelieferten Daten und Schlagzeilen verwenden, nichts erfinden."),
+                          json={"model": modell, "max_tokens": max_tokens, "system": SYSTEM_KI,
                                 "messages": [{"role": "user", "content": prompt}]})
         if r.status_code != 200:
-            return None, f"KI-Zusammenfassung nicht verfügbar (HTTP {r.status_code})."
+            return None, f"KI nicht verfügbar (HTTP {r.status_code})."
         return "".join(b.get("text", "") for b in r.json().get("content", [])), None
     except Exception as e:  # noqa: BLE001
-        return None, f"KI-Zusammenfassung nicht verfügbar ({type(e).__name__})."
+        return None, f"KI nicht verfügbar ({type(e).__name__})."
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="KI fasst den Tag zusammen …")
+def ki_zusammenfassung(tag: str, prompt: str, api_key: str, modell: str):
+    return _claude(prompt, api_key, modell)
+
+
+@st.cache_data(ttl=14 * 24 * 3600, show_spinner="KI liest den Newsletter …")
+def ki_newsletter(mail_id: str, text: str, api_key: str, modell: str):
+    prompt = ("Extrahiere aus diesem Finanz-Newsletter die wichtigsten Meldungen für eine Makro- und Marktanalyse der USA "
+              "(höchstens 8, Werbung und Eigenwerbung ignorieren). Format, eine Zeile pro Meldung:\n"
+              "- **Kurztitel** – ein Satz mit den wichtigsten Zahlen. _(Kapitel)_\n"
+              "Kapitel ist eines von: Wachstum & Zyklus, Arbeitsmarkt, Inflation & Fed, Zinsen & Anleihen, "
+              "Kredit & Finanzbedingungen, Konsum & Stimmung, Gewinne & Bewertung, Geopolitik & Extremrisiken, Märkte.\n\n"
+              f"Newsletter:\n{text[:14000]}")
+    return _claude(prompt, api_key, modell, 700)
+
+
+# ---------------------------------------------------------------------------
+# Newsletter (Gmail-Label «Dashboard» über das Google-Skript)
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=20 * 60, show_spinner="Lade Newsletter …")
+def lade_newsletter(_store, store_name: str):
+    if store_name != "Google-Tabelle":
+        return [], "Newsletter brauchen die verbundene Google-Tabelle."
+    try:
+        return _store.newsletter(), None
+    except Exception as e:  # noqa: BLE001
+        return [], str(e)
+
+
+BOILER = ["unsubscribe", "abmelden", "abbestellen", "view in browser", "im browser", "view online", "privacy", "datenschutz",
+          "copyright", "©", "all rights reserved", "sponsored", "advertisement", "anzeige", "werbung", "follow us",
+          "manage preferences", "update your preferences", "einstellungen ändern", "forward this", "weiterleiten",
+          "sign up", "subscribe", "abonnieren", "you are receiving", "you received this", "impressum", "no longer wish"]
+
+KAPITEL_WORTE = {
+    "wachstum": [r"gdp", r"bip\b", r"growth", r"wachstum", r"recession", r"rezession", r"\bism\b", r"\bpmi\b", r"manufactur", r"industrie"],
+    "arbeitsmarkt": [r"jobs?\b", r"payroll", r"unemploy", r"arbeitslos", r"arbeitsmarkt", r"labou?r market", r"wages?\b", r"löhne", r"jobless"],
+    "inflation": [r"inflation", r"\bcpi\b", r"\bpce\b", r"teuerung", r"\bfed\b", r"federal reserve", r"powell", r"fomc", r"notenbank"],
+    "zinsen": [r"yields?\b", r"rendite", r"treasur", r"\bbonds?\b", r"anleihe", r"rate (cut|hike)s?", r"zinsen", r"zinssenkung", r"zinserhöhung"],
+    "kredit": [r"credit", r"spreads?\b", r"kredit", r"\bbanks?\b", r"dollar", r"currenc", r"währung", r"franken", r"\byen\b", r"\beuro\b"],
+    "konsum": [r"consumer", r"konsum", r"retail", r"spending", r"sentiment", r"verbraucher", r"detailhandel"],
+    "gewinne": [r"earnings", r"quartalszahl", r"gewinn", r"revenue", r"umsatz", r"nvidia", r"apple", r"microsoft", r"\bai\b",
+                r"\bki\b", r"s&p", r"nasdaq", r"\bdow\b", r"stocks?\b", r"aktie", r"valuation", r"bewertung"],
+    "geopolitik": [r"\biran", r"china", r"chinese", r"tariff", r"\bzoll", r"zölle", r"trade (war|deal)", r"handelsstreit", r"russia",
+                   r"russland", r"ukraine", r"\bwar\b", r"\bkrieg", r"sanction", r"sanktion", r"hormuz", r"\boil\b", r"\böl",
+                   r"brent", r"opec"],
+    "markt": [r"bitcoin", r"crypto", r"krypto", r"\bgold\b"],
+}
+KAPITEL_NAME = {**{k["id"]: k["name"] for k in C.KAPITEL}, "markt": "Märkte"}
+
+
+def meldungen(text: str, n: int = 10) -> list[dict]:
+    """Zieht die inhaltlichen Absätze mit Makro-/Marktbezug aus einem Newsletter (ohne KI)."""
+    t = re.sub(r"https?://\S+", "", text or "")
+    t = re.sub(r"\[image:[^\]]*\]", "", t, flags=re.I)
+    t = re.sub(r"<[^>]{0,300}>", "", t).replace("\r", "")
+    out = []
+    for a in re.split(r"\n\s*\n", t):
+        zeilen = [z.strip(" \t*•·-–—#>|_") for z in a.split("\n")]
+        zeilen = [z for z in zeilen if z]
+        if not zeilen:
+            continue
+        block = " ".join(zeilen)
+        low = block.lower()
+        if len(block) < 60 or len(block) > 1200 or any(b in low for b in BOILER):
+            continue
+        kap = [k for k, muster in KAPITEL_WORTE.items() if any(re.search(m, low) for m in muster)]
+        if not kap:
+            continue
+        titel = zeilen[0] if len(zeilen) > 1 and len(zeilen[0]) <= 120 else ""
+        rest = " ".join(zeilen[1:]) if titel else block
+        out.append(dict(titel=titel, text=rest[:380] + ("…" if len(rest) > 380 else ""), kapitel=kap))
+        if len(out) >= n:
+            break
+    return out
+
+
+def _absender_name(a: str) -> str:
+    m = re.match(r'\s*"?([^"<]+?)"?\s*<', a or "")
+    return m.group(1).strip() if m else (a or "").strip()
+
+
+def _lokal(iso: str) -> str:
+    try:
+        return pd.Timestamp(iso).tz_convert("Europe/Zurich").strftime("%d.%m.%Y %H:%M")
+    except Exception:  # noqa: BLE001
+        return iso[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -351,12 +441,15 @@ def tagesupdate_saetze(tab: pd.DataFrame, alloc: dict | None, signale: int | Non
     return s
 
 
-def _ki_prompt(saetze, news, signale_namen):
+def _ki_prompt(saetze, news, signale_namen, mails=None):
     kopf = "\n".join(x.replace("**", "") for x in saetze)
     schlag = []
     for tid, name, _, _ in NEWS_THEMEN:
         for n in news.get(tid, [])[:4]:
             schlag.append(f"[{name}] {n['titel']} ({n['quelle']})")
+    for m in (mails or [])[:3]:
+        for x in meldungen(m.get("text", ""), 6):
+            schlag.append(f"[Newsletter {_absender_name(m.get('absender', ''))}] {x['titel'] or x['text'][:160]}")
     return (f"Marktdaten von heute:\n{kopf}\n\nSchlagzeilen der letzten 30 Stunden:\n" + "\n".join(schlag) +
             f"\n\nAktive Warnsignale im Team-Dashboard: {', '.join(signale_namen) or 'keine'}\n"
             "Szenarien des Teams: Zinsen (Hawkishe Fed / Inflationsschock / Risk-off), Öl & Iran (Basis / Eskalation / Deal), "
@@ -480,7 +573,8 @@ def _reihe(row, yahoo, fred):
 
 
 def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str, alloc, signale: list,
-               speichern, person: str, notizen: pd.DataFrame, api_key: str | None, modell: str):
+               speichern, person: str, notizen: pd.DataFrame, api_key: str | None, modell: str,
+               mails: list | None = None, nl_fehler: str | None = None):
     st.title("📰 Tagesupdate & News")
     heute = datetime.now().strftime("%d.%m.%Y")
     st.caption(f"Stand {news_zeit} · aktualisiert sich automatisch (News alle 30 Min., Kurse alle 15 Min.)")
@@ -489,7 +583,7 @@ def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str,
     st.subheader(f"Tagesupdate {heute}")
     with st.container(border=True):
         if api_key:
-            text, fehler = ki_zusammenfassung(datetime.now().strftime("%Y-%m-%d-%H")[:13], _ki_prompt(saetze, news, [s["titel"] for s in signale]),
+            text, fehler = ki_zusammenfassung(datetime.now().strftime("%Y-%m-%d-%H")[:13], _ki_prompt(saetze, news, [s["titel"] for s in signale], mails),
                                               api_key, modell)
             if text:
                 st.markdown(text)
@@ -501,6 +595,8 @@ def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str,
             st.markdown("\n".join(f"- {x}" for x in saetze))
         else:
             st.info("Keine Marktdaten verfügbar.")
+
+    _newsletter_bereich(mails or [], nl_fehler, api_key, modell)
 
     st.subheader("Schlagzeilen der letzten 30 Stunden")
     if news_fehler and len(news_fehler) == len(NEWS_THEMEN):
@@ -536,8 +632,43 @@ def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str,
                 st.text(r["text"])
 
 
+def _newsletter_bereich(mails: list, fehler: str | None, api_key: str | None, modell: str):
+    st.subheader("📧 Newsletter")
+    if fehler:
+        st.info(f"{fehler} Einrichtung: Seite «Verbindung» → Newsletter.")
+        return
+    if not mails:
+        st.info("Keine Newsletter mit dem Gmail-Label «Dashboard» in den letzten 10 Tagen.")
+        return
+    heute = pd.Timestamp.now(tz="Europe/Zurich").normalize()
+    neu = sum(1 for m in mails if pd.Timestamp(m["datum"]).tz_convert("Europe/Zurich") >= heute - pd.Timedelta(days=1))
+    st.caption(f"{len(mails)} Ausgaben der letzten 10 Tage, davon {neu} seit gestern · automatisch aus Gmail (Label «Dashboard»), "
+               "alle 20 Min. aktualisiert")
+    for i, m in enumerate(mails[:8]):
+        titel = f"{_absender_name(m['absender'])} · {m['betreff']} · {_lokal(m['datum'])}"
+        with st.expander(titel, expanded=i == 0):
+            text_ki = None
+            if api_key:
+                text_ki, f = ki_newsletter(m["id"], m["text"], api_key, modell)
+                if text_ki:
+                    st.markdown(text_ki)
+                    st.caption("Von der KI (Claude) aus dem Newsletter gezogen – Zahlen bei Bedarf im Original prüfen.")
+            if not text_ki:
+                pts = meldungen(m["text"])
+                if not pts:
+                    st.caption("Keine Meldungen mit Makro-/Marktbezug erkannt – siehe ganzer Text.")
+                for x in pts:
+                    pills = " ".join(f"<span class='pill' style='background:#EEF0F3'>{html.escape(KAPITEL_NAME[k])}</span>"
+                                     for k in x["kapitel"][:3])
+                    kopf = f"<b>{html.escape(x['titel'])}</b><br>" if x["titel"] else ""
+                    st.markdown(f"<div class='klein' style='margin-bottom:8px; color:#1F2937'>{kopf}{html.escape(x['text'])}"
+                                f"<br>{pills}</div>", unsafe_allow_html=True)
+            if st.toggle("Ganzen Newsletter anzeigen", key=f"nl_{m['id']}"):
+                st.text(m["text"][:20000])
+
+
 def seite_verbindung(store, store_fehler, team_modus: bool, fred_ok: int, fred_total: int, yahoo_ok: int,
-                     yahoo_total: int, news_fehler: list, test_fn):
+                     yahoo_total: int, news_fehler: list, test_fn, nl_anzahl: int = 0, nl_fehler: str | None = None):
     st.title("🔌 Speicher & Verbindungen")
     if store_fehler:
         st.error(f"**Google-Tabelle nicht verbunden.** {store_fehler}")
@@ -557,6 +688,7 @@ def seite_verbindung(store, store_fehler, team_modus: bool, fred_ok: int, fred_t
         dict(Quelle="FRED (Makrodaten)", Status=f"{'✅' if fred_ok == fred_total else '⚠️'} {fred_ok} von {fred_total} Reihen"),
         dict(Quelle="Yahoo Finance (Märkte)", Status=f"{'✅' if yahoo_ok == yahoo_total else '⚠️'} {yahoo_ok} von {yahoo_total} Kursen"),
         dict(Quelle="Google News (Schlagzeilen)", Status="✅ geladen" if len(news_fehler) < len(NEWS_THEMEN) else "❌ nicht erreichbar"),
+        dict(Quelle="Newsletter (Gmail-Label «Dashboard»)", Status=f"✅ {nl_anzahl} Ausgaben (10 Tage)" if not nl_fehler else f"❌ {nl_fehler}"),
     ]), hide_index=True, width="stretch")
 
     st.subheader("Checkliste Google-Tabelle")
@@ -570,4 +702,16 @@ def seite_verbindung(store, store_fehler, team_modus: bool, fred_ok: int, fred_t
 4. **Reboot app** und hier auf **«Verbindung jetzt testen»** klicken.
 
 Test im Browser: Die script_url in einem **privaten Fenster** öffnen. Richtig ist `{"ok":false,"fehler":"Falscher Schlüssel"}`. Erscheint eine Google-Anmeldeseite, steht der Zugriff nicht auf «Jeder».
+""")
+
+    st.subheader("Newsletter aus Gmail einrichten")
+    st.markdown("""
+1. **Label vergeben:** In Gmail einen Newsletter öffnen → oben **⋮ → «Ähnliche Nachrichten filtern»** → **«Filter erstellen»** →
+   **«Label anwenden»** → **Neues Label: `Dashboard`** → Häkchen bei **«Filter auch auf übereinstimmende Konversationen anwenden»** → **Filter erstellen**.
+   Für jeden weiteren Newsletter (z. B. auch das Briefing des Dozenten) gleich vorgehen.
+2. **Skript aktualisieren:** In der Google-Tabelle **Erweiterungen → Apps Script** → den ganzen Code durch den neuen ersetzen → speichern.
+3. **Neue Version bereitstellen:** **Bereitstellen → Bereitstellungen verwalten → Stift** → Version **«Neue Version»** → **Bereitstellen**.
+   Google fragt einmal nach der Gmail-Berechtigung → zulassen. Die URL bleibt gleich.
+
+Das Skript liest **nur** Mails mit dem Label «Dashboard» – der Rest deines Postfachs bleibt unsichtbar.
 """)
