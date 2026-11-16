@@ -452,7 +452,14 @@ def allokation(st: pd.DataFrame, szen: pd.DataFrame, risiken: pd.DataFrame, komb
 
     aktien_tilt = sum(r["aktien"] for r in aktive)
     aktien_tilt = max(-C.AKTIEN_MAX_ABWEICHUNG, min(C.AKTIEN_MAX_ABWEICHUNG, aktien_tilt))
-    aktien = max(0.0, min(100.0, neutral["aktien"] + aktien_tilt))
+    cash = max(0.0, min(100.0, neutral.get("cash", 0.0)))
+    aktien = max(0.0, min(100.0 - cash, neutral["aktien"] + aktien_tilt))
+    treasuries = 100.0 - aktien - cash
+    korridor = []
+    for name, wert_ in (("aktien", aktien), ("treasuries", treasuries), ("cash", cash)):
+        lo, hi = C.KORRIDOR[name]
+        if not lo <= wert_ <= hi:
+            korridor.append(f"{name.capitalize()} {wert_:.0f} % ausserhalb {lo}–{hi} %")
 
     # Sektoren: Σ Wahrscheinlichkeit × Wirkung über alle Themen + aktive Regeln
     sek = {s: 0.0 for s in C.SEKTOREN}
@@ -471,6 +478,6 @@ def allokation(st: pd.DataFrame, szen: pd.DataFrame, risiken: pd.DataFrame, komb
                                     np.where(sek_df["score"] < -C.SEKTOR_SCHWELLE, "Untergewichten", "Neutral"))
     sek_df = sek_df.sort_values("score", ascending=False)
 
-    return dict(neutral=neutral, aktien=aktien, aktien_tilt=aktien_tilt, anleihen=100 - aktien,
+    return dict(neutral=neutral, aktien=aktien, aktien_tilt=aktien_tilt, anleihen=treasuries, cash=cash, korridor=korridor,
                 duration=duration, duration_szen=dur_szen, duration_ziele=dur_ziele, konflikt=konflikt,
                 tips=tips, tips_szen=tips_szen, regeln=regeln, sektoren=sek_df)

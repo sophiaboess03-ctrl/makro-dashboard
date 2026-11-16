@@ -192,12 +192,14 @@ def seite_gesamtbild(ctx: Ctx):
         a = ctx.alloc
         c1, c2 = st.columns([1, 1.1])
         with c1:
-            ui.allokation_donut(a["aktien"], a["neutral"]["aktien"])
+            ui.allokation_donut(a["aktien"], a["neutral"]["aktien"], a["cash"], a["neutral"].get("cash", 0))
         with c2:
             ui.zahl_block("Aktienquote", f"{a['aktien']:.0f} %", f"{ui.de(a['aktien_tilt'], 0, True)} PP vs. neutral")
             ui.zahl_block("Duration Anleihen", f"{ui.de(a['duration'])} J.",
                           f"{ui.de(a['duration'] - a['neutral']['duration'], 1, True)} J. vs. neutral")
             ui.zahl_block("TIPS-Anteil an Anleihen", f"{a['tips']:.0f} %")
+        if a["korridor"]:
+            st.warning("Ausserhalb des IC-Arbeitskorridors: " + "; ".join(a["korridor"]) + ".")
         ow = a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"].tolist()
         uw = a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"].tolist()
         st.markdown(f"**Übergewichten:** {', '.join(ow) or '–'}  \n**Untergewichten:** {', '.join(uw) or '–'}  \n"
@@ -387,15 +389,16 @@ def seite_allokation(ctx: Ctx):
                "Sie ersetzt nicht eure Entscheidung, sondern zeigt, wohin die Signale zusammen zeigen.")
     ui.kopf_kpis([
         ("Aktien (S&P 500)", f"{a['aktien']:.0f} %", f"{ui.de(a['aktien_tilt'], 0, True)} PP vs. neutral {a['neutral']['aktien']:.0f} %"),
-        ("Treasuries", f"{a['anleihen']:.0f} %", "Schwerpunkt 1–7 J., nichts > 10 J."),
+        ("Treasuries / Cash", f"{a['anleihen']:.0f} % / {a['cash']:.0f} %", "Treasuries: Schwerpunkt 1–7 J., nichts > 10 J."),
         ("Duration", f"{ui.de(a['duration'])} J.", f"szenario-gewichtet {ui.de(a['duration_szen'])} J."),
         ("TIPS-Anteil an Anleihen", f"{a['tips']:.0f} %", f"szenario-gewichtet {a['tips_szen']:.0f} %"),
     ])
 
     st.markdown("#### So kommen die Zahlen zustande")
     st.markdown(
-        f"- **Aktienquote:** neutrale Quote {a['neutral']['aktien']:.0f} % (Regler auf «Einstellungen») plus die Summe der "
-        f"aktiven Signale, begrenzt auf ±{C.AKTIEN_MAX_ABWEICHUNG} PP.\n"
+        f"- **Aktienquote:** neutraler Anker {a['neutral']['aktien']:.0f} % Aktien / {100 - a['neutral']['aktien'] - a['neutral'].get('cash', 0):.0f} % "
+        f"Treasuries / {a['neutral'].get('cash', 0):.0f} % Cash (Investment Committee, Regler auf «Einstellungen») plus die Summe "
+        f"der aktiven Signale, begrenzt auf ±{C.AKTIEN_MAX_ABWEICHUNG} PP. IC-Arbeitskorridor: Aktien 40–50 %, Treasuries 45–55 %, Cash 0–10 %.\n"
         f"- **Duration:** Durchschnitt aus der szenario-gewichteten Duration (Hawkishe Fed 3,5 J., Inflationsschock 2,5 J., "
         f"Risk-off 4,5 J., gewichtet mit euren Wahrscheinlichkeiten = {ui.de(a['duration_szen'], 2)} J.) und den Zielen aller aktiven "
         f"Signale ({', '.join(ui.de(x) + ' J.' for x in a['duration_ziele']) or 'keine'}).\n"
@@ -403,6 +406,8 @@ def seite_allokation(ctx: Ctx):
         f"Inflationssignal setzt mindestens 25 %.\n"
         f"- **Sektoren:** Σ (Wahrscheinlichkeit × Wirkung) über alle Szenario-Themen plus aktive Signale. "
         f"Wirkung je Szenario aus eurer Spalte «Folge» (+ = profitiert, − = leidet).")
+    if a["korridor"]:
+        st.warning("Ausserhalb des IC-Arbeitskorridors: " + "; ".join(a["korridor"]) + " – im Team begründen oder Signale prüfen.")
     if a["konflikt"]:
         st.warning("Konflikt: Die aktiven Signale verlangen sehr unterschiedliche Durationen (z. B. Inflation kurz, "
                    "Kreditstress lang). Der Mittelwert ist dann nur ein Kompromiss – im Team entscheiden.")
@@ -558,11 +563,11 @@ def seite_protokoll(ctx: Ctx):
     st.title("🧾 Protokoll")
     st.caption("Alle Team-Eingaben, neuste zuerst. Nichts wird überschrieben – Korrekturen sind einfach neue Einträge.")
     namen = {"werte": "Werte", "szenario_votes": "Szenario-Bewertungen", "risiko_votes": "Risiko-Bewertungen",
-             "zyklus_votes": "Zyklus", "notizen": "Notizen", "einstellungen": "Einstellungen", "risiken_neu": "Neue Risiken"}
+             "zyklus_votes": "Zyklus", "notizen": "Notizen", "einstellungen": "Einstellungen", "risiken_neu": "Neue Risiken", "sektorvoten": "Sektorvoten"}
     tabs = st.tabs(list(namen.values()))
     for t, key in zip(tabs, namen):
         with t:
-            d = ctx.tabellen[key]
+            d = ctx.tabellen.get(key)
             if d is None or d.empty:
                 st.info("Noch keine Einträge.")
             else:
@@ -579,13 +584,15 @@ def seite_einstellungen(ctx: Ctx):
     n = ctx.alloc["neutral"]
     st.markdown("Neutrale Ausgangsallokation – gilt für das ganze Team. Die Signale verschieben die Empfehlung davon weg.")
     with st.form("neutral"):
-        ak = st.slider("Neutrale Aktienquote (%)", 0, 100, int(round(n["aktien"])), 5)
+        ak = st.slider("Neutrale Aktienquote (%)", 0, 100, int(round(n["aktien"])), 5,
+                       help="Investment Committee: Diskussionsanker 45 %, Arbeitskorridor 40–50 %")
+        ca = st.slider("Cash (%)", 0, 20, int(round(n.get("cash", 5))), 1, help="Investment Committee: Korridor 0–10 %, Anker 5 %")
         du = st.slider("Neutrale Duration (Jahre)", 1.0, 7.0, float(n["duration"]), 0.5,
                        help="Nur Referenz für die Anzeige «vs. neutral»; die Empfehlung selbst kommt aus Szenarien und Signalen.")
         ti = st.slider("Neutraler TIPS-Anteil (%)", 0, 50, int(round(n["tips"])), 5)
         if st.form_submit_button("Speichern", type="primary"):
             ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel=k, wert=v)
-                                            for k, v in (("aktien", ak), ("duration", du), ("tips", ti))],
+                                            for k, v in (("aktien", ak), ("cash", ca), ("duration", du), ("tips", ti))],
                           "Einstellungen gespeichert.")
     st.divider()
     st.subheader("Datenquellen")

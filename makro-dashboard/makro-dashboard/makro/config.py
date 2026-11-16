@@ -131,6 +131,20 @@ _ind(id="ism_preise", kapitel="wachstum", name="ISM Industrie – Preise bezahlt
      quelle1="ISM Report on Business", quelle2="Trading Economics / Action Forex", rhythmus="monatlich", naechster="01.12.2026",
      seed=[("2026-09-01", 77.9), ("2026-10-01", 75.2)], auch_in=["inflation"])
 
+_ind(id="auslastung", kapitel="wachstum", name="Kapazitätsauslastung Industrie", einheit="%",
+     quelle="fred", series="TCU", richtung="hoch", gelb=80.0, rot=82.0, herkunft="Vorschlag",
+     schwelle="Gelb ≥ 80 % · Rot ≥ 82 % (Überhitzung)",
+     annahme="≈ 76,9 % gemessen: Fabriken produzieren mehr, sind aber nicht überlastet (IC-Datenabgleich B).",
+     aktion="Kontext für Zyklus und Inflationsdruck aus der Industrie.",
+     quelle1="Federal Reserve G.17", quelle2="FRED TCU", rhythmus="monatlich", naechster="Mitte Monat",
+     seed=[("2026-10-01", 76.9)])
+_ind(id="wohnbau", kapitel="wachstum", name="Baubeginne Wohnungen (zum Vorjahr)", einheit="% y/y",
+     quelle="fred", series="HOUST", transform="yoy", richtung="tief", gelb=0.0, rot=-10.0, herkunft="Vorschlag",
+     schwelle="Gelb < 0 % · Rot < −10 %",
+     annahme="Wohnungsbau schwach: hohe Zinsen bremsen neue Bauprojekte (IC-Beweiskette).",
+     aktion="Weitere Schwäche stützt das Abkühlungs-/Bear-Szenario.",
+     quelle1="Census Bureau", quelle2="FRED HOUST", rhythmus="monatlich", naechster="Mitte Monat")
+
 # --- Arbeitsmarkt ------------------------------------------------------------
 _ind(id="unrate", kapitel="arbeitsmarkt", name="Arbeitslosenquote", einheit="%",
      quelle="fred", series="UNRATE", richtung="hoch", rot=4.3, kern=True,
@@ -192,6 +206,13 @@ _ind(id="kernpce", kapitel="inflation", name="Kern-PCE (zum Vorjahr)", einheit="
      aktion="Deutlich über 3 % bestätigt das Inflationsschock-Szenario.",
      quelle1="BEA Personal Income & Outlays", quelle2="FRED PCEPILFE", rhythmus="monatlich", naechster="25.11.2026",
      seed=[("2026-08-01", 3.0), ("2026-09-01", 3.1)])
+_ind(id="pce", kapitel="inflation", name="PCE-Inflation gesamt (zum Vorjahr)", einheit="% y/y",
+     quelle="fred", series="PCEPI", transform="yoy", richtung="hoch", gelb=3.0, rot=3.5, herkunft="Vorschlag",
+     schwelle="Gelb ≥ 3 % · Rot ≥ 3,5 % (Fed-Ziel 2 %)",
+     annahme="Inflation 3,7 % gesamt, 3,1 % ohne Energie/Lebensmittel (IC-Beweiskette).",
+     aktion="Mehrere schwächere Werte → Bull wahrscheinlicher; erneute Beschleunigung → Bear (IC-Monitoring).",
+     quelle1="BEA Personal Income & Outlays", quelle2="FRED PCEPI", rhythmus="monatlich", naechster="25.11.2026",
+     seed=[("2026-09-01", 3.7)])
 _ind(id="infl_erw", kapitel="inflation", name="Inflationserwartung 5 J. in 5 J. (5y5y)", einheit="%",
      quelle="fred", series="T5YIFR", dezimal=2, richtung="hoch", gelb=2.5, rot=2.8, herkunft="Vorschlag",
      schwelle="Gelb ≥ 2,5 % · Rot ≥ 2,8 % (Erwartungen lösen sich vom Ziel)",
@@ -377,6 +398,13 @@ _ind(id="erp", kapitel="gewinne", name="Aktienrisikoprämie (Forward)", einheit=
      aktion="Anleihen leicht übergewichten; bei > 1 PP Übergewicht auf neutral zurückführen.",
      quelle1="FactSet Earnings Insight", quelle2="U.S. Treasury / FRED", rhythmus="täglich (automatisch)", naechster="laufend",
      seed=[("2026-10-12", 0.75), ("2026-11-12", 0.51)])
+_ind(id="eps_wachstum", kapitel="gewinne", name="Gewinnwachstum S&P 500 (Quartal, zum Vorjahr)", einheit="% y/y",
+     quelle="manuell", richtung="tief", gelb=5.0, rot=0.0, herkunft="Vorschlag",
+     schwelle="Gelb < 5 % · Rot < 0 %",
+     annahme="+31,4 % zum Vorjahr: viele Firmen verdienen deutlich mehr als vor einem Jahr (IC-Beweiskette).",
+     aktion="Sinkende 2027er Schätzungen schwächen die Aktien-These (IC-Monitoring).",
+     quelle1="FactSet Earnings Insight", quelle2="S&P Dow Jones Indices", rhythmus="wöchentlich (Berichtssaison)", naechster="Q4-Saison ab Mitte Jan.",
+     seed=[("2026-11-06", 31.4)])
 _ind(id="kgv", kapitel="gewinne", name="Forward-KGV S&P 500", einheit="x",
      quelle="manuell", richtung="kontext",
      schwelle="Basis 17–18 · positiv Richtung 19",
@@ -420,6 +448,8 @@ SEKTOREN = ["Energie", "Grundstoffe", "Industrie", "Zykl. Konsum", "Basiskonsum"
             "Finanzen", "IT", "Kommunikation", "Versorger", "Immobilien"]
 
 THEMEN = [
+    {"id": "gesamt", "name": "Gesamtmarkt (Investment Committee)", "kapitel": ["wachstum"],
+     "quelle": "Investment-Committee-Statement 16.11.2026 – Base/Bull/Bear für Dez. 2026 – Feb. 2027"},
     {"id": "zinsen", "name": "Zinsen & Inflation", "kapitel": ["inflation", "zinsen"],
      "quelle": "Makroanalyse Inflation, Geldpolitik, Anleihen"},
     {"id": "gewinne", "name": "Gewinne & Bewertung", "kapitel": ["gewinne"],
@@ -432,6 +462,19 @@ THEMEN = [
 THEMA_BY_ID = {t["id"]: t for t in THEMEN}
 
 SZENARIEN = [
+    # Gesamtmarkt gemäss Investment Committee (nicht mit den Themen-Szenarien addieren oder vergleichen)
+    dict(id="ic_base", thema="gesamt", name="Base: Späte Expansion, erhöhte Inflation", p=55,
+         annahmen="Wachstum schwächer als Q3, Arbeitsmarkt stabil, realer Konsum und Wohnbau bremsen; Inflation sinkt höchstens langsam",
+         folge="Fed bleibt restriktiv, Renditen hoch; Gewinne stützen Aktien, Aufwärtspotenzial durch Finanzierungskosten und enge Risikoprämie begrenzt",
+         aktion="Arbeitskorridor Aktien 40–50 %, Treasuries 45–55 %, Duration um 3,5 J.", sektoren={}),
+    dict(id="ic_bull", thema="gesamt", name="Bull: Disinflation ohne Rezession", p=25,
+         annahmen="Entspannung bei Energie und Handel, Löhne und Inflation kühlen ab, Beschäftigung und Gewinne robust",
+         folge="Fed strafft weniger, Renditen sinken; Aktien profitieren von Gewinnen und Bewertung, Treasuries mit Kursgewinnen",
+         aktion="Aktienquote Richtung oberer Korridor, Duration eher länger", sektoren={}),
+    dict(id="ic_bear", thema="gesamt", name="Bear: Inflations-/Zinsschock, Gewinnenttäuschung", p=20,
+         annahmen="Energie-, Zoll- oder Lieferkettenschocks halten Inflation hoch, Fed restriktiver",
+         folge="Höhere Renditen belasten Bewertungen und lange Treasuries; schwacher Konsum trifft Umsätze; Aktienverluste überproportional",
+         aktion="Aktienquote am unteren Korridor, kurze Duration", sektoren={}),
     # Zinsen & Inflation – Duration / TIPS-Ziel je Szenario aus euren Aktionen
     dict(id="z_basis", thema="zinsen", name="Basis: Hawkishe Fed", p=55,
          annahmen="Fed erhöht im Dez. auf 4,00–4,25 % und signalisiert mehr; Kern-PCE ≈ 3 %; Brent 85–100 USD",
@@ -537,6 +580,9 @@ RISIKO_BY_ID = {r["id"]: r for r in RISIKEN}
 # Zyklus: zwei Einordnungen aus der Analyse (Position auf schematischer Kurve 0 … 1, Hochphase = 0,5)
 # ---------------------------------------------------------------------------
 ZYKLUS_SEED = [
+    dict(person="Investment Committee (16.11.)", von=0.50, bis=0.58,
+         einordnung="Späte Expansion, nahe Hochphase; Abschwung noch nicht bestätigt",
+         argumente="BIP Q3 +3,4 %, Gewinne +31,4 %; aber Inflation und Zinsen hoch, Realkonsum schwach, Wohnungsbau schwach."),
     dict(person="Wachstumsanalyse", von=0.46, bis=0.56, einordnung="Fortgeschrittene Expansion, nahe Hochphase",
          argumente="BIP Q3 +3,4 % annualisiert, Output Gap +1,7 %, Industrieproduktion steigt, Arbeitsmarkt stabil."),
     dict(person="Konsum-/Politikanalyse", von=0.52, bis=0.60, einordnung="Spätzyklus mit stagflationären Zügen",
@@ -571,6 +617,8 @@ TERMINE = [
 # ---------------------------------------------------------------------------
 # Allokation: neutrale Werte (Startwerte – im Team per Regler einstellbar)
 # ---------------------------------------------------------------------------
-NEUTRAL_DEFAULT = {"aktien": 60.0, "duration": 3.5, "tips": 15.0}
-AKTIEN_MAX_ABWEICHUNG = 20  # PP
+# Neutraler Diskussionsanker gemäss Investment-Committee-Statement (16.11.2026): 45 % Aktien / 50 % Treasuries / 5 % Cash
+NEUTRAL_DEFAULT = {"aktien": 45.0, "cash": 5.0, "duration": 3.5, "tips": 15.0}
+KORRIDOR = {"aktien": (40, 50), "treasuries": (45, 55), "cash": (0, 10)}  # Arbeitskorridor IC, zur Diskussion
+AKTIEN_MAX_ABWEICHUNG = 15  # PP
 SEKTOR_SCHWELLE = 0.5       # Score > 0,5 = übergewichten, < −0,5 = untergewichten

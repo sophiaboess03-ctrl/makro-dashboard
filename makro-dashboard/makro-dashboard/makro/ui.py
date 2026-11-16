@@ -245,11 +245,13 @@ def sektor_chart(sek: pd.DataFrame, hoehe=360):
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
 
 
-def allokation_donut(aktien: float, neutral: float):
-    fig = go.Figure(go.Pie(values=[aktien, 100 - aktien], labels=["Aktien (S&P 500)", "Treasuries"], hole=0.62,
-                           marker=dict(colors=[BLAU, "#94A3B8"]), sort=False, textinfo="none",
+def allokation_donut(aktien: float, neutral: float, cash: float = 0.0, neutral_cash: float = 0.0):
+    tr = 100 - aktien - cash
+    fig = go.Figure(go.Pie(values=[aktien, tr, cash], labels=["Aktien (S&P 500)", "Treasuries", "Cash"], hole=0.62,
+                           marker=dict(colors=[BLAU, "#94A3B8", "#E5E7EB"]), sort=False, textinfo="none",
                            hovertemplate="%{label}: %{value:.0f} %<extra></extra>"))
-    fig.add_annotation(text=f"<b>{aktien:.0f} / {100 - aktien:.0f}</b><br><span style='font-size:11px'>neutral {neutral:.0f} / {100 - neutral:.0f}</span>",
-                       showarrow=False, font=dict(size=18))
-    fig.update_layout(height=210, margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
+    fig.add_annotation(text=f"<b>{aktien:.0f} / {tr:.0f} / {cash:.0f}</b><br><span style='font-size:11px'>Aktien / Treas. / Cash<br>"
+                            f"neutral {neutral:.0f} / {100 - neutral - neutral_cash:.0f} / {neutral_cash:.0f}</span>",
+                       showarrow=False, font=dict(size=16))
+    fig.update_layout(height=220, margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
