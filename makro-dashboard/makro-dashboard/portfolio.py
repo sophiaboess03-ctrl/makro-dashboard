@@ -194,7 +194,7 @@ def _einstellungen(einst: pd.DataFrame) -> tuple[float, dict]:
 
 
 def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None):
-    st.title("💼 Portfolio")
+    ui.seitenkopf("Portfolio", "Positionen, Bewertung zu Marktpreisen, Abweichungen zur Zielallokation und alle Transaktionen mit Begründung.")
     tab = ctx.tabellen
     kapital, bm = _einstellungen(tab.get("einstellungen"))
     tx = transaktionen(tab.get("transaktionen"))
@@ -284,7 +284,7 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
             fig.update_layout(barmode="group", height=300, margin=dict(l=8, r=8, t=10, b=8), plot_bgcolor="white",
                               legend=dict(orientation="h", y=-0.15))
             fig.update_yaxes(ticksuffix=" %", gridcolor="#EEF0F3")
-            st.plotly_chart(fig, width="stretch", config=ui.PLOT_CFG)
+            ui.zeige(fig)
         with c2:
             st.markdown("**Sektoren im Aktienteil**")
             emp = dict(zip(ctx.alloc["sektoren"]["sektor"], ctx.alloc["sektoren"]["empfehlung"]))
@@ -320,7 +320,7 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
             fig.update_layout(height=360, margin=dict(l=8, r=8, t=10, b=8), plot_bgcolor="white", hovermode="x unified",
                               legend=dict(orientation="h", y=-0.15))
             fig.update_yaxes(title="Index (Start = 100)", gridcolor="#EEF0F3")
-            st.plotly_chart(fig, width="stretch", config=ui.PLOT_CFG)
+            ui.zeige(fig)
             st.caption("Portfolio inkl. Cash und vereinfachter Kuponerträge; S&P 500 als Kursindex ohne Dividenden.")
         else:
             st.caption("Der Verlauf erscheint nach der ersten Transaktion.")
@@ -344,16 +344,16 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                     zeile = {k: r[k] for k in r.index}
                     zeile.update(id=wahl, zeit=jetzt(), person=ctx.person, storniert="1")
                     ctx.speichern("transaktionen", [zeile], "Transaktion storniert.")
-            if c3.button("📄 PDF erstellen", key="tx_pdf_btn"):
+            if c3.button("PDF erstellen", icon=":material/picture_as_pdf:", key="tx_pdf_btn"):
                 try:
                     st.session_state["tx_pdf"] = transaktionen_pdf(liste, b, cash, total, kapital, aktien, treas, ctx)
                 except Exception as e:  # noqa: BLE001
                     st.error(f"PDF konnte nicht erstellt werden: {e}")
             if st.session_state.get("tx_pdf"):
-                c3.download_button("📥 Transaktionsübersicht", st.session_state["tx_pdf"],
-                                   f"Transaktionen_Portfolio_{pd.Timestamp.today():%Y-%m-%d}.pdf", "application/pdf")
+                c3.download_button("Transaktionsübersicht", st.session_state["tx_pdf"],
+                                   f"Transaktionen_Portfolio_{pd.Timestamp.today():%Y-%m-%d}.pdf", "application/pdf", icon=":material/download:")
 
-    with st.expander("⚙️ Einstellungen Portfolio (Startkapital, S&P-500-Sektorgewichte)"):
+    with st.expander("Einstellungen Portfolio (Startkapital, S&P-500-Sektorgewichte)"):
         with st.form("pf_einst"):
             k = st.number_input("Startkapital (USD)", min_value=0.0, value=float(kapital), step=100000.0, format="%.0f")
             st.markdown("S&P-500-Sektorgewichte in % (Benchmark für die Abweichung, mit Stand und Quelle notieren):")
@@ -530,7 +530,7 @@ def _formular(ctx, fred, lade_kurse):
         info = ticker_info(tk) if tk.strip() else {}
         if info:
             if info.get("sektor"):
-                txt = f"✓ {info['name']} · **{info['sektor']}** (Quelle: {info['quelle']})"
+                txt = f"{info['name']} · **{info['sektor']}** (Quelle: {info['quelle']})"
                 st.markdown(txt)
             else:
                 st.warning("Sektor nicht gefunden – bitte unten von Hand wählen.")

@@ -9,6 +9,7 @@ from fpdf import FPDF
 
 from makro import config as C
 from makro import logic as L
+from makro import ui
 
 ERSATZ = {"−": "-", "–": "-", "—": "-", "≥": ">=", "≤": "<=", "→": "->", "↑": "(+)", "↓": "(-)", "↗": "(+)", "↘": "(-)",
           "≈": "~", "·": "-", "«": '"', "»": '"', "‘": "'", "’": "'", "“": '"', "”": '"', "…": "...", "×": "x", "Σ": "Summe",
@@ -166,15 +167,14 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
 
 
 def seite_bericht(ctx, markt_tab, signale, termine_df, portfolio_info):
-    st.title("📄 Wochenbericht")
-    st.markdown("Ein Klick erzeugt einen PDF-Schnappschuss mit Gesamtempfehlung, aktiven Signalen, Szenarien, Risiken, "
-                "Kernindikatoren, Märkten, Portfolio, Entscheiden der Woche und den nächsten Terminen. Am besten jeden "
-                "Freitag herunterladen und im Team-Ordner ablegen – so habt ihr für die Abgabe einen lückenlosen Verlauf.")
+    ui.seitenkopf("Wochenbericht", "Ein Klick erzeugt einen PDF-Schnappschuss mit Gesamtempfehlung, aktiven Signalen, Szenarien, "
+                  "Risiken, Kernindikatoren, Märkten, Portfolio, Entscheiden der Woche und den nächsten Terminen. Am besten jeden "
+                  "Freitag herunterladen und im Team-Ordner ablegen – so habt ihr für die Abgabe einen lückenlosen Verlauf.")
     if st.button("PDF erstellen", type="primary"):
         try:
             st.session_state["bericht_pdf"] = erstelle(ctx, markt_tab, signale, termine_df, portfolio_info)
         except Exception as e:  # noqa: BLE001
             st.error(f"PDF konnte nicht erstellt werden: {e}")
     if st.session_state.get("bericht_pdf"):
-        st.download_button("📥 Wochenbericht herunterladen", st.session_state["bericht_pdf"],
-                           f"Wochenbericht_Makro_USA_{datetime.now():%Y-%m-%d}.pdf", "application/pdf")
+        st.download_button("Wochenbericht herunterladen", st.session_state["bericht_pdf"],
+                           f"Wochenbericht_Makro_USA_{datetime.now():%Y-%m-%d}.pdf", "application/pdf", icon=":material/download:")

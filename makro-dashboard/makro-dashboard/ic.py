@@ -97,8 +97,8 @@ VOTUM_WERT = {"Übergewicht": 1, "Neutral": 0, "Untergewicht": -1}
 
 def _html_tabelle(spalten: list[str], zeilen: list[list[str]], breiten: list[str] | None = None):
     """Tabelle mit Zeilenumbrüchen in den Zellen (Zellen sind bereits HTML-sicher)."""
-    kopf = "".join(f"<th style='text-align:left; padding:6px 8px; border-bottom:1px solid #E5E7EB; color:#5A6475; "
-                   f"font-weight:600; width:{(breiten or [''] * len(spalten))[i]}'>{html.escape(c)}</th>" for i, c in enumerate(spalten))
+    kopf = "".join(f"<th style='text-align:left; padding:6px 8px; border-bottom:1px solid #E3E6EB; color:#667085; "
+                   f"font-weight:600; font-size:0.72rem; letter-spacing:0.06em; text-transform:uppercase; width:{(breiten or [''] * len(spalten))[i]}'>{html.escape(c)}</th>" for i, c in enumerate(spalten))
     body = "".join("<tr>" + "".join(f"<td style='vertical-align:top; padding:6px 8px; border-bottom:1px solid #F0F1F4'>{z}</td>"
                                     for z in zeile) + "</tr>" for zeile in zeilen)
     st.markdown(f"<div style='overflow-x:auto'><table style='width:100%; border-collapse:collapse; font-size:0.85rem'>"
@@ -112,8 +112,8 @@ def _live(status: pd.DataFrame, ids: list[str]) -> str:
             continue
         r = status.loc[i]
         neu = " ·neu" if r["datum"] is not None and not pd.isna(r["datum"]) and pd.Timestamp(r["datum"]) > pd.Timestamp("2026-11-16") else ""
-        teile.append(f"{EMOJI.get(r['ampel'], '▫️')} {html.escape(C.IND_BY_ID[i]['name'].split(' (')[0])}: "
-                     f"<b>{html.escape(r['anzeige'])}</b> {r['pfeil']}<span style='color:#7C3AED'>{neu}</span>")
+        teile.append(f"<span style='color:{ui.FARBE.get(r['ampel'], ui.MUTED)}'>●</span> {html.escape(C.IND_BY_ID[i]['name'].split(' (')[0])}: "
+                     f"<b>{html.escape(r['anzeige'])}</b> {r['pfeil']}<span style='color:#B08D57'>{neu}</span>")
     return "<br>".join(teile) or "–"
 
 
@@ -162,11 +162,10 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
     freigaben = ic_n[ic_n["typ"] == "freigabe"].drop_duplicates("person", keep="last") if len(ic_n) else ic_n
     alle_frei = bool(mitglieder) and set(mitglieder) <= set(freigaben["person"])
 
-    st.title("🏛️ Investment Committee – Makrothese")
-    status_txt = ("<span class='badge' style='background:#2E9E5B'>VERSION 1.0 FREIGEGEBEN</span>" if alle_frei else
-                  "<span class='badge' style='background:#E0A100'>ENTWURF ZUR TEAMABSTIMMUNG</span>")
-    st.markdown(f"{status_txt} <span class='klein'>Statement vom {STAND} · Anlagehorizont Dez. 2026 – Feb. 2027 · "
-                f"verbindliche Ausgangsbasis für die Sektoranalysen; definitive Asset-Allokation folgt.</span>", unsafe_allow_html=True)
+    status_txt = ui.badge(L.GRUEN, "Version 1.0 freigegeben") if alle_frei else ui.badge(L.GELB, "Entwurf zur Teamabstimmung")
+    ui.seitenkopf("Investment Committee – Makrothese",
+                  f"{status_txt}&nbsp; Statement vom {STAND} · Anlagehorizont Dez. 2026 – Feb. 2027 · "
+                  f"verbindliche Ausgangsbasis für die Sektoranalysen; definitive Asset-Allokation folgt.")
 
     t1, t2, t3, t4, t5 = st.tabs(["These & Beweise", "Szenarien & Renditen", "Sektorvoten", "Monitoring", "Datenabgleich & Freigabe"])
 
@@ -183,7 +182,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         st.subheader("Beweiskette – IC-Stand vs. heute")
         _html_tabelle(["Bereich", f"IC {STAND}", "Bedeutung", "Signal IC", "Heute (live)"],
                       [[f"<b>{html.escape(b)}</b>", html.escape(z), html.escape(m),
-                        f"<span class='badge' style='background:{ui.FARBE[SIGNAL_FARBE[s]]}'>{html.escape(s)}</span>",
+                        f"{ui.badge(SIGNAL_FARBE[s], s)}",
                         _live(ctx.status, ids)] for b, z, m, s, ids in BEWEISKETTE],
                       ["12%", "18%", "25%", "10%", "35%"])
         st.caption("«·neu» = Wert mit Datum nach dem IC-Statement. Einordnung IC: Hohe Inflation und langsameres Wachstum sind "
@@ -262,7 +261,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
             fig.update_layout(height=300, margin=dict(l=8, r=8, t=20, b=8), plot_bgcolor="white")
             fig.update_xaxes(title="Rendite im Bear Case (%)", gridcolor="#EEF0F3")
             fig.update_yaxes(title="Erwartete Rendite (%)", gridcolor="#EEF0F3")
-            st.plotly_chart(fig, width="stretch", config=ui.PLOT_CFG)
+            ui.zeige(fig)
             st.caption("Blau = innerhalb des IC-Korridors (40–50 % Aktien).")
 
         st.subheader("Vorbereitung der Asset-Allokation")
@@ -346,7 +345,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         for code, titel, text in ABGLEICH:
             e = erledigt[erledigt["text"] == code] if len(erledigt) else erledigt
             c1, c2 = st.columns([5, 1.2])
-            haken = f"✅ erledigt ({', '.join(e['person'].unique())})" if len(e) else "⬜ offen"
+            haken = (ui.badge(L.GRUEN, f"erledigt · {', '.join(e['person'].unique())}") if len(e) else ui.badge(L.LEER, "offen"))
             c1.markdown(f"**{code}. {titel}** · <span class='klein'>{haken}</span><br><span class='klein'>{html.escape(text)}</span>",
                         unsafe_allow_html=True)
             if not len(e) and c2.button("Erledigt", key=f"abgl_{code}"):
@@ -356,7 +355,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         st.markdown("Bitte Szenariogewichte, Zyklusklassifikation und sektorübergreifende Annahmen gemeinsam bestätigen. "
                     "Sind alle bestätigt, gilt Version 1.0 als verbindliche Grundlage.")
         if mitglieder:
-            st.markdown("  \n".join(f"{'✅' if m in set(freigaben['person']) else '⬜'} {html.escape(m)}" for m in mitglieder))
+            st.markdown("  \n".join(f"{':green[■]' if m in set(freigaben['person']) else ':gray[□]'} {html.escape(m)}" for m in mitglieder))
         if ctx.person not in set(freigaben["person"]):
             if st.button("Ich bestätige die Makrothese (Version 1.0)", type="primary"):
                 ctx.speichern("notizen", [dict(zeit=jetzt(), person=ctx.person, kapitel="ic", typ="freigabe",

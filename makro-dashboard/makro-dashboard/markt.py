@@ -71,15 +71,15 @@ FRED_MARKT = sorted({f for gruppe in MARKT.values() for _, _, f, _ in gruppe if 
 YAHOO = tuple(sorted({y for gruppe in MARKT.values() for _, y, _, _ in gruppe if y}))
 
 NEWS_THEMEN = [
-    ("markt", "📈 Märkte allgemein", "stock market today S&P 500 Dow", ["gewinne"]),
-    ("fed", "🏛️ Fed & Inflation", "Federal Reserve OR Powell OR CPI OR inflation", ["inflation", "zinsen"]),
-    ("zinsen", "💵 Treasuries & Zinsen", "Treasury yields OR bond market", ["zinsen"]),
-    ("arbeit", "👷 Arbeitsmarkt", "jobs report OR jobless claims OR payrolls OR unemployment rate", ["arbeitsmarkt"]),
-    ("konsum", "🛒 Konsum & Stimmung", "consumer spending OR consumer confidence OR retail sales", ["konsum"]),
-    ("gewinne", "📊 Unternehmen & KI", "earnings OR Nvidia OR AI stocks", ["gewinne"]),
-    ("oel", "🛢️ Öl & Iran", "oil prices OR Brent OR Iran OR Hormuz", ["geopolitik", "kredit"]),
-    ("china", "🇨🇳 USA–China & Zölle", "US China trade OR tariffs OR rare earths", ["geopolitik"]),
-    ("krypto", "₿ Krypto", "bitcoin OR crypto market", []),
+    ("markt", "Märkte allgemein", "stock market today S&P 500 Dow", ["gewinne"]),
+    ("fed", "Fed & Inflation", "Federal Reserve OR Powell OR CPI OR inflation", ["inflation", "zinsen"]),
+    ("zinsen", "Treasuries & Zinsen", "Treasury yields OR bond market", ["zinsen"]),
+    ("arbeit", "Arbeitsmarkt", "jobs report OR jobless claims OR payrolls OR unemployment rate", ["arbeitsmarkt"]),
+    ("konsum", "Konsum & Stimmung", "consumer spending OR consumer confidence OR retail sales", ["konsum"]),
+    ("gewinne", "Unternehmen & KI", "earnings OR Nvidia OR AI stocks", ["gewinne"]),
+    ("oel", "Öl & Iran", "oil prices OR Brent OR Iran OR Hormuz", ["geopolitik", "kredit"]),
+    ("china", "USA–China & Zölle", "US China trade OR tariffs OR rare earths", ["geopolitik"]),
+    ("krypto", "Krypto", "bitcoin OR crypto market", []),
 ]
 
 
@@ -368,10 +368,10 @@ def _fmt_ver(x, art):
 def _farbe(x, art: str = "pct"):
     """Grün = gut für Aktien, Rot = schlecht. Renditen (bp) neutral, VIX (pkt) umgekehrt."""
     if x is None or pd.isna(x) or abs(x) < 1e-9 or art == "bp":
-        return "#5A6475"
+        return "#556070"
     if art == "pkt":
         x = -x
-    return "#2E9E5B" if x > 0 else "#D64545"
+    return "#2F855A" if x > 0 else "#B93A32"
 
 
 # ---------------------------------------------------------------------------
@@ -393,13 +393,11 @@ def ticker_leiste(tab: pd.DataFrame):
             continue
         r = r.iloc[0]
         d1 = r.get("d1")
-        teile.append(f'<span style="white-space:nowrap"><b>{html.escape(KURZ.get(n, n))}</b> {_fmt_kurs(n, r["kurs"])} '
+        teile.append(f'<span class="t"><b>{html.escape(KURZ.get(n, n))}</b> {_fmt_kurs(n, r["kurs"])} '
                      f'<span style="color:{_farbe(d1, r["art"])}">'
                      f'{_fmt_ver(d1, r["art"])}</span></span>')
     if teile:
-        st.markdown('<div style="font-size:0.8rem; color:#374151; background:#F4F6FA; border-radius:8px; '
-                    'padding:6px 12px; margin-bottom:6px; line-height:1.9">' + " &nbsp;·&nbsp; ".join(teile) + "</div>",
-                    unsafe_allow_html=True)
+        st.markdown('<div class="ticker">' + "".join(teile) + "</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +484,7 @@ def _ki_prompt(saetze, news, signale_namen, mails=None):
 # Seiten
 # ---------------------------------------------------------------------------
 def seite_maerkte(tab: pd.DataFrame, yahoo: dict, fred: dict, quelle_info: str, alloc: dict | None):
-    st.title("🌐 Märkte heute")
-    st.caption(f"Automatisch aktualisiert (alle 15 Minuten) · {quelle_info} · Sektoren über die SPDR-Sektor-ETFs · "
+    ui.seitenkopf("Märkte heute", f"Automatisch aktualisiert (alle 15 Minuten) · {quelle_info} · Sektoren über die SPDR-Sektor-ETFs · "
                "«seit Start» ab 01.12.2026")
     if tab.empty or tab["kurs"].isna().all():
         st.error("Keine Marktdaten verfügbar – Yahoo Finance und FRED waren nicht erreichbar. Später nochmals versuchen.")
@@ -526,12 +523,12 @@ def seite_maerkte(tab: pd.DataFrame, yahoo: dict, fred: dict, quelle_info: str, 
                                    text=[_fmt_ver(x, "pct") for x in d[spalte]], textposition="outside",
                                    hovertemplate="%{y}: %{x:+.2f} %<extra></extra>"))
             if spx is not None and spx.get(spalte) is not None and not pd.isna(spx.get(spalte)):
-                fig.add_vline(x=spx[spalte], line=dict(color="#2F5DA8", dash="dash"),
+                fig.add_vline(x=spx[spalte], line=dict(color="#1F4E8C", dash="dash"),
                               annotation_text=f"S&P 500 {_fmt_ver(spx[spalte], 'pct')}", annotation_position="top")
             m = max(1.0, float(d[spalte].abs().max()) * 1.35)
             fig.update_layout(height=380, margin=dict(l=8, r=8, t=30, b=8), plot_bgcolor="white", showlegend=False)
             fig.update_xaxes(range=[-m, m], ticksuffix=" %", zeroline=True, zerolinecolor="#94A3B8", gridcolor="#EEF0F3")
-            st.plotly_chart(fig, width="stretch", config=ui.PLOT_CFG)
+            ui.zeige(fig)
     with c2:
         emp = {}
         if alloc is not None:
@@ -580,7 +577,7 @@ def seite_maerkte(tab: pd.DataFrame, yahoo: dict, fred: dict, quelle_info: str, 
     fig.update_yaxes(gridcolor="#EEF0F3")
     if pd.Timestamp.today() >= SIM_START:
         fig.add_vline(x=SIM_START.timestamp() * 1000, line=dict(color="#94A3B8", dash="dot"))
-    st.plotly_chart(fig, width="stretch", config=ui.PLOT_CFG)
+    ui.zeige(fig)
 
 
 def _reihe(row, yahoo, fred):
@@ -598,9 +595,8 @@ def _reihe(row, yahoo, fred):
 def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str, alloc, signale: list,
                speichern, person: str, notizen: pd.DataFrame, api_key: str | None, modell: str,
                mails: list | None = None, nl_fehler: str | None = None):
-    st.title("📰 Tagesupdate & News")
     heute = datetime.now().strftime("%d.%m.%Y")
-    st.caption(f"Stand {news_zeit} · aktualisiert sich automatisch (News alle 30 Min., Kurse alle 15 Min.)")
+    ui.seitenkopf("Tagesupdate & News", f"Stand {news_zeit} · aktualisiert sich automatisch (News alle 30 Min., Kurse alle 15 Min.)")
 
     saetze = tagesupdate_saetze(tab, alloc, len(signale)) if not tab.empty else []
     st.subheader(f"Tagesupdate {heute}")
@@ -636,7 +632,7 @@ def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str,
             for n in items[:5]:
                 zeit = n["zeit"].astimezone().strftime("%d.%m. %H:%M") if n["zeit"] else ""
                 st.markdown(f"<div class='klein' style='margin-bottom:6px'><a href='{html.escape(n['link'])}' target='_blank'>"
-                            f"{html.escape(n['titel'])}</a><br><span style='color:#7A8699'>{html.escape(n['quelle'])} · {zeit}</span></div>",
+                            f"{html.escape(n['titel'])}</a><br><span style='color:#6B7685'>{html.escape(n['quelle'])} · {zeit}</span></div>",
                             unsafe_allow_html=True)
     st.caption("Quelle: Google News (englischsprachige US-Ausgabe). Für eure Analyse gilt weiterhin: jede Information mit 2 Quellen belegen.")
 
@@ -656,7 +652,7 @@ def seite_news(tab: pd.DataFrame, news: dict, news_fehler: list, news_zeit: str,
 
 
 def _newsletter_bereich(mails: list, fehler: str | None, api_key: str | None, modell: str):
-    st.subheader("📧 Newsletter")
+    st.subheader("Newsletter")
     if fehler:
         st.info(f"{fehler} Einrichtung: Seite «Verbindung» → Newsletter.")
         return
@@ -684,7 +680,7 @@ def _newsletter_bereich(mails: list, fehler: str | None, api_key: str | None, mo
                     pills = " ".join(f"<span class='pill' style='background:#EEF0F3'>{html.escape(KAPITEL_NAME[k])}</span>"
                                      for k in x["kapitel"][:3])
                     kopf = f"<b>{html.escape(x['titel'])}</b><br>" if x["titel"] else ""
-                    st.markdown(f"<div class='klein' style='margin-bottom:8px; color:#1F2937'>{kopf}{html.escape(x['text'])}"
+                    st.markdown(f"<div class='klein' style='margin-bottom:8px; color:#1D2533'>{kopf}{html.escape(x['text'])}"
                                 f"<br>{pills}</div>", unsafe_allow_html=True)
             if st.toggle("Ganzen Newsletter anzeigen", key=f"nl_{m['id']}"):
                 st.text(m["text"][:20000])
@@ -692,7 +688,7 @@ def _newsletter_bereich(mails: list, fehler: str | None, api_key: str | None, mo
 
 def seite_verbindung(store, store_fehler, team_modus: bool, fred_ok: int, fred_total: int, yahoo_ok: int,
                      yahoo_total: int, news_fehler: list, test_fn, nl_anzahl: int = 0, nl_fehler: str | None = None):
-    st.title("🔌 Speicher & Verbindungen")
+    ui.seitenkopf("Speicher & Verbindungen", "Status aller Datenquellen und der Google-Tabelle, in der das Team speichert.")
     if store_fehler:
         st.error(f"**Google-Tabelle nicht verbunden.** {store_fehler}")
         st.markdown("Solange das so ist, werden **keine** Team-Eingaben gespeichert – die App blockiert das Speichern, "

@@ -9,11 +9,12 @@ import pandas as pd
 import streamlit as st
 
 from makro import config as C
+from makro import ui
 from storage import jetzt
 
 KATEGORIEN = ["Asset-Allokation", "Duration / Treasuries", "Sektor", "Einzeltitel", "Szenario / These", "Risiko / Absicherung", "Sonstiges"]
 STATUS = ["Vorgeschlagen", "Beschlossen", "Umgesetzt", "Verworfen"]
-STATUS_FARBE = {"Vorgeschlagen": "#E0A100", "Beschlossen": "#2F5DA8", "Umgesetzt": "#2E9E5B", "Verworfen": "#7A8699"}
+STATUS_FARBE = {"Vorgeschlagen": "#B7791F", "Beschlossen": "#1F4E8C", "Umgesetzt": "#2F855A", "Verworfen": "#6B7685"}
 
 
 def snapshot(ctx) -> dict:
@@ -39,8 +40,7 @@ def liste(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def seite_entscheide(ctx, team: list[str]):
-    st.title("📝 Entscheidungsprotokoll")
-    st.caption("Jeder Teamentscheid mit Begründung, zwei Quellen und Gegenargument. Beim Speichern hält die App automatisch "
+    ui.seitenkopf("Entscheidungsprotokoll", "Jeder Teamentscheid mit Begründung, zwei Quellen und Gegenargument. Beim Speichern hält die App automatisch "
                "fest, was das Dashboard in diesem Moment zeigte (Empfehlung, rote Indikatoren, Szenarien) – so bleibt "
                "nachvollziehbar, auf welcher Datenlage entschieden wurde.")
     d = liste(ctx.tabellen.get("entscheide"))
@@ -49,7 +49,7 @@ def seite_entscheide(ctx, team: list[str]):
     for col, s in zip(c, STATUS):
         col.metric(s, int((d["status"] == s).sum()) if len(d) else 0)
 
-    with st.expander("➕ Neuen Entscheid erfassen", expanded=not len(d)):
+    with st.expander("Neuen Entscheid erfassen", icon=":material/add:", expanded=not len(d)):
         with st.form("entscheid", clear_on_submit=True):
             c1, c2, c3 = st.columns([1, 1.3, 1])
             datum = c1.date_input("Datum", value=pd.Timestamp.today().date(), format="DD.MM.YYYY")
@@ -88,9 +88,9 @@ def seite_entscheide(ctx, team: list[str]):
     if f_st:
         d = d[d["status"].isin(f_st)]
     for _, r in d.iterrows():
-        farbe = STATUS_FARBE.get(r["status"], "#7A8699")
+        farbe = STATUS_FARBE.get(r["status"], "#6B7685")
         with st.expander(f"{r['datum']} · {r['titel']} · {r['status']}"):
-            st.markdown(f"<span class='badge' style='background:{farbe}'>{html.escape(r['status'])}</span> "
+            st.markdown(f"<span class='badge' style='color:{farbe}; background:#fff; border-color:#E3E6EB'>{html.escape(r['status'])}</span> "
                         f"<span class='klein'>{html.escape(r['kategorie'])} · erfasst von {html.escape(r['person'])} · "
                         f"Beteiligte: {html.escape(r['beteiligte'] or '–')}</span>", unsafe_allow_html=True)
             st.markdown(f"**Entscheid:** {html.escape(r['entscheid'])}  \n**Begründung:** {html.escape(r['begruendung'])}  \n"
@@ -100,7 +100,7 @@ def seite_entscheide(ctx, team: list[str]):
                 sn = json.loads(r["snapshot"])
                 kz = " · ".join(C.IND_BY_ID[k]["name"].split(" (")[0] + " " + str(v) for k, v in sn["kennzahlen"].items())
                 sz = ", ".join(f"{k}: {v} %" for k, v in sn["szenarien_ic"].items())
-                st.markdown(f"<div class='klein' style='background:#F4F6FA; padding:8px; border-radius:6px'>"
+                st.markdown(f"<div class='klein' style='background:#F5F6F8; padding:8px; border-radius:6px'>"
                             f"<b>Datenlage beim Entscheid ({sn['stand'][:10]}):</b> Empfehlung {html.escape(sn['empfehlung'])} · "
                             f"Zyklus {html.escape(sn['zyklus'])} · Szenarien {html.escape(sz)}<br>"
                             f"Kennzahlen: {html.escape(kz)}<br>"

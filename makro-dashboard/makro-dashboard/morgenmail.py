@@ -53,7 +53,7 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
     teile = []
 
     saetze = markt.tagesupdate_saetze(tab, a, None) if len(tab) else []
-    teile.append("<h3 style='color:#2F5DA8'>Märkte</h3><ul>" + "".join(f"<li>{_fett(x)}</li>" for x in saetze) + "</ul>")
+    teile.append("<h3 style='color:#1F4E8C'>Märkte</h3><ul>" + "".join(f"<li>{_fett(x)}</li>" for x in saetze) + "</ul>")
 
     # Neue rote Ampeln (Vorwert war nicht rot)
     neu_rot, rot = [], []
@@ -66,15 +66,15 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
             neu_rot.append(f"<li><b>{html.escape(z['name'])}: {html.escape(z['anzeige'])}</b> → {html.escape(ind['aktion'])}</li>")
     kombi = [f"<li><b>{html.escape(k['name'])}</b>: {html.escape(k['aktion'])}</li>" for k in r["kombis"] if k["aktiv"]]
     warn = [f"<li><b>{html.escape(x['name'])}</b>: {html.escape(x['reaktion'])}</li>" for _, x in r["risiken"].iterrows() if x["signal"]]
-    teile.append("<h3 style='color:#D64545'>Signale</h3>" +
+    teile.append("<h3 style='color:#B93A32'>Signale</h3>" +
                  (f"<p><b>Neu rot:</b></p><ul>{''.join(neu_rot)}</ul>" if neu_rot else "<p>Keine neuen roten Ampeln.</p>") +
                  (f"<p>Kombi-Signale:</p><ul>{''.join(kombi)}</ul>" if kombi else "") +
                  (f"<p>Risiko-Warnsignale:</p><ul>{''.join(warn)}</ul>" if warn else "") +
-                 f"<p style='color:#5A6475;font-size:12px'>Alle roten Indikatoren ({len(rot)}): {html.escape('; '.join(rot)) or 'keine'}</p>")
+                 f"<p style='color:#556070;font-size:12px'>Alle roten Indikatoren ({len(rot)}): {html.escape('; '.join(rot)) or 'keine'}</p>")
 
     ow = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "–"
     uw = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"]) or "–"
-    teile.append(f"<h3 style='color:#2F5DA8'>Empfehlung (regelbasiert)</h3><p>Aktien {a['aktien']:.0f} % · Treasuries "
+    teile.append(f"<h3 style='color:#1F4E8C'>Empfehlung (regelbasiert)</h3><p>Aktien {a['aktien']:.0f} % · Treasuries "
                  f"{a['anleihen']:.0f} % · Cash {a['cash']:.0f} % · Duration {ui.de(a['duration'], 1)} J. · TIPS {a['tips']:.0f} %<br>"
                  f"Übergewichten: {html.escape(ow)} · Untergewichten: {html.escape(uw)}</p>")
 
@@ -82,7 +82,7 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
     heute = pd.Timestamp.today().normalize()
     t = tdf[(tdf["sort"] >= heute) & (tdf["sort"] <= heute + pd.Timedelta(days=3))]
     if len(t):
-        teile.append("<h3 style='color:#2F5DA8'>Termine (nächste 3 Tage)</h3><ul>" +
+        teile.append("<h3 style='color:#1F4E8C'>Termine (nächste 3 Tage)</h3><ul>" +
                      "".join(f"<li>{html.escape(z['Datum'])}: {html.escape(z['Ereignis'])} – {html.escape(z['Betrifft'])}</li>"
                              for _, z in t.iterrows()) + "</ul>")
 
@@ -91,14 +91,14 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
     for tid, name, _, _ in markt.NEWS_THEMEN[:8]:
         for n in news.get(tid, [])[:2]:
             zeilen.append(f"<li>{html.escape(name)}: <a href='{html.escape(n['link'])}'>{html.escape(n['titel'])}</a> "
-                          f"<span style='color:#7A8699'>({html.escape(n['quelle'])})</span></li>")
+                          f"<span style='color:#6B7685'>({html.escape(n['quelle'])})</span></li>")
     if zeilen:
-        teile.append("<h3 style='color:#2F5DA8'>Schlagzeilen</h3><ul>" + "".join(zeilen) + "</ul>")
+        teile.append("<h3 style='color:#1F4E8C'>Schlagzeilen</h3><ul>" + "".join(zeilen) + "</ul>")
 
     try:
         mails = [m for m in store.newsletter() if pd.Timestamp(m["datum"]) >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=26)]
         if mails:
-            teile.append("<h3 style='color:#2F5DA8'>Neue Newsletter</h3><ul>" +
+            teile.append("<h3 style='color:#1F4E8C'>Neue Newsletter</h3><ul>" +
                          "".join(f"<li>{html.escape(markt._absender_name(m['absender']))}: {html.escape(m['betreff'])}</li>"
                                  for m in mails) + "</ul>")
     except Exception:  # noqa: BLE001
@@ -108,7 +108,7 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
     datum = datetime.now().strftime("%d.%m.%Y")
     body = (f"<div style='font-family:Arial,sans-serif;font-size:14px;max-width:720px'>"
             f"<h2>Makro-Update USA – {datum}</h2>{''.join(teile)}{link}"
-            f"<p style='color:#7A8699;font-size:11px'>Automatisch erstellt aus dem Team-Dashboard (FRED, Yahoo Finance, "
+            f"<p style='color:#6B7685;font-size:11px'>Automatisch erstellt aus dem Team-Dashboard (FRED, Yahoo Finance, "
             f"Google News). Regelbasierte Empfehlung – kein Teamentscheid.</p></div>")
     return f"Makro-Update USA {datum}: {len(neu_rot)} neue rote Signale", body
 

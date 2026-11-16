@@ -60,8 +60,7 @@ def fed_pfad(fred: dict) -> dict:
 
 
 def seite_erwartungen(ctx, fred: dict):
-    st.title("🎯 Was ist eingepreist?")
-    st.caption("IC-Prüfung 1: Welche Fed-Schritte, welche Inflation und wie viel Risiko sind in den Marktpreisen bereits "
+    ui.seitenkopf("Was ist eingepreist?", "IC-Prüfung 1: Welche Fed-Schritte, welche Inflation und wie viel Risiko sind in den Marktpreisen bereits "
                "enthalten – und wo weicht eure Einschätzung davon ab? Alles automatisch aus FRED- und Marktdaten.")
 
     # --- Fed ---------------------------------------------------------------
@@ -90,7 +89,7 @@ def seite_erwartungen(ctx, fred: dict):
             fig.update_layout(height=280, margin=dict(l=8, r=8, t=36, b=8), plot_bgcolor="white",
                               title=dict(text="Impliziter Leitzins vs. heute (bp)", font=dict(size=12)))
             fig.update_yaxes(gridcolor="#EEF0F3")
-            st.plotly_chart(fig, width="stretch", config=ui.PLOT_CFG)
+            ui.zeige(fig)
         sechs = next((p for p in fp["punkte"] if p["monate"] == 6), fp["punkte"][0])  # Abschnitt 3–6 Mt.
         zins = ctx.szen[ctx.szen["thema"] == "zinsen"]
         p_hawk = float(zins.loc["z_basis", "p"] + zins.loc["z_infl", "p"]) if "z_basis" in zins.index else None
