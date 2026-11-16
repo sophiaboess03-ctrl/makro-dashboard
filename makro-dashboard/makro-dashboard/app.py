@@ -23,6 +23,7 @@ import entscheide
 import erwartungen
 import bericht
 import kalender
+import export
 import ic
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
@@ -186,6 +187,15 @@ with st.sidebar:
     else:
         st.info("Lokaler Testmodus (Speicher: CSV-Dateien)")
     st.caption(f"FRED: {len(fred)} von {len(serien)} Reihen · {fred_zeit}")
+    if st.button("📥 Alles als Excel sichern", width="stretch"):
+        try:
+            st.session_state["excel_export"] = export.excel(tabellen, status, alloc, szen, person)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Export fehlgeschlagen: {e}")
+    if st.session_state.get("excel_export"):
+        st.download_button("⬇️ Excel herunterladen", st.session_state["excel_export"],
+                           f"Makro-Dashboard_Sicherung_{datetime.now():%Y-%m-%d_%H%M}.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
 
 if msg := st.session_state.pop("meldung", None):
     (st.success if "bestätigt" in msg else st.warning)(msg)
