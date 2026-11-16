@@ -5,7 +5,8 @@ Start lokal:  streamlit run app.py
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutTimeout
 from datetime import datetime
 from functools import partial
 
@@ -16,6 +17,12 @@ from makro import config as C
 from makro import logic as L
 from makro import ui, views
 import markt
+import pipeline
+import portfolio
+import entscheide
+import erwartungen
+import bericht
+import kalender
 import ic
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
@@ -53,7 +60,7 @@ if pw and not st.session_state.get("ok"):
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner="Verbinde mit der Google-Tabelle …")
 def verbinde_google(url: str, token: str):
-    return GoogleTabelleStore(url, token)
+    return GoogleTabelleStore(url, token, timeout=25)
 
 
 def get_store():
@@ -88,16 +95,24 @@ def lade_fred(series: tuple[str, ...], api_key: str | None):
 
     def hole(s):
         try:
-            return s, lade_serie(s, start=start, api_key=api_key)
+            return s, lade_serie(s, start=start, api_key=api_key, timeout=12)
         except (FredFehler, Exception):
             return s, None
 
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        for s, reihe in ex.map(hole, series):
+    ex = ThreadPoolExecutor(max_workers=10)
+    futs = [ex.submit(hole, s) for s in series]
+    try:
+        for f in as_completed(futs, timeout=60):  # harte Obergrenze für den ersten Ladevorgang
+            s, reihe = f.result()
             if reihe is None:
                 fehler.append(s)
             else:
                 daten[s] = reihe
+    except FutTimeout:
+        pass
+    finally:
+        ex.shutdown(wait=False)
+    fehler = sorted(set(series) - set(daten))
     return daten, sorted(fehler), datetime.now().strftime("%d.%m.%Y %H:%M")
 
 
@@ -143,20 +158,17 @@ def verbindung_testen() -> tuple[bool, str]:
         return False, f"❌ {e}"
 
 
-serien = sorted({i["series"] for i in C.INDIKATOREN if i["quelle"] == "fred"} | {"GDPC1", "GDPPOT", C.REZESSION_SERIE}
-                | set(markt.FRED_MARKT))
+serien = pipeline.fred_serien(markt.FRED_MARKT)
 fred, fred_fehler, fred_zeit = lade_fred(tuple(serien), secret("fred_api_key"))
 tabellen, lese_fehler = lese_alle(store.name)
 if lese_fehler:
     store_fehler = lese_fehler
 
-daten = L.Daten(fred, tabellen["werte"])
-status = L.status(daten)
-kombis = L.kombi_signale(status, daten)
-szen = L.szenario_wahrscheinlichkeiten(tabellen["szenario_votes"])
-risiken = L.risiko_bewertung(tabellen["risiko_votes"], tabellen["risiken_neu"], status, kombis)
-neutral = L.einstellungen(tabellen["einstellungen"])
-alloc = L.allokation(status, szen, risiken, kombis, neutral)
+yahoo, yahoo_fehler, yahoo_zeit = markt.lade_yahoo(markt.YAHOO)
+fred_roh = fred
+fred, labels = pipeline.mische_markt(fred_roh, yahoo)
+_r = pipeline.berechne(fred, labels, tabellen)
+daten, status, kombis, szen, risiken, alloc = _r["daten"], _r["status"], _r["kombis"], _r["szen"], _r["risiken"], _r["alloc"]
 
 # ---------------------------------------------------------------------------
 # Person
@@ -186,8 +198,7 @@ ctx = views.Ctx(daten=daten, status=status, kombis=kombis, szen=szen, risiken=ri
 # ---------------------------------------------------------------------------
 # Märkte & News
 # ---------------------------------------------------------------------------
-yahoo, yahoo_fehler, yahoo_zeit = markt.lade_yahoo(markt.YAHOO)
-markt_tab = markt.markt_tabelle(yahoo, fred)
+markt_tab = markt.markt_tabelle(yahoo, fred_roh)
 markt.ticker_leiste(markt_tab)
 markt_info = f"Kurse geladen {yahoo_zeit} (Yahoo Finance {len(yahoo)}/{len(markt.YAHOO)}, sonst FRED)"
 
@@ -198,6 +209,19 @@ def _seite_news():
     markt.seite_news(markt_tab, news, news_fehler, news_zeit, alloc, views._signale(ctx), speichern, person,
                      tabellen["notizen"], secret("anthropic_api_key"), secret("anthropic_model", "claude-haiku-5-5"),
                      mails, nl_fehler)
+
+
+views.TERMINE_DF, views.TERMINE_INFO = kalender.termine_df(secret("fred_api_key"))
+TEAM = list(secret("team", []) or [])
+
+
+def _seite_portfolio():
+    portfolio.seite_portfolio(ctx, fred, markt.lade_yahoo, markt_tab)
+
+
+def _seite_bericht():
+    info = portfolio.zusammenfassung(tabellen, fred, markt.lade_yahoo, alloc)
+    bericht.seite_bericht(ctx, markt_tab, views._signale(ctx), views.TERMINE_DF, info)
 
 
 def _seite_verbindung():
@@ -213,8 +237,9 @@ def _seite_verbindung():
 seiten = {
     "Überblick": [st.Page(partial(views.seite_gesamtbild, ctx), title="Gesamtbild", icon="🇺🇸", url_path="gesamtbild",
                           default=True),
-                  st.Page(lambda: ic.seite_ic(ctx, markt_tab, list(secret("team", []) or [])), title="Investment Committee",
-                          icon="🏛️", url_path="ic")],
+                  st.Page(lambda: ic.seite_ic(ctx, markt_tab, TEAM), title="Investment Committee",
+                          icon="🏛️", url_path="ic"),
+                  st.Page(_seite_portfolio, title="Portfolio", icon="💼", url_path="portfolio")],
     "Täglich": [
         st.Page(partial(markt.seite_maerkte, markt_tab, yahoo, fred, markt_info, alloc), title="Märkte heute", icon="🌐",
                 url_path="maerkte"),
@@ -225,11 +250,15 @@ seiten = {
     "Auswertung": [
         st.Page(partial(views.seite_szenarien_risiken, ctx), title="Szenarien & Risiken", icon="🎲", url_path="szenarien"),
         st.Page(partial(views.seite_allokation, ctx), title="Allokation", icon="🧭", url_path="allokation"),
+        st.Page(lambda: erwartungen.seite_erwartungen(ctx, fred), title="Was ist eingepreist?", icon="🎯",
+                url_path="erwartungen"),
         st.Page(partial(views.seite_termine, ctx), title="Termine", icon="📅", url_path="termine"),
     ],
     "Team": [
         st.Page(partial(views.seite_bewerten, ctx), title="Bewerten", icon="🗳️", url_path="bewerten"),
         st.Page(partial(views.seite_eintragen, ctx), title="Daten eintragen", icon="✏️", url_path="eintragen"),
+        st.Page(lambda: entscheide.seite_entscheide(ctx, TEAM), title="Entscheide", icon="📝", url_path="entscheide"),
+        st.Page(_seite_bericht, title="Wochenbericht", icon="📄", url_path="bericht"),
         st.Page(partial(views.seite_protokoll, ctx), title="Protokoll", icon="🧾", url_path="protokoll"),
         st.Page(partial(views.seite_einstellungen, ctx), title="Einstellungen", icon="⚙️", url_path="einstellungen"),
         st.Page(_seite_verbindung, title="Verbindung", icon="🔌", url_path="verbindung"),

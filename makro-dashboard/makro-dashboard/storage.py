@@ -26,6 +26,11 @@ TABELLEN = {
     "einstellungen": ["zeit", "person", "schluessel", "wert"],
     "risiken_neu": ["zeit", "person", "id", "name", "kapitel", "warnsignal", "reaktion"],
     "sektorvoten": ["zeit", "person", "sektor", "votum", "datenpunkte", "gegenargument"],
+    "transaktionen": ["zeit", "person", "id", "datum", "art", "klasse", "ticker", "name", "sektor", "menge", "kurs",
+                      "kupon", "faelligkeit", "notiz", "storniert"],
+    "entscheide": ["zeit", "person", "id", "datum", "kategorie", "titel", "entscheid", "begruendung", "quelle1", "quelle2",
+                   "gegenargument", "beteiligte", "status", "snapshot"],
+    "sektordaten": ["zeit", "person", "sektor", "feld", "wert", "quelle"],
 }
 
 
@@ -78,7 +83,7 @@ class GoogleTabelleStore:
             raise SpeicherFehler("Die script_url muss mit https://script.google.com/ beginnen und auf /exec enden.")
         self._rufe({"aktion": "test"})
 
-    def _rufe(self, nutzlast: dict, versuche: int = 3) -> dict:
+    def _rufe(self, nutzlast: dict, versuche: int = 2) -> dict:
         nutzlast = {**nutzlast, "token": self.token}
         letzter = None
         for versuch in range(versuche):
@@ -122,6 +127,9 @@ class GoogleTabelleStore:
                 raise SpeicherFehler("Das Google-Skript ist noch die alte Version ohne Newsletter-Funktion. "
                                      "Neuen Code einfügen und als «Neue Version» bereitstellen.") from None
             raise
+
+    def mail(self, empfaenger: list[str], betreff: str, html: str):
+        self._rufe({"aktion": "mail", "empfaenger": empfaenger, "betreff": betreff, "html": html})
 
     def anhaengen(self, tabelle: str, zeilen: list[dict]):
         kopf = TABELLEN[tabelle]

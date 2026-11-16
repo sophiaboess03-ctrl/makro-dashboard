@@ -303,6 +303,8 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         if abw:
             st.info("Team-Konsens weicht vom Modell ab bei: " + ", ".join(abw) + " – Begründung im Votum dokumentieren.")
 
+        _sektordaten(ctx, tab)
+
         c1, c2 = st.columns([1, 1.2])
         with c1:
             with st.form("sektorvotum", clear_on_submit=True):
@@ -365,3 +367,50 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         st.subheader("Quellenbasis")
         st.markdown(f"<span class='klein'>{QUELLEN} Für vollständige Quellenbelege und Berechnungsmethoden gelten die "
                     "Originaldokumente.</span>", unsafe_allow_html=True)
+
+
+SEKTOR_FELDER = [("fwd_kgv", "Fwd-KGV"), ("kgv_hist", "KGV 10-J.-Schnitt"), ("eps_q3", "EPS-Wachstum Q3 %"),
+                 ("eps_rev", "Revision EPS 2027 (4 Wo.) %"), ("nd_ebitda", "Net Debt/EBITDA"), ("quelle", "Quelle / Stand")]
+
+
+def _sektordaten(ctx, tab):
+    st.markdown("**Kennzahlen je Sektor** (Pflichtfragen 2–4) – direkt in der Tabelle eintragen und speichern")
+    sd = tab.get("sektordaten")
+    werte, quellen = {}, {}
+    if sd is not None and not sd.empty:
+        for _, r in sd.sort_values("zeit").iterrows():
+            werte[(r["sektor"], r["feld"])] = r["wert"]
+    zeilen = []
+    for s in C.SEKTOREN:
+        z = {"Sektor": s}
+        for feld, label in SEKTOR_FELDER:
+            v = werte.get((s, feld))
+            z[label] = (v if feld == "quelle" else zahl(v)) if v not in (None, "") else (None if feld != "quelle" else "")
+        zeilen.append(z)
+    df = pd.DataFrame(zeilen)
+    cfg = {label: st.column_config.NumberColumn(label, format="%.1f") for feld, label in SEKTOR_FELDER if feld != "quelle"}
+    cfg["Quelle / Stand"] = st.column_config.TextColumn("Quelle / Stand", width="medium")
+    ed = st.data_editor(df, hide_index=True, width="stretch", disabled=["Sektor"], column_config=cfg, key="sektordaten_edit")
+    c1, c2 = st.columns([1, 3])
+    if c1.button("Kennzahlen speichern"):
+        neu = []
+        def norm(v, feld):
+            if feld == "quelle":
+                return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+            return None if v is None or pd.isna(v) else round(float(v), 4)
+
+        for (_, alt), (_, jetzt_z) in zip(df.iterrows(), ed.iterrows()):
+            for feld, label in SEKTOR_FELDER:
+                a, b = norm(alt[label], feld), norm(jetzt_z[label], feld)
+                if a != b:
+                    neu.append(dict(zeit=jetzt(), person=ctx.person, sektor=jetzt_z["Sektor"], feld=feld,
+                                    wert="" if b is None else b, quelle=norm(jetzt_z["Quelle / Stand"], "quelle")))
+        if neu:
+            ctx.speichern("sektordaten", neu, f"{len(neu)} Sektorkennzahl(en) gespeichert.")
+        else:
+            st.info("Keine Änderungen.")
+    pr = ed.dropna(subset=["Fwd-KGV", "KGV 10-J.-Schnitt"])
+    if len(pr):
+        txt = " · ".join(f"{r['Sektor']}: {ui.de((r['Fwd-KGV'] / r['KGV 10-J.-Schnitt'] - 1) * 100, 0, True)} %"
+                         for _, r in pr.iterrows() if r["KGV 10-J.-Schnitt"])
+        c2.caption(f"Bewertungsprämie vs. 10-J.-Schnitt: {txt}")

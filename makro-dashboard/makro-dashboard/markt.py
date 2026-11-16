@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import html
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutTimeout
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -88,13 +90,22 @@ NEWS_THEMEN = [
 def lade_yahoo(tickers: tuple[str, ...]):
     """Tagesschlusskurse (bzw. letzter Kurs) für ~14 Monate. Gibt ({ticker: Series}, fehler, zeit) zurück."""
     daten, fehler = {}, []
-    try:
+
+    def _hole():
         import yfinance as yf
 
-        df = yf.download(list(tickers), period="14mo", interval="1d", group_by="ticker", auto_adjust=False,
-                         progress=False, threads=True, timeout=20)
+        return yf.download(list(tickers), period="14mo", interval="1d", group_by="ticker", auto_adjust=False,
+                           progress=False, threads=False, timeout=15)
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        df = ex.submit(_hole).result(timeout=45)  # harte Obergrenze: die App wartet nie länger
+    except FutTimeout:
+        return {}, ["Yahoo Finance: Zeitüberschreitung"], datetime.now().strftime("%d.%m.%Y %H:%M")
     except Exception as e:  # noqa: BLE001
         return {}, [f"Yahoo Finance: {type(e).__name__}"], datetime.now().strftime("%d.%m.%Y %H:%M")
+    finally:
+        ex.shutdown(wait=False)
     for t in tickers:
         try:
             s = _spalte(df, t)
@@ -125,37 +136,47 @@ def _spalte(df: pd.DataFrame, t: str):
 
 @st.cache_data(ttl=30 * 60, show_spinner="Lade News …")
 def lade_news(stunden: int = 30):
-    out, fehler = {}, []
     jetzt = datetime.now(timezone.utc)
-    for tid, _, query, _ in NEWS_THEMEN:
+
+    def _thema(query):
         url = (f"https://news.google.com/rss/search?q={quote_plus(query + ' when:2d')}"
                f"&hl=en-US&gl=US&ceid=US:en")
-        try:
-            r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Makro-Dashboard FHGR)"})
-            root = ET.fromstring(r.content)
-            items = []
-            for it in root.iter("item"):
-                titel = (it.findtext("title") or "").strip()
-                quelle = (it.findtext("source") or "").strip()
-                if quelle and titel.endswith(" - " + quelle):
-                    titel = titel[: -len(quelle) - 3]
-                try:
-                    zeit = parsedate_to_datetime(it.findtext("pubDate"))
-                except Exception:  # noqa: BLE001
-                    zeit = None
-                if zeit is not None and (jetzt - zeit).total_seconds() > stunden * 3600:
-                    continue
-                items.append(dict(titel=titel, link=it.findtext("link") or "", quelle=quelle, zeit=zeit))
-            gesehen, eindeutig = set(), []
-            for i in sorted(items, key=lambda x: x["zeit"] or jetzt, reverse=True):
-                k = i["titel"].lower()[:70]
-                if k not in gesehen:
-                    gesehen.add(k)
-                    eindeutig.append(i)
-            out[tid] = eindeutig[:6]
-        except Exception as e:  # noqa: BLE001
-            out[tid] = []
-            fehler.append(f"{tid}: {type(e).__name__}")
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0 (Makro-Dashboard FHGR)"})
+        root = ET.fromstring(r.content)
+        items = []
+        for it in root.iter("item"):
+            titel = (it.findtext("title") or "").strip()
+            quelle = (it.findtext("source") or "").strip()
+            if quelle and titel.endswith(" - " + quelle):
+                titel = titel[: -len(quelle) - 3]
+            try:
+                zeit = parsedate_to_datetime(it.findtext("pubDate"))
+            except Exception:  # noqa: BLE001
+                zeit = None
+            if zeit is not None and (jetzt - zeit).total_seconds() > stunden * 3600:
+                continue
+            items.append(dict(titel=titel, link=it.findtext("link") or "", quelle=quelle, zeit=zeit))
+        gesehen, eindeutig = set(), []
+        for i in sorted(items, key=lambda x: x["zeit"] or jetzt, reverse=True):
+            k = i["titel"].lower()[:70]
+            if k not in gesehen:
+                gesehen.add(k)
+                eindeutig.append(i)
+        return eindeutig[:6]
+
+    out, fehler = {t[0]: [] for t in NEWS_THEMEN}, []
+    ex = ThreadPoolExecutor(max_workers=len(NEWS_THEMEN))
+    futs = {ex.submit(_thema, q): tid for tid, _, q, _ in NEWS_THEMEN}
+    try:
+        for f in as_completed(futs, timeout=25):
+            try:
+                out[futs[f]] = f.result()
+            except Exception as e:  # noqa: BLE001
+                fehler.append(f"{futs[f]}: {type(e).__name__}")
+    except FutTimeout:
+        fehler += [f"{tid}: Zeitüberschreitung" for f, tid in futs.items() if not f.done()]
+    finally:
+        ex.shutdown(wait=False)
     return out, fehler, datetime.now().strftime("%d.%m.%Y %H:%M")
 
 
@@ -335,6 +356,8 @@ def _fmt_kurs(name, x):
 def _fmt_ver(x, art):
     if x is None or pd.isna(x):
         return "–"
+    if art == "bp" and abs(x) < 0.5:
+        return "±0 bp"
     if art == "pct":
         return f"{ui.de(x, 2, True)} %"
     if art == "bp":
