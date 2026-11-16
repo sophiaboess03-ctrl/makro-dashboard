@@ -373,9 +373,90 @@ def seite_szenarien_risiken(ctx: Ctx):
                 ", ".join(f"{r['name']} ({C.THEMA_BY_ID[r['thema']]['name']}: {r['p_min']:.0f}–{r['p_max']:.0f} %)"
                           for _, r in uneinig.iterrows()) + " – lohnt sich zu besprechen.")
     st.divider()
+    _szenario_verlauf(ctx)
+    st.divider()
     st.subheader("Risiko-Matrix")
     ui.risiko_matrix(ctx.risiken)
     _risiko_tabelle(ctx.risiken.sort_values("score", ascending=False))
+
+
+IC_DATUM = pd.Timestamp("2026-11-16")
+
+
+def X_BEREICH():  # noqa: N802 – Zeitachse vom IC bis zur Abgabe
+    ende = max(pd.Timestamp(C.SIMULATION_ENDE), pd.Timestamp.today().normalize()) + pd.Timedelta(days=3)
+    return [IC_DATUM - pd.Timedelta(days=3), ende]
+
+
+def szenario_verlauf_df(votes: pd.DataFrame) -> pd.DataFrame:
+    """Team-Wahrscheinlichkeit je Szenario an jedem Tag mit neuen Bewertungen (plus Startwerte)."""
+    start = pd.DataFrame([dict(tag=IC_DATUM, id=s["id"], thema=s["thema"], name=s["name"], p=float(s["p"]), n=0)
+                          for s in C.SZENARIEN])
+    if votes is None or votes.empty:
+        return start
+    v = votes.copy()
+    v["tag"] = pd.to_datetime(v["zeit"].astype(str).str[:10], errors="coerce")
+    v = v.dropna(subset=["tag"])
+    teile = [start]
+    for tag in sorted(v["tag"].unique()):
+        d = L.szenario_wahrscheinlichkeiten(v[v["tag"] <= tag].drop(columns=["tag"]))
+        teile.append(d.assign(tag=pd.Timestamp(tag))[["tag", "id", "thema", "name", "p", "n"]].reset_index(drop=True))
+    out = pd.concat(teile, ignore_index=True)
+    return out.sort_values("tag").drop_duplicates(["tag", "id"], keep="last")
+
+
+def zyklus_verlauf_df(votes: pd.DataFrame) -> pd.DataFrame:
+    zeilen = [dict(tag=IC_DATUM, von=0.50, bis=0.58, n=0)]
+    if votes is not None and not votes.empty:
+        v = votes.copy()
+        v["tag"] = pd.to_datetime(v["zeit"].astype(str).str[:10], errors="coerce")
+        for tag in sorted(v["tag"].dropna().unique()):
+            t = L.zyklus_team(v[v["tag"] <= tag].drop(columns=["tag"]))
+            zeilen.append(dict(tag=pd.Timestamp(tag), von=t["von"].mean(), bis=t["bis"].mean(), n=len(t)))
+    return pd.DataFrame(zeilen)
+
+
+def _szenario_verlauf(ctx: Ctx):
+    import plotly.graph_objects as go
+
+    st.subheader("Verlauf der Einschätzungen")
+    d = szenario_verlauf_df(ctx.tabellen.get("szenario_votes"))
+    themen = [t["id"] for t in C.THEMEN]
+    thema = st.segmented_control("Thema", themen, default=themen[0], format_func=lambda t: C.THEMA_BY_ID[t]["name"],
+                                 key="verlauf_thema") or themen[0]
+    c1, c2 = st.columns([1.5, 1])
+    with c1:
+        fig = go.Figure()
+        for i, (sid, g) in enumerate(d[d["thema"] == thema].groupby("id", sort=False)):
+            g = g.sort_values("tag")
+            heute = pd.DataFrame([dict(tag=pd.Timestamp.today().normalize(), p=g["p"].iloc[-1])])
+            g2 = pd.concat([g[["tag", "p"]], heute], ignore_index=True)
+            fig.add_trace(go.Scatter(x=g2["tag"], y=g2["p"], name=g["name"].iloc[0], mode="lines+markers", line_shape="hv",
+                                     line=dict(color=ui.PALETTE[i % len(ui.PALETTE)], width=2.2), marker=dict(size=6),
+                                     hovertemplate="%{x|%d.%m.%Y}: %{y:.0f} %<extra>" + html.escape(g["name"].iloc[0]) + "</extra>"))
+        fig.update_layout(height=320, margin=dict(l=8, r=8, t=10, b=8), hovermode="x unified")
+        fig.update_yaxes(range=[0, 100], ticksuffix=" %")
+        fig.update_xaxes(range=X_BEREICH(), tickformat="%d.%m.", dtick=14 * 86400000)
+        ui.zeige(fig)
+    with c2:
+        z = zyklus_verlauf_df(ctx.tabellen.get("zyklus_votes"))
+        z = pd.concat([z, z.tail(1).assign(tag=pd.Timestamp.today().normalize())], ignore_index=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=z["tag"], y=z["bis"], line=dict(width=0, shape="hv"), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=z["tag"], y=z["von"], fill="tonexty", fillcolor="rgba(31,78,140,0.12)",
+                                 line=dict(width=0, shape="hv"), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=z["tag"], y=(z["von"] + z["bis"]) / 2, name="Team (Mitte)", line=dict(color=ui.BLAU, width=2.2,
+                                 shape="hv"), hovertemplate="%{x|%d.%m.%Y}: %{y:.2f}<extra></extra>"))
+        for y, txt in ((0.25, "Erholung"), (0.5, "Hochphase"), (0.75, "Abschwung")):
+            fig.add_hline(y=y, line=dict(color="#D5DBE4", dash="dot", width=1), annotation_text=txt,
+                          annotation_position="top left", annotation_font=dict(size=10, color=ui.MUTED))
+        fig.update_layout(height=320, margin=dict(l=8, r=8, t=10, b=8), showlegend=False)
+        fig.update_yaxes(range=[0.2, 0.85], title="Zyklusposition")
+        fig.update_xaxes(range=X_BEREICH(), tickformat="%d.%m.", dtick=21 * 86400000)
+        ui.zeige(fig)
+    st.caption("Startwerte aus dem Investment Committee vom 16.11.2026; danach an jedem Tag mit neuen Bewertungen der Durchschnitt "
+               "der jeweils neusten Schätzung jeder Person. Für den Schlussbericht: Wie haben sich eure Erwartungen verändert – "
+               "und was ist tatsächlich eingetreten?")
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +653,8 @@ def seite_protokoll(ctx: Ctx):
     ui.seitenkopf("Protokoll", "Alle Team-Eingaben, neuste zuerst. Nichts wird überschrieben – Korrekturen sind einfach neue Einträge.")
     namen = {"werte": "Werte", "szenario_votes": "Szenario-Bewertungen", "risiko_votes": "Risiko-Bewertungen",
              "zyklus_votes": "Zyklus", "notizen": "Notizen", "einstellungen": "Einstellungen", "risiken_neu": "Neue Risiken", "sektorvoten": "Sektorvoten",
-             "transaktionen": "Transaktionen", "entscheide": "Entscheide", "sektordaten": "Sektordaten"}
+             "transaktionen": "Transaktionen", "entscheide": "Entscheide", "sektordaten": "Sektordaten",
+             "analysen": "Analysen"}
     tabs = st.tabs(list(namen.values()))
     for t, key in zip(tabs, namen):
         with t:
