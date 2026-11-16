@@ -40,6 +40,8 @@ def de(x, d: int = 1, vorzeichen: bool = False) -> str:
     """Zahl im Schweizer/deutschen Format (Komma, Apostroph, echtes Minus)."""
     if x is None or (isinstance(x, float) and math.isnan(x)):
         return "–"
+    if round(x, d) == 0:
+        x = 0.0
     s = f"{x:{'+' if vorzeichen else ''},.{d}f}".replace(",", "'").replace(".", ",")
     return s.replace("-", "−")
 
@@ -185,13 +187,16 @@ def szenario_chart(szen: pd.DataFrame, themen: list[str] | None = None, hoehe=No
         d = szen[szen["thema"] == t]
         for j, (_, r) in enumerate(d.iterrows()):
             spanne = "" if r["n"] == 0 else f" · Team {r['p_min']:.0f}–{r['p_max']:.0f} % (n={r['n']})"
+            kurz = r["name"].replace("Basis: ", "").replace("Base: ", "Base: ")
+            kurz = kurz if len(kurz) <= 24 else kurz[:22] + "…"
+            text = f"{r['p']:.0f} %" if r["p"] < 30 else f"{kurz} · {r['p']:.0f} %"
             fig.add_trace(go.Bar(y=[C.THEMA_BY_ID[t]["name"]], x=[r["p"]], orientation="h", name=r["name"],
                                  marker=dict(color=palette[j % len(palette)], line=dict(color="white", width=1)),
-                                 text=f"{r['name'].replace('Basis: ', 'Basis: ')}<br>{r['p']:.0f} %", textposition="inside",
-                                 insidetextanchor="middle", textfont=dict(size=11),
+                                 text=text, textposition="inside", insidetextanchor="middle", textangle=0,
+                                 textfont=dict(size=11, color="white"), constraintext="none",
                                  hovertemplate=f"{html.escape(r['name'])}: {r['p']:.0f} %{spanne} · {r['basis']}<extra></extra>"))
     _layout(fig, hoehe or 70 + 62 * len(themen))
-    fig.update_layout(barmode="stack", hovermode="closest")
+    fig.update_layout(barmode="stack", hovermode="closest", uniformtext=dict(minsize=9, mode="show"))
     fig.update_xaxes(range=[0, 100], ticksuffix=" %")
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)

@@ -79,9 +79,10 @@ def _kombiniere(*frames: pd.DataFrame) -> pd.DataFrame:
 class Daten:
     """Bündelt FRED-Rohdaten und Team-Eingaben und liefert je Indikator die kombinierte Reihe."""
 
-    def __init__(self, fred: dict[str, pd.Series], werte_df: pd.DataFrame):
+    def __init__(self, fred: dict[str, pd.Series], werte_df: pd.DataFrame, labels: dict[str, str] | None = None):
         self.fred = fred or {}
         self.werte_df = werte_df
+        self.labels = labels or {}  # Reihe → Herkunft (z. B. "FRED + Yahoo")
         self._cache = {}
 
     def reihe(self, ind_id: str) -> pd.DataFrame:
@@ -91,9 +92,10 @@ class Daten:
         seed = pd.Series({pd.Timestamp(d): v for d, v in ind["seed"]}, dtype=float)
         f_seed = _frame(seed, "Analyse (Startwert)", q1=ind["quelle1"], q2=ind["quelle2"]) if not seed.empty else None
         f_auto = None
-        if ind["quelle"] == "fred" and ind["series"] in self.fred:
+        if ind["quelle"] in ("fred", "markt") and ind["series"] in self.fred:
             s = transform(self.fred[ind["series"]], ind["transform"], ind["scale"])
-            f_auto = _frame(s, "FRED", q1=f"FRED {ind['series']}", q2=ind["quelle1"])
+            lab = self.labels.get(ind["series"], "FRED" if ind["quelle"] == "fred" else "Yahoo Finance")
+            f_auto = _frame(s, lab, q1=f"{lab} {ind['series']}", q2=ind["quelle1"])
         elif ind["quelle"] == "berechnet":
             s = self._berechne(ind_id)
             if s is not None and not s.empty:

@@ -291,7 +291,9 @@ def seite_kapitel(ctx: Ctx, kap_id: str):
             with c1:
                 ui.indikator_chart(ind, ctx.daten.reihe(i), ctx.rezession, jahre)
             with c2:
-                art = {"fred": f"automatisch (FRED {ind.get('series')})", "manuell": "Team-Eingabe",
+                art = {"fred": f"automatisch (FRED {ind.get('series')}" + (", ergänzt um Live-Kurse von Yahoo Finance)"
+                                if ind.get("series") in C.MARKT_ERGAENZT_FRED.values() else ")"),
+                       "markt": f"automatisch (Yahoo Finance {ind.get('series')})", "manuell": "Team-Eingabe",
                        "berechnet": "automatisch berechnet"}[ind["quelle"]]
                 st.markdown(f"**Schwelle:** {ind['schwelle']}  \n<span class='klein'>Herkunft Schwelle: {ind['herkunft']}</span>",
                             unsafe_allow_html=True)
@@ -540,15 +542,24 @@ def seite_eintragen(ctx: Ctx):
     st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
 
 
+TERMINE_DF = None  # wird von der App mit dem automatischen Kalender gesetzt
+TERMINE_INFO = None
+
+
 def _termine_tabelle(n: int | None = None):
     heute = pd.Timestamp.today().normalize()
-    d = pd.DataFrame(C.TERMINE, columns=["sort", "Datum", "Ereignis", "Betrifft"])
-    d["sort"] = pd.to_datetime(d["sort"])
+    if TERMINE_DF is not None:
+        d = TERMINE_DF.copy()
+    else:
+        d = pd.DataFrame(C.TERMINE, columns=["sort", "Datum", "Ereignis", "Betrifft"])
+        d["sort"] = pd.to_datetime(d["sort"])
+    if "Quelle" not in d:
+        d["Quelle"] = "Team"
     d["in"] = (d["sort"] - heute).dt.days
     if n:
         d = d[d["in"] >= -1].head(n)
     d["In"] = d["in"].map(lambda x: "heute" if x == 0 else f"in {x} T." if x > 0 else "vorbei")
-    st.dataframe(d[["Datum", "In", "Ereignis", "Betrifft"]], hide_index=True, width="stretch",
+    st.dataframe(d[["Datum", "In", "Ereignis", "Betrifft"] + ([] if n else ["Quelle"])], hide_index=True, width="stretch",
                  column_config={"Datum": st.column_config.TextColumn(width="medium"),
                                 "In": st.column_config.TextColumn(width="small")})
 
@@ -556,14 +567,18 @@ def _termine_tabelle(n: int | None = None):
 def seite_termine(ctx: Ctx):
     st.title("📅 Termine bis Abgabe")
     _termine_tabelle()
-    st.caption("Datum «Mitte Dez.» u. Ä. ist für den Countdown angenähert – genaue Daten im BLS-/BEA-Kalender prüfen.")
+    if TERMINE_INFO:
+        st.caption(TERMINE_INFO)
+    st.caption("Datenveröffentlichungen kommen automatisch aus dem FRED-Kalender (exakte Daten); Fed-Sitzungen, Gipfel, "
+               "Gewinnzahlen und Fristen sind eure Einträge aus der Makroanalyse.")
 
 
 def seite_protokoll(ctx: Ctx):
     st.title("🧾 Protokoll")
     st.caption("Alle Team-Eingaben, neuste zuerst. Nichts wird überschrieben – Korrekturen sind einfach neue Einträge.")
     namen = {"werte": "Werte", "szenario_votes": "Szenario-Bewertungen", "risiko_votes": "Risiko-Bewertungen",
-             "zyklus_votes": "Zyklus", "notizen": "Notizen", "einstellungen": "Einstellungen", "risiken_neu": "Neue Risiken", "sektorvoten": "Sektorvoten"}
+             "zyklus_votes": "Zyklus", "notizen": "Notizen", "einstellungen": "Einstellungen", "risiken_neu": "Neue Risiken", "sektorvoten": "Sektorvoten",
+             "transaktionen": "Transaktionen", "entscheide": "Entscheide", "sektordaten": "Sektordaten"}
     tabs = st.tabs(list(namen.values()))
     for t, key in zip(tabs, namen):
         with t:

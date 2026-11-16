@@ -316,11 +316,11 @@ _ind(id="brent", kapitel="kredit", name="Ölpreis Brent", einheit="USD/bbl",
      quelle1="ICE / CNBC (FRED DCOILBRENTEU, ≈ 1 Woche Verzug)", quelle2="Trading Economics / OilPrice.com",
      rhythmus="täglich", naechster="laufend", seed=[("2026-11-12", 95.82)], auch_in=["geopolitik", "inflation"])
 _ind(id="dxy", kapitel="kredit", name="US-Dollar-Index (DXY)", einheit="Index",
-     quelle="manuell", richtung="hoch", rot=103,
+     quelle="markt", series="DX-Y.NYB", richtung="hoch", rot=103,
      schwelle="Rot anhaltend > 103",
      annahme="Fed erhöht, andere Notenbanken halten → Dollar stark seit Anfang Nov.",
      aktion="Multinationale mit hohem Auslandsumsatz untergewichten, binnenorientierte Firmen bevorzugen.",
-     quelle1="Trading Economics", quelle2="ICE / Reuters", rhythmus="täglich", naechster="laufend",
+     quelle1="ICE (via Yahoo Finance DX-Y.NYB, automatisch)", quelle2="Trading Economics / Reuters", rhythmus="täglich", naechster="laufend",
      seed=[("2026-10-11", 101.4), ("2026-11-11", 102.5)])
 _ind(id="dollar_breit", kapitel="kredit", name="Handelsgewichteter Dollar (breit, Fed)", einheit="Index",
      quelle="fred", series="DTWEXBGS", dezimal=1, richtung="kontext",
@@ -439,6 +439,14 @@ IND_BY_ID = {i["id"]: i for i in I}
 
 # Rezessionsbalken in Charts
 REZESSION_SERIE = "USREC"
+
+# Live-Kurse (Yahoo Finance) ergänzen FRED-Reihen, die dort mit Verzug erscheinen: Yahoo-Ticker → FRED-Reihe
+MARKT_ERGAENZT_FRED = {"BZ=F": "DCOILBRENTEU", "^VIX": "VIXCLS", "^GSPC": "SP500", "^TNX": "DGS10"}
+
+# Zinskurve für die Bewertung von Treasuries und die Markterwartungen
+ZINSKURVE = {"DGS1MO": 1 / 12, "DGS3MO": 0.25, "DGS6MO": 0.5, "DGS1": 1, "DGS2": 2, "DGS3": 3, "DGS5": 5, "DGS7": 7,
+             "DGS10": 10, "DGS20": 20, "DGS30": 30}
+ERWARTUNGS_SERIEN = ["DFF", "T5YIE", "T10YIE"]
 
 # ---------------------------------------------------------------------------
 # Szenarien (Wahrscheinlichkeit = Startwert; das Team schätzt selbst, die App mittelt)
