@@ -4,10 +4,15 @@ Benötigte Umgebungsvariablen (GitHub → Settings → Secrets and variables →
   SCRIPT_URL, SCRIPT_TOKEN, MAIL_EMPFAENGER (Adressen mit Komma getrennt)
   optional: FRED_API_KEY, APP_URL
 Test lokal: DRY_RUN=1 python morgenmail.py  (schreibt morgenmail.html statt zu senden)
+
+Signal-Warnung: python morgenmail.py --warnung
+  prüft, ob seit der letzten Prüfung ein NEUES rotes Signal dazugekommen ist (rote Ampel, Kombi-Signal oder
+  Risiko-Warnsignal), und schickt nur dann eine kurze Mail. Der letzte Stand liegt im Blatt «signal_log».
 """
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import sys
@@ -113,12 +118,69 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
     return f"Makro-Update USA {datum}: {len(neu_rot)} neue rote Signale", body
 
 
+def aktuelle_signale(r: dict) -> dict[str, tuple[str, str]]:
+    """Schlüssel → (Titel, Aktion) aller aktiven roten Signale."""
+    out = {}
+    for _, z in r["status"].iterrows():
+        if z["ampel"] == L.ROT:
+            out[f"ind:{z['id']}"] = (f"{z['name']}: {z['anzeige']}", C.IND_BY_ID[z["id"]]["aktion"])
+    for k in r["kombis"]:
+        if k["aktiv"]:
+            out[f"kombi:{k['name']}"] = (f"Kombi-Signal: {k['name']}", k["aktion"])
+    for rid, x in r["risiken"].iterrows():
+        if x["signal"]:
+            out[f"risiko:{rid}"] = (f"Warnsignal Risiko: {x['name']}", x["reaktion"])
+    return out
+
+
+def warnung(store, api_key: str | None, app_url: str | None, empf: list[str], trocken: bool = False) -> str:
+    fred_roh = lade_fred(pipeline.fred_serien(markt.FRED_MARKT), api_key)
+    yahoo, _, _ = markt.lade_yahoo(markt.YAHOO)
+    fred, labels = pipeline.mische_markt(fred_roh, yahoo)
+    tabellen = store.alle()
+    jetzt_ = aktuelle_signale(pipeline.berechne(fred, labels, tabellen))
+    log = tabellen.get("signal_log")
+    vorher = None
+    if log is not None and not log.empty:
+        try:
+            vorher = set(json.loads(log.sort_values("zeit").iloc[-1]["signale"]))
+        except Exception:  # noqa: BLE001
+            vorher = None
+    neu = [k for k in jetzt_ if vorher is not None and k not in vorher]
+    weg = sorted(vorher - set(jetzt_)) if vorher is not None else []
+    if vorher is None or neu or weg:
+        from storage import jetzt
+        if not trocken:
+            store.anhaengen("signal_log", [dict(zeit=jetzt(), person="Signal-Warnung", signale=json.dumps(sorted(jetzt_)))])
+    if not neu:
+        return "Keine neuen Signale." if vorher is not None else "Erster Lauf: Stand gespeichert, keine Mail."
+    zeilen = "".join(f"<li><b>{html.escape(jetzt_[k][0])}</b><br><span style='color:#556070'>Vorab festgelegte Reaktion: "
+                     f"{html.escape(jetzt_[k][1])}</span></li>" for k in neu)
+    link = f"<p><a href='{html.escape(app_url)}'>→ Zum Dashboard</a></p>" if app_url else ""
+    body = (f"<div style='font-family:Arial,sans-serif;font-size:14px;max-width:680px'>"
+            f"<h2 style='color:#B93A32'>Neues Warnsignal im Makro-Dashboard</h2><ul>{zeilen}</ul>"
+            f"<p style='color:#556070'>Insgesamt aktiv: {len(jetzt_)} rote Signale.</p>{link}"
+            f"<p style='color:#6B7685;font-size:11px'>Automatische Prüfung alle 2 Stunden (Mo–Fr). Bitte im Team besprechen "
+            f"und einen allfälligen Entscheid im Entscheidungsprotokoll festhalten.</p></div>")
+    betreff = f"Warnsignal: {jetzt_[neu[0]][0]}" + (f" (+{len(neu) - 1} weitere)" if len(neu) > 1 else "")
+    if trocken:
+        open("warnung.html", "w", encoding="utf-8").write(body)
+        return betreff + " → warnung.html"
+    if empf:
+        store.mail(empf, betreff, body)
+    return "Gesendet: " + betreff
+
+
 def main():
     url, token = os.environ.get("SCRIPT_URL", ""), os.environ.get("SCRIPT_TOKEN", "")
     empf = [x.strip() for x in os.environ.get("MAIL_EMPFAENGER", "").split(",") if x.strip()]
     if not url or not token:
         sys.exit("SCRIPT_URL / SCRIPT_TOKEN fehlen.")
     store = GoogleTabelleStore(url, token)
+    if "--warnung" in sys.argv:
+        print(warnung(store, os.environ.get("FRED_API_KEY") or None, os.environ.get("APP_URL") or None, empf,
+                      bool(os.environ.get("DRY_RUN"))))
+        return
     betreff, body = baue_mail(store, os.environ.get("FRED_API_KEY") or None, os.environ.get("APP_URL") or None)
     if os.environ.get("DRY_RUN"):
         open("morgenmail.html", "w", encoding="utf-8").write(body)

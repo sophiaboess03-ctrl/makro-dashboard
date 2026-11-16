@@ -90,6 +90,14 @@ Dozent = "eigenes-passwort"
 
 Farben und Schrift kommen aus der Datei `.streamlit/config.toml` **im obersten Ordner des Repositorys** (nicht im App-Ordner). Ohne diese Datei funktioniert die App trotzdem, nur mit den Standardfarben von Streamlit.
 
+## Analyse, Berichte und Warnungen
+
+- **Analyse** (Seite «Analyse»): Aktien mit Stückzahl oder Betrag und Treasuries je Laufzeitband eingeben → «Kennzahlen berechnen». Die App rechnet Sharpe, Sortino, Volatilität, Beta, Alpha, Max. Drawdown, Value at Risk, Tracking Error, Korrelationen und Risikobeiträge und prüft IC-Korridor, Klumpen (> 10 %), S&P-500-Mandat, Duration und Sektorempfehlung. Mit «Aktuelles Portfolio übernehmen» lässt sich ein geplanter Kauf vorher durchrechnen. Vorauswahlen können gespeichert werden.
+- **Portfolio → Performance & Risiko**: Rendite seit Start gegenüber dem neutralen IC-Portfolio und dem S&P 500 sowie das Risiko der heutigen Positionen.
+- **Berichte**: Wochenbericht und Abgabe-Dossier (PDF).
+- **Angemeldet bleiben**: Beim Login ankreuzen – gilt 7 Tage auf diesem Browser. Ändert sich ein Passwort, muss man sich neu anmelden.
+- **Signal-Warnung**: GitHub Actions prüft Mo–Fr alle 2 Stunden, ob ein neues rotes Signal dazugekommen ist, und schickt dann eine Mail (gleiche GitHub-Secrets wie die Morgenmail).
+
 ---
 
 ## Wenn etwas nicht klappt

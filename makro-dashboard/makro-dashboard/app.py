@@ -4,7 +4,10 @@ Start lokal:  streamlit run app.py
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
+import time
+import urllib.parse
 import html
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +30,7 @@ import bericht
 import kalender
 import export
 import ic
+import analyse
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
 
@@ -59,11 +63,53 @@ BENUTZER = _tabelle("benutzer")      # Name = Passwort, darf speichern
 LESER = _tabelle("lesezugriff")      # Name = Passwort, darf nur ansehen (z. B. Dozent)
 pw = secret("app_password")
 PERSOENLICH = bool(BENUTZER or LESER)
+COOKIE, COOKIE_TAGE = "makro_login", 7
+
+
+def _schluessel() -> bytes:
+    """Signaturschlüssel: ändert sich, sobald ein Passwort oder das Skript-Token geändert wird."""
+    roh = "|".join([str(secret("script_token", "")), str(pw or "")] + [f"{k}={v}" for k, v in sorted({**BENUTZER, **LESER}.items())])
+    return hashlib.sha256(roh.encode("utf-8")).digest()
+
+
+def _token(name: str) -> str:
+    bis = int(time.time()) + COOKIE_TAGE * 86400
+    sig = hmac.new(_schluessel(), f"{name}|{bis}".encode("utf-8"), hashlib.sha256).hexdigest()[:40]
+    return urllib.parse.quote(f"{name}|{bis}|{sig}", safe="")
+
+
+def _aus_cookie() -> str | None:
+    try:
+        roh = st.context.cookies.get(COOKIE)
+    except Exception:  # noqa: BLE001
+        return None
+    if not roh:
+        return None
+    try:
+        name, bis, sig = urllib.parse.unquote(roh).rsplit("|", 2)
+        soll = hmac.new(_schluessel(), f"{name}|{bis}".encode("utf-8"), hashlib.sha256).hexdigest()[:40]
+        if _gleich(sig, soll) and int(bis) > time.time() and name in {**BENUTZER, **LESER}:
+            return name
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _cookie_js(wert: str | None):
+    """Setzt bzw. löscht das Login-Cookie im Browser (kleines unsichtbares Skript)."""
+    import streamlit.components.v1 as components
+
+    attr = f"max-age={COOKIE_TAGE * 86400}" if wert else "max-age=0"
+    components.html(f"<script>try{{window.parent.document.cookie='{COOKIE}={wert or ''}; path=/; {attr}; SameSite=Lax; Secure';}}"
+                    f"catch(e){{document.cookie='{COOKIE}={wert or ''}; path=/; {attr}; SameSite=Lax; Secure';}}</script>",
+                    height=0)
 
 
 def anmeldeseite():
     st.markdown("<style>section[data-testid='stSidebar'], [data-testid='stSidebarCollapsedControl'] {display:none;}</style>",
                 unsafe_allow_html=True)
+    if st.session_state.pop("cookie_loeschen", False):
+        _cookie_js(None)
     _, mitte, _ = st.columns([1, 1.05, 1])
     with mitte:
         st.markdown('<div class="login"><div class="login-logo">M</div><div class="kopf-over">' + ui.KOPF_ZEILE + '</div>'
@@ -76,12 +122,16 @@ def anmeldeseite():
             name = (st.selectbox("Name", list(BENUTZER) + [n for n in LESER if n not in BENUTZER], index=None,
                                  placeholder="Name wählen") if PERSOENLICH else None)
             eingabe = st.text_input("Passwort" if PERSOENLICH else "Team-Passwort", type="password")
+            merken = st.checkbox(f"Angemeldet bleiben ({COOKIE_TAGE} Tage, nur auf eigenen Geräten)", value=True) if PERSOENLICH else False
             los = st.form_submit_button("Anmelden", type="primary", width="stretch")
         if los:
             if PERSOENLICH:
                 soll = BENUTZER.get(name) if name in BENUTZER else LESER.get(name)
                 if name and soll and _gleich(eingabe, soll):
-                    st.session_state.update(ok=True, benutzer=name, nur_lesen=name not in BENUTZER, person=name)
+                    st.session_state.update(ok=True, benutzer=name, nur_lesen=name not in BENUTZER, person=name,
+                                            abgemeldet=False)
+                    if merken:
+                        st.session_state["cookie_setzen"] = _token(name)
                     st.rerun()
                 st.error("Name oder Passwort stimmt nicht." if name else "Bitte zuerst deinen Namen wählen.")
             elif pw and _gleich(eingabe, str(pw)):
@@ -94,10 +144,15 @@ def anmeldeseite():
 
 
 if PERSOENLICH:
+    if not st.session_state.get("benutzer") and not st.session_state.get("abgemeldet"):
+        if wer := _aus_cookie():
+            st.session_state.update(ok=True, benutzer=wer, nur_lesen=wer not in BENUTZER, person=wer)
     if not st.session_state.get("benutzer") or st.session_state["benutzer"] not in {**BENUTZER, **LESER}:
         anmeldeseite()
         st.stop()
     st.session_state["person"] = st.session_state["benutzer"]
+    if t := st.session_state.pop("cookie_setzen", None):
+        _cookie_js(t)
 elif pw and not st.session_state.get("ok"):
     anmeldeseite()
     st.stop()
@@ -236,6 +291,7 @@ with st.sidebar:
         if st.button("Abmelden", icon=":material/logout:", width="stretch"):
             for k in ("ok", "benutzer", "nur_lesen", "person", "excel_export"):
                 st.session_state.pop(k, None)
+            st.session_state.update(abgemeldet=True, cookie_loeschen=True)
             st.rerun()
     elif TEAM:
         person = st.selectbox("Ich bin", TEAM, key="person")
@@ -298,7 +354,8 @@ def _seite_portfolio():
 
 def _seite_bericht():
     info = portfolio.zusammenfassung(tabellen, fred, markt.lade_yahoo, alloc)
-    bericht.seite_bericht(ctx, markt_tab, views._signale(ctx), views.TERMINE_DF, info)
+    bericht.seite_bericht(ctx, markt_tab, views._signale(ctx), views.TERMINE_DF, info, team=TEAM, fred=fred,
+                          lade_kurse=markt.lade_yahoo)
 
 
 def _seite_verbindung():
@@ -316,7 +373,9 @@ seiten = {
     "Überblick": [st.Page(partial(views.seite_gesamtbild, ctx), title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild",
                           default=True),
                   st.Page(lambda: ic.seite_ic(ctx, markt_tab, TEAM), title="Investment Committee", icon=M("gavel"), url_path="ic"),
-                  st.Page(_seite_portfolio, title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio")],
+                  st.Page(_seite_portfolio, title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio"),
+                  st.Page(lambda: analyse.seite_analyse(ctx, fred, markt.lade_yahoo), title="Analyse",
+                          icon=M("analytics"), url_path="analyse")],
     "Täglich": [
         st.Page(partial(markt.seite_maerkte, markt_tab, yahoo, fred, markt_info, alloc), title="Märkte heute",
                 icon=M("candlestick_chart"), url_path="maerkte"),
@@ -336,7 +395,7 @@ seiten = {
         st.Page(partial(views.seite_bewerten, ctx), title="Bewerten", icon=M("how_to_vote"), url_path="bewerten"),
         st.Page(partial(views.seite_eintragen, ctx), title="Daten eintragen", icon=M("edit_note"), url_path="eintragen"),
         st.Page(lambda: entscheide.seite_entscheide(ctx, TEAM), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
-        st.Page(_seite_bericht, title="Wochenbericht", icon=M("description"), url_path="bericht"),
+        st.Page(_seite_bericht, title="Berichte", icon=M("description"), url_path="bericht"),
         st.Page(partial(views.seite_protokoll, ctx), title="Protokoll", icon=M("history"), url_path="protokoll"),
         st.Page(partial(views.seite_einstellungen, ctx), title="Einstellungen", icon=M("tune"), url_path="einstellungen"),
         st.Page(_seite_verbindung, title="Verbindung", icon=M("cable"), url_path="verbindung"),

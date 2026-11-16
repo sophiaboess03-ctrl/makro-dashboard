@@ -247,7 +247,7 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
         if warn:
             st.warning("Ausserhalb des IC-Korridors bzw. der Regeln: " + "; ".join(warn))
 
-    t1, t2, t3, t4 = st.tabs(["Positionen", "Struktur & Abweichungen", "Verlauf", "Transaktionen"])
+    t1, t2, t3, t5, t4 = st.tabs(["Positionen", "Struktur & Abweichungen", "Verlauf", "Performance & Risiko", "Transaktionen"])
     with t1:
         if len(b):
             d = b.copy()
@@ -325,6 +325,12 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
         else:
             st.caption("Der Verlauf erscheint nach der ersten Transaktion.")
 
+    with t5:
+        if len(tx):
+            _performance(ctx, tx, kurse, fred, kapital, lade_kurse)
+        else:
+            st.caption("Performance und Risiko erscheinen nach der ersten Transaktion.")
+
     with t4:
         _formular(ctx, fred, lade_kurse)
         roh = tab.get("transaktionen")
@@ -364,6 +370,102 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                 zeilen += [dict(zeit=jetzt(), person=ctx.person, schluessel=f"bm|{r['Sektor']}", wert=r["Gewicht %"])
                            for _, r in ed.iterrows() if r["Gewicht %"] is not None and not pd.isna(r["Gewicht %"])]
                 ctx.speichern("einstellungen", zeilen, "Portfolio-Einstellungen gespeichert.")
+
+
+def performance_daten(tx, kurse, fred, kapital, neutral: dict) -> dict | None:
+    """Realisierte Tagesrenditen des Portfolios vs. neutrales IC-Portfolio und S&P 500 (gleiche Tage)."""
+    import analyse as A
+
+    v = verlauf(tx, kurse, fred, kapital)
+    if len(v) < 2:
+        return None
+    hist, _, _ = A.lade_historie((A.SPX, A.NEUTRAL_PROXY, A.RF_TICKER), 2)
+    if A.SPX not in hist or A.NEUTRAL_PROXY not in hist:
+        return None
+    # Startpunkt = Kapital am Vortag des ersten Trades, damit auch der erste Tag (Kauf vs. Schlusskurs) zählt
+    v = pd.concat([pd.Series([kapital], index=[v.index[0] - pd.offsets.BDay(1)]), v])
+    r_p = v.pct_change().dropna()
+    px = pd.concat({t: hist[t] for t in (A.SPX, A.NEUTRAL_PROXY)}, axis=1).sort_index().ffill()
+    px = px.reindex(px.index.union(v.index)).ffill().reindex(v.index)
+    R = px.pct_change().reindex(r_p.index).fillna(0.0)
+    rf = A.rf_reihe(hist, r_p.index)
+    na, nc = neutral["aktien"] / 100, neutral.get("cash", 5) / 100
+    r_n = A.portfolio_reihe(R, rf, {A.SPX: na, A.NEUTRAL_PROXY: 1 - na - nc}, nc)
+    r_s = R[A.SPX]
+    kp, kn = A.kennzahlen(r_p, rf, r_s), A.kennzahlen(r_n, rf, r_s)
+    akt = r_p - r_n
+    if len(akt) >= 20 and akt.std() > 0:
+        te = float(akt.std(ddof=1) * np.sqrt(A.TAGE))
+        kp.update(te_neutral=te * 100, ir_neutral=float(akt.mean() * A.TAGE / te))
+    gesamt = lambda r: float((1 + r).prod() - 1) * 100  # noqa: E731
+    return dict(v=v, r_p=r_p, r_n=r_n, r_s=r_s, kp=kp, kn=kn, g_p=gesamt(r_p), g_n=gesamt(r_n), g_s=gesamt(r_s),
+                tage=len(r_p))
+
+
+def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
+    import analyse as A
+
+    d = performance_daten(tx, kurse, fred, kapital, ctx.alloc["neutral"])
+    if d is None:
+        st.info("Für den Vergleich fehlen noch Kursdaten (Yahoo Finance) – bitte später nochmals öffnen.")
+        return
+    kp, kn = d["kp"], d["kn"]
+    st.markdown("**Realisiert seit dem ersten Trade** · Vergleich mit dem neutralen IC-Portfolio "
+                f"({ctx.alloc['neutral']['aktien']:.0f} / {100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} / "
+                f"{ctx.alloc['neutral'].get('cash', 5):.0f}) und dem S&P 500 inkl. Dividenden")
+    ui.kopf_kpis([
+        ("Rendite seit Start", A._pct(d["g_p"], 2, True), f"neutral {A._pct(d['g_n'], 2, True)} · S&P 500 {A._pct(d['g_s'], 2, True)}"),
+        ("Mehrrendite vs. neutral", f"{ui.de(d['g_p'] - d['g_n'], 2, True)} PP",
+         f"vs. S&P 500 {ui.de(d['g_p'] - d['g_s'], 2, True)} PP"),
+        ("Sharpe Ratio", A._zahl(kp.get("sharpe")), f"neutral {A._zahl(kn.get('sharpe'))}"),
+        ("Max. Drawdown", A._pct(kp.get("mdd")), f"neutral {A._pct(kn.get('mdd'))}"),
+    ])
+    if d["tage"] < 20:
+        st.caption(f"Erst {d['tage']} Handelstage – Sharpe Ratio, Volatilität, Beta und Tracking Error werden ab 20 Handelstagen "
+                   "berechnet, aussagekräftig sind sie ab etwa 2 Monaten.")
+    else:
+        ui.kopf_kpis([
+            ("Volatilität p.a.", A._pct(kp.get("vola")), f"neutral {A._pct(kn.get('vola'))}"),
+            ("Beta zum S&P 500", A._zahl(kp.get("beta")), f"Korrelation {A._zahl(kp.get('korr'))}"),
+            ("Tracking Error vs. neutral", A._pct(kp.get("te_neutral")), f"Information Ratio {A._zahl(kp.get('ir_neutral'))}"),
+            ("Jensen-Alpha p.a.", A._pct(kp.get("alpha"), 1, True), f"Sortino {A._zahl(kp.get('sortino'))}"),
+        ])
+    fig = go.Figure()
+    for name, rr, farbe, breite in (("Portfolio", d["r_p"], ui.BLAU, 2.6), ("Neutral (IC)", d["r_n"], ui.GOLD, 1.8),
+                                    ("S&P 500", d["r_s"], ui.STAHL, 1.6)):
+        w = pd.concat([pd.Series([100.0], index=[d["v"].index[0]]), (1 + rr).cumprod() * 100])
+        fig.add_trace(go.Scatter(x=w.index, y=w, name=name, line=dict(color=farbe, width=breite)))
+    fig.update_layout(height=340, margin=dict(l=8, r=8, t=10, b=8), hovermode="x unified")
+    fig.update_yaxes(title="Index (Start = 100)")
+    ui.zeige(fig)
+
+    st.markdown("**Risiko der heutigen Positionen** · auf Basis der Kursschwankungen der letzten 12 Monate")
+    vor = A.portfolio_vorlage(ctx.tabellen, fred, lade_kurse)
+    if vor is None:
+        return
+    tick = sorted({A._txt(t).strip().upper() for t in vor[0]["Ticker"] if A._txt(t).strip()})
+    prox = sorted({A.PROXY[A._txt(b)][0] for b in vor[1]["Laufzeit"] if A._txt(b) in A.PROXY})
+    hist, _, _ = A.lade_historie(tuple(tick + prox + [A.SPX, A.NEUTRAL_PROXY, A.RF_TICKER]), 1)
+    letzte = {t: float(s.iloc[-1]) for t, s in hist.items()}
+    pos, cash, total, _ = A.zusammenstellen(vor[0], vor[1], vor[2], vor[3], False, letzte)
+    erg = A.rechne(pos, cash, total, hist, ctx.alloc["neutral"]) if total > 0 and len(pos) else None
+    if erg is None:
+        st.caption("Für die Risikoanalyse fehlen Kursdaten.")
+        return
+    kv = erg["k"]["Vorauswahl"]
+    top = erg["beitrag"].sort_values(ascending=False).head(3)
+    ui.kopf_kpis([
+        ("VaR 95 % · 1 Tag", f"{ui.de(kv.get('var95', 0) / 100 * total, 0)} USD", f"CVaR {ui.de(kv.get('cvar95', 0) / 100 * total, 0)} USD"),
+        ("Volatilität p.a. (ex ante)", A._pct(kv.get("vola")), f"neutral {A._pct(erg['k']['Neutral (IC)'].get('vola'))}"),
+        ("Beta zum S&P 500", A._zahl(kv.get("beta")), f"Sharpe 12 Mt. {A._zahl(kv.get('sharpe'))}"),
+        ("Grösste Risikotreiber", ", ".join(A.PROXY_NAME.get(t, t) for t in top.index[:2]),
+         " · ".join(f"{A.PROXY_NAME.get(t, t)} {ui.de(v, 0)} %" for t, v in top.items())),
+    ])
+    info = {t: ticker_info(t) for t in pos.loc[pos["klasse"] == "Aktie", "ticker"]}
+    checks = A.pruefungen(pos, cash, total, info, ctx.alloc)
+    st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {"Rot": "Verstoss", "Gelb": "Hinweis", "Grün": "ok"}[s_])}'
+                        f'&nbsp; {txt}</span><span></span></div>' for s_, txt in checks), unsafe_allow_html=True)
+    st.caption("Mehr Details (Einzeltitel, Korrelationen, Was-wäre-wenn) auf der Seite «Analyse» mit «Aktuelles Portfolio übernehmen».")
 
 
 def _wdur(b: pd.DataFrame) -> float:

@@ -31,6 +31,8 @@ TABELLEN = {
     "entscheide": ["zeit", "person", "id", "datum", "kategorie", "titel", "entscheid", "begruendung", "quelle1", "quelle2",
                    "gegenargument", "beteiligte", "status", "snapshot"],
     "sektordaten": ["zeit", "person", "sektor", "feld", "wert", "quelle"],
+    "analysen": ["zeit", "person", "id", "name", "eingabe", "kennzahlen", "notiz"],
+    "signal_log": ["zeit", "person", "signale"],
 }
 
 
