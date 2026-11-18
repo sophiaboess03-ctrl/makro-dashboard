@@ -16,6 +16,34 @@ from storage import jetzt
 
 MAX_MB = 15
 
+# Dokument-Bereiche je Seite (ID → Name). Die Kapitel kommen aus config.KAPITEL dazu.
+SEITEN_BEREICHE = {
+    "allgemein": "Allgemein / Team",
+    "gesamtbild": "Gesamtbild",
+    "ic": "Investment Committee",
+    "portfolio": "Portfolio",
+    "analyse": "Analyse",
+    "maerkte": "Märkte heute",
+    "news": "Tagesupdate & News",
+    "szenarien": "Szenarien",
+    "eingepreist": "Was ist eingepreist?",
+    "risiken": "Risiken & Chancen",
+    "ips": "IPS",
+    "dozent": "Erwartungen (Dozent)",
+    "taktik": "Taktik",
+    "risiko": "Risiko & Risikobudget",
+    "anleihen": "Anleihen & Duration",
+    "entscheide": "Entscheide",
+    "bericht": "Berichte",
+    "eintragen": "Daten eintragen",
+    "termine": "Termine",
+    "protokoll": "Protokoll",
+}
+
+
+def alle_bereiche() -> dict[str, str]:
+    return {**SEITEN_BEREICHE, **{k["id"]: k["name"] for k in C.KAPITEL}}
+
 
 def liste(tab: pd.DataFrame | None, bereich: str | None = None) -> pd.DataFrame:
     if tab is None or tab.empty:
@@ -81,12 +109,19 @@ def bereich(ctx, bereich_id: str, titel: str = "Dokumente & Analysen"):
 def seite_dokumente(ctx):
     from makro import ui
 
-    ui.seitenkopf("Dokumente", "Alle hochgeladenen Analysen an einem Ort. Hochladen geht direkt auf jeder Kapitelseite oder hier.")
-    namen = {"allgemein": "Allgemein / Team", "szenarien": "Szenarien", "ips": "IPS & Taktik",
-             **{k["id"]: k["name"] for k in C.KAPITEL}}
+    ui.seitenkopf("Dokumente", "Alle hochgeladenen Analysen und Begründungen an einem Ort. Hochladen geht direkt unten auf "
+                               "jeder Seite oder hier.")
+    namen = alle_bereiche()
     alle = liste(ctx.tabellen.get("dateien"))
     st.caption(f"{len(alle)} Dokument(e) gespeichert.")
-    for bid, name in namen.items():
-        n = int((alle["bereich"] == bid).sum()) if len(alle) else 0
-        with st.expander(f"{name} ({n})", expanded=n > 0 and bid == "allgemein"):
-            bereich(ctx, bid, titel=name)
+    anzahl = {bid: (int((alle["bereich"] == bid).sum()) if len(alle) else 0) for bid in namen}
+    # Bereiche mit Dokumenten zuerst, danach die leeren
+    for bid in sorted(namen, key=lambda b: anzahl[b] == 0):
+        n = anzahl[bid]
+        with st.expander(f"{namen[bid]} ({n})", expanded=n > 0 and bid == "allgemein"):
+            bereich(ctx, bid, titel=namen[bid])
+    # Dokumente aus Bereichen, die es nicht mehr gibt, nicht verlieren
+    rest = sorted(set(alle["bereich"]) - set(namen)) if len(alle) else []
+    for bid in rest:
+        with st.expander(f"{bid} ({anzahl.get(bid, int((alle['bereich'] == bid).sum()))})"):
+            bereich(ctx, bid, titel=bid)

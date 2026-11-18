@@ -428,39 +428,50 @@ def _seite_verbindung():
 # Navigation
 # ---------------------------------------------------------------------------
 M = ":material/{}:".format
+
+
+def _doks(seite, bereich_id: str):
+    """Hängt unter eine Seite den Block «Dokumente & Begründungen» (Hochladen, Öffnen, Entfernen)."""
+    def _mit_doks():
+        seite()
+        st.divider()
+        dateien.bereich(ctx, bereich_id, titel="Dokumente & Begründungen")
+    return _mit_doks
+
+
 seiten = {
-    "Überblick": [st.Page(_seite_gesamtbild, title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild", default=True),
-                  st.Page(lambda: ic.seite_ic(ctx, markt_tab, TEAM), title="Investment Committee", icon=M("gavel"), url_path="ic"),
-                  st.Page(_seite_portfolio, title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio"),
-                  st.Page(lambda: analyse.seite_analyse(ctx, fred, markt.lade_yahoo), title="Analyse",
+    "Überblick": [st.Page(_doks(_seite_gesamtbild, "gesamtbild"), title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild", default=True),
+                  st.Page(_doks(lambda: ic.seite_ic(ctx, markt_tab, TEAM), "ic"), title="Investment Committee", icon=M("gavel"), url_path="ic"),
+                  st.Page(_doks(_seite_portfolio, "portfolio"), title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio"),
+                  st.Page(_doks(lambda: analyse.seite_analyse(ctx, fred, markt.lade_yahoo), "analyse"), title="Analyse",
                           icon=M("analytics"), url_path="analyse")],
     "Täglich": [
-        st.Page(partial(markt.seite_maerkte, markt_tab, yahoo, fred, markt_info, alloc), title="Märkte heute",
+        st.Page(_doks(partial(markt.seite_maerkte, markt_tab, yahoo, fred, markt_info, alloc), "maerkte"), title="Märkte heute",
                 icon=M("candlestick_chart"), url_path="maerkte"),
-        st.Page(_seite_news, title="Tagesupdate & News", icon=M("newspaper"), url_path="news"),
+        st.Page(_doks(_seite_news, "news"), title="Tagesupdate & News", icon=M("newspaper"), url_path="news"),
     ],
     "Kapitel": [st.Page(partial(views.seite_kapitel, ctx, k["id"]), title=k["name"], icon=k["icon"], url_path=k["id"])
                 for k in C.KAPITEL],
     "Szenarien": [
-        st.Page(lambda: szenarien_seite.seite_szenarien(ctx), title="Szenarien", icon=M("alt_route"), url_path="szenarien"),
-        st.Page(_seite_eingepreist, title="Was ist eingepreist?", icon=M("query_stats"), url_path="erwartungen"),
-        st.Page(lambda: szenarien_seite.seite_risiken(ctx), title="Risiken & Chancen", icon=M("warning"), url_path="risiken"),
+        st.Page(_doks(lambda: szenarien_seite.seite_szenarien(ctx), "szenarien"), title="Szenarien", icon=M("alt_route"), url_path="szenarien"),
+        st.Page(_doks(_seite_eingepreist, "eingepreist"), title="Was ist eingepreist?", icon=M("query_stats"), url_path="erwartungen"),
+        st.Page(_doks(lambda: szenarien_seite.seite_risiken(ctx), "risiken"), title="Risiken & Chancen", icon=M("warning"), url_path="risiken"),
     ],
     "Entscheiden & Abgabe": [
-        st.Page(lambda: ips_mod.seite_ips(ctx, hist, ctx.gew, ctx.szdef, ctx.bond), title="IPS", icon=M("policy"), url_path="ips"),
-        st.Page(lambda: dozent.seite_erwartungen(ctx), title="Erwartungen (Dozent)", icon=M("quiz"), url_path="dozent"),
-        st.Page(_seite_taktik, title="Taktik", icon=M("donut_large"), url_path="taktik"),
-        st.Page(lambda: risiko.seite_risiko(ctx), title="Risiko & Risikobudget", icon=M("shield"), url_path="risiko"),
-        st.Page(lambda: anleihen.seite_anleihen(ctx, fred), title="Anleihen & Duration", icon=M("stacked_line_chart"),
+        st.Page(_doks(lambda: ips_mod.seite_ips(ctx, hist, ctx.gew, ctx.szdef, ctx.bond), "ips"), title="IPS", icon=M("policy"), url_path="ips"),
+        st.Page(_doks(lambda: dozent.seite_erwartungen(ctx), "dozent"), title="Erwartungen (Dozent)", icon=M("quiz"), url_path="dozent"),
+        st.Page(_doks(_seite_taktik, "taktik"), title="Taktik", icon=M("donut_large"), url_path="taktik"),
+        st.Page(_doks(lambda: risiko.seite_risiko(ctx), "risiko"), title="Risiko & Risikobudget", icon=M("shield"), url_path="risiko"),
+        st.Page(_doks(lambda: anleihen.seite_anleihen(ctx, fred), "anleihen"), title="Anleihen & Duration", icon=M("stacked_line_chart"),
                 url_path="anleihen"),
-        st.Page(lambda: entscheide.seite_entscheide(ctx, TEAM), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
-        st.Page(_seite_bericht, title="Berichte", icon=M("description"), url_path="bericht"),
+        st.Page(_doks(lambda: entscheide.seite_entscheide(ctx, TEAM), "entscheide"), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
+        st.Page(_doks(_seite_bericht, "bericht"), title="Berichte", icon=M("description"), url_path="bericht"),
     ],
     "Team": [
-        st.Page(partial(views.seite_eintragen, ctx), title="Daten eintragen", icon=M("edit_note"), url_path="eintragen"),
+        st.Page(_doks(partial(views.seite_eintragen, ctx), "eintragen"), title="Daten eintragen", icon=M("edit_note"), url_path="eintragen"),
         st.Page(lambda: dateien.seite_dokumente(ctx), title="Dokumente", icon=M("folder_open"), url_path="dokumente"),
-        st.Page(partial(views.seite_termine, ctx), title="Termine", icon=M("event"), url_path="termine"),
-        st.Page(partial(views.seite_protokoll, ctx), title="Protokoll", icon=M("history"), url_path="protokoll"),
+        st.Page(_doks(partial(views.seite_termine, ctx), "termine"), title="Termine", icon=M("event"), url_path="termine"),
+        st.Page(_doks(partial(views.seite_protokoll, ctx), "protokoll"), title="Protokoll", icon=M("history"), url_path="protokoll"),
         st.Page(partial(views.seite_einstellungen, ctx), title="Einstellungen", icon=M("tune"), url_path="einstellungen"),
         st.Page(_seite_verbindung, title="Verbindung", icon=M("cable"), url_path="verbindung"),
     ],
