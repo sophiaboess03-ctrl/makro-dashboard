@@ -37,6 +37,7 @@ import dozent
 import ips as ips_mod
 import szenarien_seite
 import taktik
+import risiko
 from makro import szenarien as SZ
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
@@ -253,6 +254,7 @@ def speichern(tabelle: str, zeilen: list[dict], meldung: str = "Gespeichert."):
         except Exception:  # noqa: BLE001
             pass
     lese_alle.clear()
+    st.session_state["_selbst_gespeichert"] = True
     ort = "in der Google-Tabelle" if store.name == "Google-Tabelle" else "lokal"
     st.session_state["meldung"] = (f"{meldung} {ort[0].upper() + ort[1:]} gespeichert und bestätigt." if bestaetigt
                                    else f"{meldung} Gespeichert, Kontrolle noch ausstehend – bitte im Protokoll prüfen.")
@@ -280,6 +282,7 @@ fred_roh = fred
 fred, labels = pipeline.mische_markt(fred_roh, yahoo)
 hist, hist_fehler, _ = analyse.lade_historie(pipeline.HIST_TICKER, 6)
 _r = pipeline.berechne(fred, labels, tabellen, hist)
+analyse.setze_benchmark(_r["einst"]["bond_benchmark"])
 daten, status, kombis, szen, risiken, alloc = _r["daten"], _r["status"], _r["kombis"], _r["szen"], _r["risiken"], _r["alloc"]
 try:
     _fp = erwartungen.fed_pfad(fred)
@@ -287,6 +290,13 @@ try:
 except Exception:  # noqa: BLE001
     _fed_markt = None
 anker = SZ.daten_anker(fred, hist, status, _fed_markt)
+_tr = SZ.taylor(status)
+if _tr and _tr["diff"] is not None:
+    anker["fed"] = (anker.get("fed", "") + (" · " if anker.get("fed") else "") +
+                    f"Taylor-Regel {_tr['i']:.2f} % vs. Fed {_tr['fed']:.2f} % ({_tr['diff'] * 100:+.0f} bp)").replace(".", ",")
+_fw = erwartungen.markt_eintraege(tabellen.get("markt_erwartung")).get("fedwatch")
+if _fw is not None:
+    anker["fed"] = f"CME FedWatch ({_fw['datum']}): {_fw['wert']} · " + anker.get("fed", "")
 
 # ---------------------------------------------------------------------------
 # Seitenleiste: angemeldete Person, Status, Sicherung
@@ -329,6 +339,7 @@ with st.sidebar:
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch",
                                icon=":material/download:")
 
+st.session_state["_selbst_dieser_lauf"] = st.session_state.pop("_selbst_gespeichert", False)
 if msg := st.session_state.pop("meldung", None):
     if "bestätigt" in msg:
         st.success(msg, icon=":material/check_circle:")
@@ -343,6 +354,12 @@ ctx = views.Ctx(daten=daten, status=status, kombis=kombis, szen=szen, risiken=ri
                 erw_antworten={m["id"]: dozent.antworten_kurz(tabellen.get("erwartungen"), m["id"]) for m in C.MONATE},
                 store=store, nur_lesen=NUR_LESEN)
 MONAT_ARBEIT = _r["monat_arbeit"]
+try:
+    _gk = erwartungen.grinold_kroner_eingaben(ctx)
+    _gk_er = _gk["dp"] + _gk["i"] + _gk["g"] - _gk["ds"] + _gk["dpe"]
+    ctx.anker["sp500"] = (ctx.anker.get("sp500", "") + f" · Grinold-Kroner {_gk_er:.1f} %/J. ≈ {_gk_er / 12:.2f} %/Mt.").replace(".", ",")
+except Exception:  # noqa: BLE001
+    pass
 
 
 def _prog(monat_id: str | None = None):
@@ -433,6 +450,7 @@ seiten = {
         st.Page(lambda: ips_mod.seite_ips(ctx, hist, ctx.gew, ctx.szdef, ctx.bond), title="IPS", icon=M("policy"), url_path="ips"),
         st.Page(lambda: dozent.seite_erwartungen(ctx), title="Erwartungen (Dozent)", icon=M("quiz"), url_path="dozent"),
         st.Page(_seite_taktik, title="Taktik", icon=M("donut_large"), url_path="taktik"),
+        st.Page(lambda: risiko.seite_risiko(ctx), title="Risiko & Risikobudget", icon=M("shield"), url_path="risiko"),
         st.Page(lambda: anleihen.seite_anleihen(ctx, fred), title="Anleihen & Duration", icon=M("stacked_line_chart"),
                 url_path="anleihen"),
         st.Page(lambda: entscheide.seite_entscheide(ctx, TEAM), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),

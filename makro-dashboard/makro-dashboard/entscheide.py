@@ -43,7 +43,17 @@ def seite_entscheide(ctx, team: list[str]):
     ui.seitenkopf("Entscheidungsprotokoll", "Jeder Teamentscheid mit Begründung, zwei Quellen und Gegenargument. Beim Speichern hält die App automatisch "
                "fest, was das Dashboard in diesem Moment zeigte (Taktik, rote Indikatoren, Szenarien) – so bleibt "
                "nachvollziehbar, auf welcher Datenlage entschieden wurde.")
+    import seitenpdf as SP
+    ph = st.empty()
     d = liste(ctx.tabellen.get("entscheide"))
+    R = SP.Sammler("Entscheidungsprotokoll", "Teamentscheide mit Begründung, Quellen, Gegenargument und Datenlage", kurz="Entscheide")
+    for _, r in d.iterrows():
+        R.h2(f"{r['datum']} - {r['titel']} ({r['status']}, {r['kategorie']})")
+        R.text(f"Entscheid: {r['entscheid']}")
+        R.text(f"Begründung: {r['begruendung']}")
+        R.text(f"Gegenargument: {r['gegenargument'] or '-'} - Quellen: {r['quelle1']}; {r['quelle2']} - Beteiligte: {r['beteiligte'] or '-'}",
+               klein=True)
+    SP.knopf(ph, R if len(d) else None, "entscheide")
 
     c = st.columns(4)
     for col, s in zip(c, STATUS):

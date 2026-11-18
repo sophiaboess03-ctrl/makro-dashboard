@@ -163,6 +163,33 @@ def treffer(f: dict, ist: float) -> str | None:
     return None
 
 
+def feedback(ctx) -> dict | None:
+    """Trefferquote, Brier-Score und Kalibrierung über alle Monate mit (Zwischen-)Ergebnis."""
+    stufen = dict(C.UEBERZEUGUNG)
+    zeilen = []
+    for m in C.MONATE:
+        ist, stand = ist_werte(m["id"], ctx.fred, ctx.hist)
+        if not ist or stand != "endgültig":
+            continue
+        team = antworten(ctx.tabellen.get("erwartungen"), m["id"])
+        for f in C.FRAGEN:
+            a = team.get(f["nr"])
+            if not a or f["art"] == "sektoren" or ist.get(f["groesse"]) is None:
+                continue
+            hit = a["antwort"] == treffer(f, ist[f["groesse"]])
+            zeilen.append(dict(stufe=a["ueberzeugung"], p=stufen.get(a["ueberzeugung"], 70) / 100, hit=hit,
+                               mp=(a["modell_p"] or 50) / 100))
+    if not zeilen:
+        return None
+    d = pd.DataFrame(zeilen)
+    kal = d.groupby("stufe").agg(n=("hit", "size"), treffer=("hit", "mean"), p=("p", "first")).reset_index()
+    kal = pd.DataFrame({"Überzeugung": kal["stufe"].map(SZ.stufe_text), "Antworten": kal["n"],
+                        "Trefferquote": (kal["treffer"] * 100).map(lambda x: f"{x:.0f} %"),
+                        "Soll": (kal["p"] * 100).map(lambda x: f"{x:.0f} %")})
+    return dict(n=len(d), treffer=float(d["hit"].mean() * 100), brier_team=float(((d["p"] - d["hit"]) ** 2).mean()),
+                brier_modell=float(((d["mp"] - d["hit"]) ** 2).mean()), kalibrierung=kal)
+
+
 # ---------------------------------------------------------------------------
 # Texte
 # ---------------------------------------------------------------------------
@@ -224,6 +251,13 @@ def begruendung_entwurf(ctx, f: dict, q: dict) -> str:
     base = (f"Szenarien: {'; '.join(teile)}. " if teile else "") + \
         f"Gewichtet erwartet {_fmt(f, q['erwartung'])} (80 %-Band {_fmt(f, q['p10'])} bis {_fmt(f, q['p90'])}). " + \
         f"Modell: «{q['vorschlag']}» mit {q['p_vorschlag']:.0f} %."
+    if f["groesse"] in ("fed", "dgs10"):
+        import anleihen as AN
+        rel = AN.relativ_kurz(ctx)
+        if rel:
+            base += " Portfolio: " + rel
+    if f["groesse"] == "fed" and ctx.anker.get("fed"):
+        base += f" Daten: {ctx.anker['fed']}."
     return base
 
 
@@ -273,6 +307,8 @@ def seite_erwartungen(ctx):
     (st.info if offen else st.warning)(txt, icon=":material/schedule:")
     prog = prognose(ctx, m_id)
     team = antworten(ctx.tabellen.get("erwartungen"), m_id)
+    letzte = max(team.values(), key=lambda v: v["zeit"], default=None)
+    ui.stand_abgleich(f"erw_{m_id}", letzte["zeit"] if letzte else "", (f"erw_{m_id}_",), letzte["person"] if letzte else "")
     fragen = [f for f in C.FRAGEN if not (f["art"] == "fed" and not m["fed_sitzung"])]
     n_ok = sum(1 for f in fragen if f["nr"] in team) + (1 if "haupt" in team else 0)
     p_txt = " · ".join(f"{ctx.szdef[s]['kurz']} {ctx.szen.loc[s, 'p']:.0f} %" for s in ctx.szdef)
@@ -434,6 +470,18 @@ def seite_erwartungen(ctx):
                    "Sektorindizes), FRED (DFEDTARU, DGS10, CPIAUCSL). Anleihen-Rendite über GOVT als Näherung des Treasury-Index.")
         R.h(f"Auflösung ({stand})")
         R.tabelle(aufl)
+    fb = feedback(ctx)
+    if fb is not None:
+        st.markdown("### Feedback über alle Monate (CME-Schritt 7: Prognosen überprüfen)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Trefferquote Team", f"{fb['treffer']:.0f} %", f"{fb['n']} Antworten")
+        c2.metric("Brier-Score Team", ui.de(fb["brier_team"], 3), help="(Überzeugung − Treffer)²; 0 = perfekt, 0,25 = Münzwurf mit 50 %")
+        c3.metric("Brier-Score Modell", ui.de(fb["brier_modell"], 3), help="gleich, mit der Modell-Wahrscheinlichkeit eurer Antwort")
+        st.dataframe(fb["kalibrierung"], hide_index=True, width="stretch")
+        st.caption("Gut kalibriert heisst: Antworten mit «mittel (70 %)» treffen in etwa 70 % der Fälle. Liegt die Trefferquote deutlich "
+                   "darunter, seid ihr überzuversichtlich – deutlich darüber, zu vorsichtig.")
+        R.h("Feedback über alle Monate")
+        R.tabelle(fb["kalibrierung"])
     with st.expander("So rechnet die App", icon=":material/functions:"):
         st.markdown(
             "1. **Szenarien:** Jedes Szenario hat für jede Grösse einen Monatswert (Seite «Szenarien»).\n"

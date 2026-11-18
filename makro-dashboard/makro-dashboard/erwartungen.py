@@ -74,6 +74,36 @@ def _q(*ids):
     return " · ".join(f"[{i}]({QUELLEN[i]})" for i in ids if i in QUELLEN)
 
 
+def grinold_kroner_eingaben(ctx) -> dict:
+    out = {"dp": 1.2, "i": 2.4, "g": 2.0, "ds": -1.0, "dpe": 0.0}
+    be = ctx.fred.get("T10YIE")
+    if be is not None and len(be.dropna()):
+        out["i"] = round(float(be.dropna().iloc[-1]), 2)
+    try:
+        import analyse
+        dy = analyse.fundamentaldaten("SPY").get("div")
+        if dy:
+            out["dp"] = round(float(dy) * 100, 2)
+    except Exception:  # noqa: BLE001
+        pass
+    kgv = ctx.status.loc["kgv", "wert"] if "kgv" in ctx.status.index else None
+    if kgv is not None and not pd.isna(kgv) and kgv > 0:
+        rev = ((19.1 / float(kgv)) ** (1 / 5) - 1) * 100
+        out["pe_hinweis"] = (f"Zum Vergleich: Kehrt das Forward-KGV ({ui.de(float(kgv), 1)}) über 5 Jahre zum 10-J.-Schnitt von 19,1 zurück, "
+                             f"wären das {ui.de(rev, 1, True)} % pro Jahr Bewertungsänderung.")
+    einst = ctx.tabellen.get("einstellungen")
+    if einst is not None and not einst.empty:
+        for _, r in einst.sort_values("zeit").iterrows():
+            if str(r["schluessel"]).startswith("gk_"):
+                try:
+                    out[r["schluessel"][3:]] = float(str(r["wert"]).replace(",", "."))
+                except ValueError:
+                    pass
+    for k in ("dp", "i", "g", "ds", "dpe"):
+        out[k] = float(out[k])
+    return out
+
+
 def markt_eintraege(tab: pd.DataFrame | None) -> dict:
     if tab is None or tab.empty:
         return {}
@@ -141,6 +171,22 @@ def seite_erwartungen(ctx, fred: dict, prog: dict | None = None):
             if st.form_submit_button("Speichern") and wert.strip():
                 ctx.speichern("markt_erwartung", [dict(zeit=jetzt(), person=ctx.person, groesse="fedwatch", wert=wert.strip(),
                                                        quelle=quelle.strip(), datum=datum.strftime("%d.%m.%Y"))], "FedWatch gespeichert.")
+    tr = None
+    try:
+        from makro import szenarien as SZ
+        tr = SZ.taylor(ctx.status)
+    except Exception:  # noqa: BLE001
+        pass
+    if tr:
+        t = (f"**Taylor-Regel** (CFA Level III, CME): r* {ui.de(C.TAYLOR_R_NEUTRAL, 1)} % + Inflation {ui.de(tr['pi'], 1)} % (Kern-PCE) + "
+             f"0,5 × Inflationslücke + 0,5 × Output Gap ({ui.de(tr['gap'], 1)} %) = **{ui.de(tr['i'], 2)} %** gegenüber Fed-Obergrenze "
+             f"{ui.de(tr['fed'], 2)} % → " + ("die Regel verlangt eine **straffere** Fed (Druck auf Erhöhungen)." if tr["diff"] > 0.25 else
+                                              "die Regel verlangt eine **lockerere** Fed (Raum für Senkungen)." if tr["diff"] < -0.25 else
+                                              "Fed ungefähr dort, wo die Regel sie sieht."))
+        st.markdown(t)
+        st.caption(f"Neutraler Realzins r* = {ui.de(C.TAYLOR_R_NEUTRAL, 1)} % ist eine Annahme (Laubach-Williams-Schätzung der NY Fed prüfen); "
+                   "Daten: FRED PCEPILFE, GDPC1/GDPPOT, DFEDTARU.")
+        R.text(t)
     if prog and 4 in prog["fragen"]:
         q = prog["fragen"][4]
         opts = [o[0] for o in C.FRAGE_BY_NR[4]["optionen"]]
@@ -244,6 +290,37 @@ def seite_erwartungen(ctx, fred: dict, prog: dict | None = None):
     else:
         st.info("Für den Trend der Gewinnschätzungen braucht es mindestens zwei Einträge «Forward-EPS» (Seite «Daten eintragen», "
                 "z. B. wöchentlich aus FactSet Earnings Insight).")
+
+    # --- Grinold-Kroner ---------------------------------------------------------
+    st.subheader("6. Aktien langfristig: Grinold-Kroner-Modell")
+    R.h("6. Grinold-Kroner")
+    gk = grinold_kroner_eingaben(ctx)
+    with st.form("gk"):
+        cc = st.columns(5)
+        dp = cc[0].number_input("Dividendenrendite D/P (%)", 0.0, 5.0, gk["dp"], 0.1)
+        i_ = cc[1].number_input("Inflation i (%)", 0.0, 6.0, gk["i"], 0.1, help="Standard: 10-J.-Breakeven (FRED T10YIE)")
+        g = cc[2].number_input("Reales Gewinnwachstum g (%)", -2.0, 6.0, gk["g"], 0.1)
+        ds = cc[3].number_input("Veränderung Aktienzahl ΔS (%)", -4.0, 4.0, gk["ds"], 0.1, help="negativ = Netto-Aktienrückkäufe")
+        dpe = cc[4].number_input("Bewertungsänderung ΔP/E p.a. (%)", -5.0, 5.0, gk["dpe"], 0.1)
+        if st.form_submit_button("Annahmen fürs Team speichern", disabled=ctx.nur_lesen):
+            ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel=f"gk_{k}", wert=v)
+                                            for k, v in (("dp", dp), ("i", i_), ("g", g), ("ds", ds), ("dpe", dpe))],
+                          "Grinold-Kroner-Annahmen gespeichert.")
+    er = dp + i_ + g - ds + dpe
+    y10 = ctx.status.loc["dgs10", "wert"] if "dgs10" in ctx.status.index else None
+    t = (f"E(R) = D/P + (i + g) − ΔS + ΔP/E = {ui.de(dp, 1)} + ({ui.de(i_, 1)} + {ui.de(g, 1)}) − ({ui.de(ds, 1)}) + {ui.de(dpe, 1)} = "
+         f"**{ui.de(er, 1)} % p.a.** ≈ {ui.de(er / 12, 2)} % pro Monat. " +
+         (f"Gegenüber der 10-J.-Rendite ({ui.de(y10, 2)} %) ergibt das eine erwartete Aktienrisikoprämie von **{ui.de(er - y10, 1, True)} PP**. "
+          if y10 is not None and not pd.isna(y10) else "") +
+         f"Euer gewichteter Szenario-Wert für den S&P 500: {ui.de(gew['sp500'], 2, True)} % im Monat.")
+    st.markdown(t)
+    if gk.get("pe_hinweis"):
+        st.caption(gk["pe_hinweis"])
+    st.caption("Grinold-Kroner (CFA Level III, CME Part 2) ist ein langfristiges Modell – es kalibriert die Grössenordnung, nicht den "
+               "einzelnen Monat. Quellen: Dividendenrendite Yahoo (SPY) oder Annahme, Inflation FRED T10YIE, Rest Team-Annahmen.")
+    R.text(t)
+    zus.append(("Aktien langfristig (Grinold-Kroner)", f"{ui.de(er, 1)} % p.a.", f"10 J. {ui.de(y10, 2)} %" if y10 is not None else "–",
+                "Yahoo SPY, FRED T10YIE, Team"))
 
     # --- Zusammenfassung ---------------------------------------------------
     st.subheader("Eure Sicht gegen den Markt")

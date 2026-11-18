@@ -131,6 +131,69 @@ def ideen(tab: pd.DataFrame, bench: dict, defs: dict, dur_min: float, dur_max: f
     return d.sort_values("score", ascending=False).drop_duplicates("Strategie").head(8)
 
 
+def gewichte_aktiv(ctx, tab: pd.DataFrame, bench: dict) -> tuple[dict, str]:
+    """Positionierung der Anleihen: gespeicherter Laufzeiten-Plan, sonst Bullet mit der Duration aus der Taktik."""
+    plan, info = plan_lesen(ctx.tabellen.get("einstellungen"), bench)
+    if not info.startswith("Noch kein Plan"):
+        return plan, "Laufzeiten-Plan"
+    dur = ctx.alloc.get("duration") or bench["duration"]
+    T = float(np.interp(dur, tab["D"].values, tab.index.values))
+    lo = max([t for t in tab.index if t <= T], default=tab.index[0])
+    hi = min([t for t in tab.index if t >= T], default=tab.index[-1])
+    if hi == lo:
+        return {lo: 1.0}, f"Bullet {ui.de(T, 1)} J. (Duration aus der Taktik)"
+    a = (tab.loc[hi, "D"] - dur) / (tab.loc[hi, "D"] - tab.loc[lo, "D"])
+    return {lo: float(a), hi: float(1 - a)}, f"Duration {ui.de(dur, 1)} J. aus der Taktik ({_lz(lo)}/{_lz(hi)})"
+
+
+def relativ(tab: pd.DataFrame, w: dict, bench: dict, defs: dict, szen: pd.DataFrame, sig_10y: float = 25.0) -> dict:
+    """Wirkung der Anleihen-Positionierung relativ zur Benchmark je Szenario (Monat, in bp):
+    Carry/Roll-Differenz + Durationseffekt (paralleler Teil) + Kurveneffekt (Rest, inkl. Konvexität)."""
+    m_p, m_b = mix(tab, w, defs), mix(tab, bench["gewichte"], defs)
+    t_b = bench["laufzeit"]
+    out = {"D_p": m_p["duration"], "D_b": m_b["duration"], "aktiv_D": m_p["duration"] - m_b["duration"], "szen": {}}
+    for sid in defs:
+        dy_par = dy_szenario(t_b, defs[sid]["param"])
+        gesamt = (m_p[f"r_{sid}"] - m_b[f"r_{sid}"]) * 100
+        carry = (m_p["carry"] - m_b["carry"]) * 100
+        dur = -(m_p["duration"] - m_b["duration"]) * dy_par
+        out["szen"][sid] = dict(gesamt=gesamt, carry=carry, duration=dur, kurve=gesamt - carry - dur, dy=dy_par)
+    p = {sid: szen.loc[sid, "p"] / 100 for sid in defs}
+    out["erw"] = {k: sum(p[s] * out["szen"][s][k] for s in defs) for k in ("gesamt", "carry", "duration", "kurve")}
+    out["te"] = abs(out["aktiv_D"]) * sig_10y * np.sqrt(12) / 100   # % p.a., nur Durationsrisiko
+    out["ir"] = out["erw"]["gesamt"] / 100 * 12 / out["te"] if out["te"] > 0 else np.nan
+    return out
+
+
+def begruendung(rel: dict, defs: dict, szen: pd.DataFrame, gew: dict, fwd10: float, bench_name: str) -> str:
+    aD = rel["aktiv_D"]
+    lage = (f"{ui.de(abs(aD), 1)} J. länger als" if aD > 0.15 else f"{ui.de(abs(aD), 1)} J. kürzer als" if aD < -0.15 else "gleich lang wie")
+    t = (f"Unsere Anleihen haben eine Duration von {ui.de(rel['D_p'], 1)} J. und sind damit {lage} die Benchmark ({bench_name}, "
+         f"{ui.de(rel['D_b'], 1)} J.). Wir erwarten für die 10-J.-Rendite {ui.de(gew['dgs10'], 0, True)} bp im Monat, der Markt preist "
+         f"{ui.de(fwd10, 0, True)} bp ein. ")
+    t += "Wirkung gegenüber der Benchmark je Szenario: " + "; ".join(
+        f"{defs[s]['kurz']} {ui.de(v['gesamt'], 0, True)} bp" for s, v in rel["szen"].items()) + ". "
+    e = rel["erw"]
+    t += (f"Gewichtet {ui.de(e['gesamt'], 0, True)} bp pro Monat (Duration {ui.de(e['duration'], 0, True)}, Kurve {ui.de(e['kurve'], 0, True)}, "
+          f"Carry/Roll {ui.de(e['carry'], 0, True)} bp) bei einem aktiven Zinsrisiko von ≈ {ui.de(rel['te'], 2)} % p.a. Tracking Error.")
+    return t
+
+
+def relativ_kurz(ctx) -> str:
+    """Kurzer Begründungstext für andere Seiten (Erwartungen, Taktik)."""
+    try:
+        k = kurve(ctx.fred)
+        if len(k) < 5:
+            return ""
+        bench = benchmark_info(k, ctx.einst.get("bond_benchmark", C.BOND_BENCHMARK_DEFAULT))
+        tab = tabelle(k, ctx.szdef, ctx.szen)
+        w, _ = gewichte_aktiv(ctx, tab, bench)
+        rel = relativ(tab, w, bench, ctx.szdef, ctx.szen, ctx.sig.get("dgs10", (25, ""))[0])
+        return begruendung(rel, ctx.szdef, ctx.szen, ctx.gew["param"], float(tab.loc[10.0, "fwd_dy"]), bench["name"])
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _lz(T: float) -> str:
     return "3 Mt." if T == 0.25 else f"{T:g} J."
 
@@ -166,7 +229,12 @@ def seite_anleihen(ctx, fred: dict):
     bench = benchmark_info(k, ctx.einst.get("bond_benchmark", C.BOND_BENCHMARK_DEFAULT))
     tab = tabelle(k, defs, szen)
     betrag = C.STARTKAPITAL * a["anleihen"] / 100
-    plan, plan_info = plan_lesen(ctx.tabellen.get("einstellungen"), bench)
+    plan, plan_info = gewichte_aktiv(ctx, tab, bench)
+    if plan_info == "Laufzeiten-Plan":
+        plan_info = plan_lesen(ctx.tabellen.get("einstellungen"), bench)[1]
+    else:
+        plan_info = f"Noch kein Laufzeiten-Plan gespeichert – Startwert: {plan_info}"
+    ui.stand_abgleich("bond_plan", plan_info, ("bond_plan_ed",))
     m_plan, m_b = mix(tab, plan, defs), mix(tab, bench["gewichte"], defs)
     dv01 = betrag * m_plan["duration"] / 10000
     kpis = [
@@ -262,6 +330,44 @@ def seite_anleihen(ctx, fred: dict):
     R.h("Plan gegen Benchmark")
     R.tabelle(ed_df.drop(columns="T"))
     R.tabelle(vgl)
+
+    st.markdown("**Key-Rate-Durations** (Beitrag jeder Laufzeit zur Duration; aktiv = Plan − Benchmark)")
+    w_p = {T: v / (sum((neu or plan).values()) or 1) for T, v in (neu or plan).items()}
+    krd = pd.DataFrame({"Laufzeit": [_lz(T) for T in C.LAUFZEITEN],
+                        "Plan": [ui.de(w_p.get(T, 0) * tab.loc[T, "D"], 2) for T in C.LAUFZEITEN],
+                        "Benchmark": [ui.de(bench["gewichte"].get(T, 0) * tab.loc[T, "D"], 2) for T in C.LAUFZEITEN],
+                        "Aktiv": [ui.de((w_p.get(T, 0) - bench["gewichte"].get(T, 0)) * tab.loc[T, "D"], 2, True) for T in C.LAUFZEITEN]})
+    st.dataframe(krd, hide_index=True, width="stretch")
+    st.caption("Positive aktive Key-Rate-Duration = ihr seid an dieser Laufzeit zinsempfindlicher als die Benchmark (gewinnt, wenn diese "
+               "Rendite fällt). So seht ihr, ob eine Wette auf die Duration (überall gleich) oder auf die Kurve (Vorzeichen wechselt) läuft.")
+    R.h("Key-Rate-Durations")
+    R.tabelle(krd)
+
+    st.markdown("#### 3b. Wirkung relativ zur Benchmark – Begründung")
+    rel = relativ(tab, neu or plan, bench, defs, szen, ctx.sig.get("dgs10", (25, ""))[0])
+    zr = [{"Szenario": f"{defs[s]['kurz']} ({szen.loc[s, 'p']:.0f} %)", "Δ Rendite (Benchmark-Laufzeit)": f"{ui.de(v['dy'], 0, True)} bp",
+           "Durationseffekt": f"{ui.de(v['duration'], 0, True)} bp", "Kurveneffekt": f"{ui.de(v['kurve'], 0, True)} bp",
+           "Carry/Roll": f"{ui.de(v['carry'], 0, True)} bp", "Total vs. Benchmark": f"{ui.de(v['gesamt'], 0, True)} bp"}
+          for s, v in rel["szen"].items()]
+    e = rel["erw"]
+    zr.append({"Szenario": "Gewichtet", "Δ Rendite (Benchmark-Laufzeit)": "", "Durationseffekt": f"{ui.de(e['duration'], 0, True)} bp",
+               "Kurveneffekt": f"{ui.de(e['kurve'], 0, True)} bp", "Carry/Roll": f"{ui.de(e['carry'], 0, True)} bp",
+               "Total vs. Benchmark": f"{ui.de(e['gesamt'], 0, True)} bp"})
+    rtab = pd.DataFrame(zr)
+    st.dataframe(rtab, hide_index=True, width="stretch")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Aktive Duration", f"{ui.de(rel['aktiv_D'], 2, True)} J.")
+    c2.metric("Tracking Error Anleihen", f"{ui.de(rel['te'], 2)} % p.a.", help="Nur Durationsrisiko: |aktive Duration| × Streuung 10 J.")
+    c3.metric("Information Ratio (ex ante)", ui.de(rel["ir"], 2))
+    text = begruendung(rel, defs, szen, ctx.gew["param"], float(tab.loc[10.0, "fwd_dy"]), bench["name"])
+    st.markdown("**Textbaustein für Begründung (Frage 4/5, Taktik, Entscheid):**")
+    st.code(text, language=None, wrap_lines=True)
+    st.caption("Zerlegung wie im CFA-Curriculum (Fixed Income, Yield Curve Strategies): Rendite = Rolling Yield (Carry + Roll-down) "
+               "− Duration × Δ Rendite + Konvexität. Durationseffekt = paralleler Teil, Kurveneffekt = Rest. Das Zinsrisiko gehört ins "
+               "Risikobudget (Seite «Risiko & Risikobudget», Teil «Duration & Kurve»).")
+    R.h("Wirkung relativ zur Benchmark")
+    R.tabelle(rtab)
+    R.text(text)
 
     st.markdown("#### 4. Stresstest (sofortige Kurvenbewegung)")
     schocks = [("Parallel −100 bp", -100, -100), ("Parallel −50 bp", -50, -50), ("Parallel +50 bp", 50, 50),

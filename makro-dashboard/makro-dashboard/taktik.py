@@ -208,6 +208,7 @@ def seite_taktik(ctx, bond: dict):
     R.text(f"{m['name']} · {txt}")
 
     prefix = f"tk_{m_id}_"
+    ui.stand_abgleich(f"taktik_{m_id}", t["zeit"] if t else "", (prefix,), t["person"] if t else "")
     if f"{prefix}aktien" not in st.session_state:
         start = t or dict(aktien=ips["saa_aktien"], anleihen=ips["saa_anleihen"], cash=ips["saa_cash"],
                           sektoren=sektor_standard(ips["saa_aktien"]))
@@ -318,6 +319,18 @@ def seite_taktik(ctx, bond: dict):
 
     werte_alle = dict(werte, sektoren=sektoren, duration=dur, tips=tips, begruendung=begr)
     pr = pruefe(werte_alle, ips, erw, bond.get("duration"))
+
+    import risiko
+    st.markdown("#### Risiko dieser Taktik gegenüber der Benchmark")
+    r_risk = risiko.berechne(ctx, dict(aktien=werte["aktien"], anleihen=werte["anleihen"], cash=werte["cash"],
+                                       sektoren=sektoren, duration=dur)) if werte["aktien"] > 0 else None
+    if r_risk:
+        risiko.abschnitt(ctx, r_risk, dict(werte, sektoren=sektoren, duration=dur), R, kurz=True)
+        kz = risiko.kennzahlen_aktienteil(dict(werte, sektoren=sektoren), risiko.sektor_betas(ctx.hist))
+        for a_, b_, c_ in risiko.pruefungen(r_risk, ips, kz):
+            if a_ != "ok":
+                pr.append((a_, f"{b_}: {c_}"))
+        st.caption("Rechnet live mit den Werten oben. Stresstests, Reverse-Stresstest und Verteilung auf der Seite «Risiko & Risikobudget».")
     fehler = [x for x in pr if x[0] == "fehler"]
     hinweise = [x for x in pr if x[0] == "warnung"]
     st.markdown("#### Prüfung")

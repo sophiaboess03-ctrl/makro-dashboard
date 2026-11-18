@@ -13,6 +13,7 @@ import seitenpdf as SP
 from makro import config as C
 from makro import logic as L
 from makro import ui
+from makro import szenarien as SZm
 from storage import jetzt, zahl
 
 WIRKT_AUF = ("Änderungen wirken sofort auf: **Erwartungen** (Wahrscheinlichkeit jeder Antwort), **Taktik** (Orientierung neben "
@@ -52,6 +53,9 @@ def seite_szenarien(ctx):
                   "Ein gemeinsames Set für das ganze Dashboard. Jedes Szenario hat konkrete Monatswerte; der gewichtete Wert ist "
                   "Σ Wahrscheinlichkeit × Szenariowert. Die Datenlage zeigt, welches Szenario die aktuellen Zahlen stützen.")
     ph = st.empty()
+    dt = ctx.tabellen.get("definitionen")
+    stand = str(dt["zeit"].max()) if dt is not None and not dt.empty else ""
+    ui.stand_abgleich("szenarien", stand, ("par_ed", "sek_ed", "ind_ed_"))
     st.info(WIRKT_AUF, icon=":material/account_tree:")
 
     fav = lage["_favorit"]
@@ -67,8 +71,11 @@ def seite_szenarien(ctx):
                    f"{lage[h]['p_daten']:.0f} % statt {szen.loc[h, 'p']:.0f} %. Prüfen, ob ihr umgewichten oder das Szenario anpassen müsst.")
     szenario_balken(szen, defs)
 
-    t1, t2, t3, t4, t5 = st.tabs(["Wahrscheinlichkeiten", "Parameter & gewichtete Werte", "Beschreibung", "Datenlage (Monitor)",
-                                  "Verlauf"])
+    kons = SZm.konsistenz(defs, szen)
+    if any(k[0] == "fehler" for k in kons):
+        st.error(f"Konsistenz-Check: {sum(k[0] == 'fehler' for k in kons)} Widerspruch/Widersprüche in den Szenarien – siehe Tab «Parameter».")
+    t1, t2, t3, t4, t5, t6 = st.tabs(["Wahrscheinlichkeiten", "Parameter & gewichtete Werte", "Beschreibung", "Datenlage (Monitor)",
+                                      "CFA-Check", "Verlauf"])
     # --- Wahrscheinlichkeiten -----------------------------------------------
     with t1:
         b = szen.attrs.get("beschluss")
@@ -111,14 +118,18 @@ def seite_szenarien(ctx):
                 cols = st.columns(3)
                 werte_b = {s: c.number_input(defs[s]["kurz"], 0.0, 100.0, start[s], 5.0) for c, s in zip(cols, defs)}
                 begr = st.text_area("Begründung (was hat sich geändert?)", height=80)
+                gegen = st.text_area("Stärkstes Gegenargument (Advocatus Diaboli – gegen Bestätigungsfehler)", height=60)
                 st.caption(f"Summe {ui.de(sum(werte_b.values()), 0)} % (muss 100 % sein). Startwerte = Mittel der Einzelschätzungen.")
                 if st.form_submit_button("Beschluss speichern", type="primary", disabled=ctx.nur_lesen):
                     if abs(sum(werte_b.values()) - 100) > 0.5:
                         st.error("Die Summe muss 100 % sein.")
                     elif len(begr.strip()) < 15:
                         st.error("Bitte kurz begründen.")
+                    elif len(gegen.strip()) < 10:
+                        st.error("Bitte das stärkste Gegenargument festhalten (CFA: Bestätigungsfehler vermeiden).")
                     else:
-                        ctx.speichern("szenario_beschluss", [dict(zeit=jetzt(), person=ctx.person, begruendung=begr.strip(),
+                        ctx.speichern("szenario_beschluss", [dict(zeit=jetzt(), person=ctx.person,
+                                                                  begruendung=f"{begr.strip()} | Gegenargument: {gegen.strip()}",
                                                                   **{s: x for s, x in werte_b.items()})], "Team-Beschluss gespeichert.")
 
     # --- Parameter ------------------------------------------------------------
@@ -171,6 +182,13 @@ def seite_szenarien(ctx):
                 k = defs[s]["kurz"]
                 if neu[k] is not None and not pd.isna(neu[k]) and abs(float(neu[k]) - float(alt[k])) > 1e-9:
                     aend.append(dict(objekt=s, feld=f"sektor:{alt['Sektor']}", wert=float(neu[k])))
+        st.markdown("**Konsistenz-Check** – Szenarien müssen in sich stimmig sein (CFA: interne Konsistenz von Szenarien)")
+        if not kons:
+            st.success("Keine Widersprüche gefunden.")
+        for a_, t_ in kons:
+            (st.error if a_ == "fehler" else st.warning)(t_)
+        R.h("Konsistenz-Check")
+        R.text("; ".join(t_ for _, t_ in kons) or "Keine Widersprüche gefunden.")
         c1, c2 = st.columns([1, 3])
         if c1.button(f"Änderungen speichern ({len(aend)})", type="primary", disabled=not aend or ctx.nur_lesen, icon=":material/save:"):
             z = jetzt()
@@ -252,8 +270,12 @@ def seite_szenarien(ctx):
                 ctx.speichern("definitionen", [dict(zeit=jetzt(), person=ctx.person, bereich="szenario", objekt=s, feld="indizien",
                                                     wert=json.dumps(rows, ensure_ascii=False))], "Indizien gespeichert.")
 
-    # --- Verlauf -----------------------------------------------------------
+    # --- CFA-Check -----------------------------------------------------------
     with t5:
+        cfa_check(ctx, R)
+
+    # --- Verlauf -----------------------------------------------------------
+    with t6:
         b = ctx.tabellen.get("szenario_beschluss")
         if b is not None and not b.empty:
             d = b.sort_values("zeit").copy()
@@ -271,6 +293,82 @@ def seite_szenarien(ctx):
         else:
             st.caption("Noch kein Team-Beschluss gespeichert.")
     SP.knopf(ph, R, "szenarien")
+
+
+def cfa_check(ctx, R=None):
+    """CME-Prozess (CFA Level III, Capital Market Expectations Part 1) und Verhaltensfehler beim Prognostizieren."""
+    import dozent
+    defs, szen, lage = ctx.szdef, ctx.szen, ctx.lage
+    b = szen.attrs.get("beschluss")
+    heute = pd.Timestamp.today().normalize()
+    alter = (heute - pd.Timestamp(b["zeit"])).days if b else None
+    erw = ctx.tabellen.get("erwartungen")
+    n_erw = 0 if erw is None or erw.empty else erw["monat"].nunique()
+    aufgeloest = []
+    for m in C.MONATE:
+        ist, stand = dozent.ist_werte(m["id"], ctx.fred, ctx.hist)
+        if ist and stand == "endgültig":
+            aufgeloest.append(m["name"])
+    aus_daten = sum(1 for k, v in ctx.sig.items() if not v[1].startswith("Annahme"))
+    abgedeckt = {n for p in C.PARAMETER for n in p["fragen"]} | {12, 14}
+    schritte = [
+        ("1. Erwartungen festlegen", f"{len(abgedeckt & set(C.FRAGE_BY_NR))} von {len(C.FRAGEN)} Dozentenfragen durch Szenario-Parameter abgedeckt",
+         len(abgedeckt & set(C.FRAGE_BY_NR)) == len(C.FRAGEN)),
+        ("2. Historische Daten auswerten", f"Streuung für {aus_daten} von {len(ctx.sig)} Grössen aus 5 Jahren Daten (statt Annahme)",
+         aus_daten >= len(ctx.sig) - 2),
+        ("3. Methoden / Modelle", "Szenario-Simulation, Taylor-Regel, Grinold-Kroner, Forward-Kurve, Breakevens, Datenlage-Indizien", True),
+        ("4. Informationsquellen", f"FRED {len(ctx.fred)} Reihen, Yahoo {len(ctx.hist)} Kursreihen; Team-Werte mit 2 Quellen", len(ctx.fred) > 30),
+        ("5. Aktuelle Lage interpretieren", f"Datenlage stützt {defs[lage['_favorit']]['kurz']}; Zyklus Modell {ctx.zyklus_modell['phase']}", True),
+        ("6. Erwartungen dokumentieren", (f"Team-Beschluss vom {b['zeit']} mit Begründung" if b else "Noch kein Team-Beschluss") +
+         f"; Erwartungen für {n_erw} Monat(e) gespeichert", bool(b) and n_erw > 0),
+        ("7. Ergebnisse prüfen, Feedback", f"Aufgelöste Monate: {', '.join(aufgeloest) or 'noch keine'} (Seite «Erwartungen», Abschnitt Feedback)",
+         bool(aufgeloest)),
+    ]
+    st.markdown("**CME-Prozess in 7 Schritten** (CFA Level III, Capital Market Expectations, Part 1)")
+    tab = pd.DataFrame([("✓" if ok else "offen", n, t) for n, t, ok in schritte], columns=["", "Schritt", "Stand im Dashboard"])
+    st.dataframe(tab, hide_index=True, width="stretch")
+
+    st.markdown("**Verhaltensfehler beim Prognostizieren** – automatische Hinweise")
+    flags = []
+    if b and all(abs(b["werte"][s] - C.SZEN_BY_ID[s]["p"]) < 1 for s in defs):
+        flags.append(("Anker (Anchoring)", "Der Team-Beschluss entspricht genau den IC-Startwerten. Bewusst neu schätzen, nicht nur übernehmen."))
+    if alter is not None and alter > 21 and lage["_hinweis"]:
+        flags.append(("Status quo", f"Letzter Beschluss vor {alter} Tagen, die Datenlage hat sich seither verschoben."))
+    haupt = szen["p"].idxmax()
+    if lage["_favorit"] != haupt and lage[lage["_favorit"]]["anteil"] - lage[haupt]["anteil"] >= 0.3:
+        flags.append(("Bestätigungsfehler (Confirmation)", f"Hauptszenario ist {defs[haupt]['kurz']}, die Daten stützen aber deutlich stärker "
+                                                           f"{defs[lage['_favorit']]['kurz']}. Gegenargumente ernst nehmen."))
+    if szen["p"].max() >= 75:
+        flags.append(("Überzuversicht (Overconfidence)", f"Ein Szenario hat {szen['p'].max():.0f} %. Prognosen sind unsicherer, als sie sich anfühlen."))
+    if erw is not None and not erw.empty:
+        d = erw[erw["frage"] != "haupt"].sort_values("zeit").drop_duplicates(["monat", "frage"], keep="last")
+        hoch = d[(d["ueberzeugung"] == C.UEBERZEUGUNG[-1][0]) & (d["modell_p"].map(zahl).fillna(100) < C.UEBERZEUGUNG[-1][1] - 15)]
+        if len(hoch):
+            flags.append(("Überzuversicht (Overconfidence)", f"{len(hoch)} Antwort(en) mit Überzeugung «hoch», obwohl das Modell deutlich "
+                                                             "weniger Wahrscheinlichkeit zeigt."))
+        mitte = 0
+        for _, r in d.iterrows():
+            try:
+                f = C.FRAGE_BY_NR[int(float(r["frage"]))]
+            except (ValueError, KeyError):
+                continue
+            if f["art"] == "bereich" and len(f["optionen"]) == 3 and r["antwort"] == f["optionen"][1][0]:
+                mitte += 1
+        if len(d) >= 6 and mitte / len(d) >= 0.7:
+            flags.append(("Vorsicht / Konservatismus (Prudence)", f"{mitte} von {len(d)} Antworten in der mittleren Kategorie – "
+                                                                  "Prognosen nicht aus Vorsicht systematisch zur Mitte ziehen."))
+    flags.append(("Verfügbarkeit / Recency (Hinweis)", "Die Streuung stammt aus den letzten 5 Jahren (inkl. 2022). Ein anderes Zeitfenster "
+                                                      "gäbe andere Werte – Ergebnisse nicht überinterpretieren (time-period bias)."))
+    for n, t in flags:
+        st.warning(f"**{n}:** {t}")
+    st.caption("Weitere Herausforderungen laut CFA: Datenrevisionen und -fehler, Grenzen historischer Schätzungen (Regimewechsel), "
+               "Modellunsicherheit, falsch interpretierte Korrelationen. Deshalb: Streuung, Szenarien und Stresstests gemeinsam lesen.")
+    if R:
+        R.h("CFA-Check: CME-Prozess")
+        R.tabelle(tab, [14, 52, 114])
+        R.h("Verhaltensfehler")
+        for n, t in flags:
+            R.text(f"{n}: {t}", klein=True)
 
 
 def SZ_def(s):

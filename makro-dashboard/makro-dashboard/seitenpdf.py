@@ -1,6 +1,5 @@
 """PDF für jede Seite: Die Seite sammelt beim Anzeigen ihre Inhalte (Text, Kennzahlen, Tabellen, einfache Charts)
 in einem «Sammler». Der Knopf oben auf der Seite macht daraus ein PDF im Dashboard-Design.
-Zusätzlich gibt es überall «Ansicht drucken» (Browser → Als PDF speichern), das genau den Bildschirm druckt.
 """
 from __future__ import annotations
 
@@ -129,33 +128,18 @@ def _balken(pdf, items, einheit, titel, max_wert):
     pdf.ln(2)
 
 
-def drucken_knopf(key: str):
-    """Druckt die aktuelle Bildschirmansicht (im Druckdialog «Als PDF speichern» wählen)."""
-    from makro import ui
-
-    ui.iframe_html(
-        "<button onclick=\"try{window.parent.print()}catch(e){window.print()}\" style=\"font:500 13px Inter,Segoe UI,sans-serif;"
-        "padding:6px 12px;border:1px solid #D0D5DD;border-radius:8px;background:#fff;color:#344054;cursor:pointer;"
-        "width:100%\">🖨 Ansicht drucken</button>", 40)
-
-
 def knopf(ph, sammler: Sammler | None, key: str, dateiname: str | None = None):
-    """Zeigt im Platzhalter oben auf der Seite: PDF erstellen / herunterladen + Ansicht drucken."""
+    """Oben auf der Seite: «PDF erstellen», danach «PDF herunterladen»."""
+    if sammler is None:
+        return
     with ph.container():
-        c1, c2, c3 = st.columns([1.1, 1.1, 4])
-        if sammler is not None:
-            if c1.button("PDF dieser Seite", icon=":material/picture_as_pdf:", key=f"pdf_{key}", width="stretch"):
-                try:
-                    st.session_state[f"pdfdata_{key}"] = sammler.pdf()
-                except Exception as e:  # noqa: BLE001
-                    st.error(f"PDF konnte nicht erstellt werden: {e}")
-            if st.session_state.get(f"pdfdata_{key}"):
-                c2.download_button("Herunterladen", st.session_state[f"pdfdata_{key}"],
-                                   dateiname or f"{re.sub(r'[^A-Za-z0-9]+', '_', sammler.titel)}_{datetime.now():%Y-%m-%d}.pdf",
-                                   "application/pdf", icon=":material/download:", key=f"dl_{key}", width="stretch")
-            else:
-                with c2:
-                    drucken_knopf(key)
-        else:
-            with c1:
-                drucken_knopf(key)
+        c1, c2, _ = st.columns([1, 1, 3])
+        if c1.button("PDF erstellen", icon=":material/picture_as_pdf:", key=f"pdf_{key}", width="content"):
+            try:
+                st.session_state[f"pdfdata_{key}"] = sammler.pdf()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"PDF konnte nicht erstellt werden: {e}")
+        if st.session_state.get(f"pdfdata_{key}"):
+            c2.download_button("PDF herunterladen", st.session_state[f"pdfdata_{key}"],
+                               dateiname or f"{re.sub(r'[^A-Za-z0-9]+', '_', sammler.titel)}_{datetime.now():%Y-%m-%d}.pdf",
+                               "application/pdf", icon=":material/download:", key=f"dl_{key}", width="content")

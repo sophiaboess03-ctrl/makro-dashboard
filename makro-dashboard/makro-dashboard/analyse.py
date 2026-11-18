@@ -38,7 +38,14 @@ PROXY = {  # Laufzeitband → (ETF, Duration in Jahren, Näherung)
     "TIPS": ("TIP", 6.5),
 }
 PROXY_NAME = {v[0]: f"Treasuries {k}" for k, v in PROXY.items()}
-NEUTRAL_PROXY = "IEI"   # Treasury-Teil des neutralen IC-Portfolios (Schwerpunkt 1–7 J., Duration um 3,5–4 J.)
+NEUTRAL_PROXY = "GOVT"  # Treasury-Teil von Benchmark und neutralem Portfolio (wird von der App nach «Einstellungen» gesetzt)
+BENCH_ETF = {"US-Treasury-Markt gesamt (≈ GOVT)": "GOVT", "Treasuries 3–7 J. (≈ IEI)": "IEI", "Treasuries 1–3 J. (≈ SHY)": "SHY",
+             "Treasuries 7–10 J. (≈ IEF)": "IEF"}
+
+
+def setze_benchmark(name: str):
+    global NEUTRAL_PROXY
+    NEUTRAL_PROXY = BENCH_ETF.get(name, "GOVT")
 KLUMPEN = 10.0          # % des Gesamtportfolios je Einzeltitel
 
 
@@ -269,7 +276,7 @@ def rechne(pos: pd.DataFrame, cash: float, total: float, hist: dict, neutral: di
     na, nt = neutral["aktien"] / 100, neutral.get("cash", 5) / 100
     r_n = portfolio_reihe(R, rf, {SPX: na, NEUTRAL_PROXY: 1 - na - nt}, nt)
     r_s = R[SPX]
-    k = {"Vorauswahl": kennzahlen(r_p, rf, r_s), "Neutral (IC)": kennzahlen(r_n, rf, r_s),
+    k = {"Vorauswahl": kennzahlen(r_p, rf, r_s), "Neutral (IPS)": kennzahlen(r_n, rf, r_s),
          "S&P 500": kennzahlen(r_s, rf, r_s)}
     akt = r_p - r_n
     if akt.std() > 0:
@@ -317,7 +324,7 @@ def vorschlag(R: pd.DataFrame, rf: pd.Series, gew: dict, cash: float, n: int = 4
 
 
 def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: dict) -> list[tuple[str, str]]:
-    """Regel-Check gegen IC-Korridor, Mandat (S&P 500), Klumpen, Duration und Sektorempfehlung. (Stufe, Text)."""
+    """Regel-Check gegen IPS-Bänder, Mandat (S&P 500), Klumpen, Duration und Sektorempfehlung. (Stufe, Text)."""
     out = []
     ak = float(pos.loc[pos["klasse"] == "Aktie", "wert"].sum()) / total * 100 if len(pos) else 0
     tr = float(pos.loc[pos["klasse"] == "Treasury", "wert"].sum()) / total * 100 if len(pos) else 0
@@ -325,7 +332,7 @@ def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: 
     for name, wert, (lo, hi) in (("Aktien", ak, alloc["baender"]["aktien"]), ("Treasuries", tr, alloc["baender"]["treasuries"]),
                                  ("Cash", ca, alloc["baender"]["cash"])):
         out.append((L.GRUEN if lo <= wert <= hi else L.ROT,
-                    f"{name} {ui.de(wert, 1)} % – IC-Korridor {lo}–{hi} %"))
+                    f"{name} {ui.de(wert, 1)} % – IPS-Band {lo:g}–{hi:g} %"))
     for _, z in pos[pos["klasse"] == "Aktie"].iterrows():
         g = z["wert"] / total * 100
         if g > KLUMPEN:
@@ -379,7 +386,7 @@ ZEILEN = [  # (Schlüssel, Bezeichnung, Formatierer, Erklärung)
     ("beta", "Beta zum S&P 500", _zahl, "1 = bewegt sich wie der Markt"),
     ("alpha", "Jensen-Alpha p.a.", lambda x: _pct(x, 1, True), "Überrendite nach Beta-Risiko"),
     ("korr", "Korrelation zum S&P 500", _zahl, ""),
-    ("te_neutral", "Tracking Error vs. neutral", _pct, "Abweichung vom neutralen IC-Portfolio"),
+    ("te_neutral", "Tracking Error vs. neutral", _pct, "Abweichung vom neutralen Portfolio (IPS)"),
     ("ir_neutral", "Information Ratio vs. neutral", _zahl, "Mehrrendite pro Einheit Tracking Error"),
     ("var95", "VaR 95 % (1 Tag)", _pct, "Verlust, der an 19 von 20 Tagen nicht überschritten wurde"),
     ("cvar95", "CVaR 95 % (1 Tag)", _pct, "Durchschnittsverlust an den 5 % schlechtesten Tagen"),
@@ -446,7 +453,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
     ui.seitenkopf("Analyse – Vorauswahl prüfen",
                   "Titel und Mengen eingeben – die App berechnet Rendite, Risiko, Sharpe Ratio, Beta, Value at Risk, "
-                  "Korrelationen und prüft eure Regeln. Vergleich immer mit dem neutralen IC-Portfolio und dem S&P 500.")
+                  "Korrelationen und prüft eure Regeln. Vergleich immer mit dem neutralen Portfolio (strategische Allokation laut IPS) und dem S&P 500.")
     tab = ctx.tabellen
     kapital_std, bm = P._einstellungen(tab.get("einstellungen"))
     ss = st.session_state
@@ -547,7 +554,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         st.error("Zu wenige gemeinsame Kursdaten – Zeitraum vergrössern oder Ticker prüfen.")
         return
     info = {t: P.ticker_info(t) for t in pos.loc[pos["klasse"] == "Aktie", "ticker"]}
-    kv, kn, ks = erg["k"]["Vorauswahl"], erg["k"]["Neutral (IC)"], erg["k"]["S&P 500"]
+    kv, kn, ks = erg["k"]["Vorauswahl"], erg["k"]["Neutral (IPS)"], erg["k"]["S&P 500"]
     if erg["start"] is not None and erg["start"] > hist[SPX].index.min() + pd.Timedelta(days=10):
         st.caption(f"Gemeinsames Zeitfenster ab {erg['start']:%d.%m.%Y} (ein Titel hat eine kürzere Kursgeschichte).")
 
@@ -586,14 +593,14 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             e2 = rechne(p2, c2_, tot2, hist2, ctx.alloc["neutral"]) if tot2 > 0 else None
             if e2:
                 k = {"Vorauswahl": k["Vorauswahl"], "Aktuelles Portfolio": e2["k"]["Vorauswahl"],
-                     "Neutral (IC)": k["Neutral (IC)"], "S&P 500": k["S&P 500"]}
+                     "Neutral (IPS)": k["Neutral (IPS)"], "S&P 500": k["S&P 500"]}
         st.dataframe(vergleichstabelle(k), hide_index=True, width="stretch",
                      column_config={"Bedeutung": st.column_config.TextColumn(width="large")})
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Wertentwicklung (Start = 100)**")
             fig = go.Figure()
-            for name, rr, farbe, breite in (("Vorauswahl", erg["r_p"], ui.BLAU, 2.4), ("Neutral (IC)", erg["r_n"], ui.GOLD, 1.8),
+            for name, rr, farbe, breite in (("Vorauswahl", erg["r_p"], ui.BLAU, 2.4), ("Neutral (IPS)", erg["r_n"], ui.GOLD, 1.8),
                                             ("S&P 500", erg["r_s"], ui.STAHL, 1.6)):
                 w = (1 + rr).cumprod() * 100
                 fig.add_trace(go.Scatter(x=w.index, y=w, name=name, line=dict(color=farbe, width=breite)))
@@ -602,7 +609,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         with c2:
             st.markdown("**Drawdown (Verlust vom Höchststand)**")
             fig = go.Figure()
-            for name, rr, farbe in (("Vorauswahl", erg["r_p"], ui.BLAU), ("Neutral (IC)", erg["r_n"], ui.GOLD)):
+            for name, rr, farbe in (("Vorauswahl", erg["r_p"], ui.BLAU), ("Neutral (IPS)", erg["r_n"], ui.GOLD)):
                 w = (1 + rr).cumprod()
                 dd = (w / w.cummax() - 1) * 100
                 fig.add_trace(go.Scatter(x=dd.index, y=dd, name=name, line=dict(color=farbe, width=1.6),
@@ -614,7 +621,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         st.caption(f"Zeitraum {kv['von']:%d.%m.%Y} – {kv['bis']:%d.%m.%Y} ({kv['tage']} Handelstage) · risikofreier Zins "
                    f"Ø {ui.de(kv['rf'], 2)} % (13-Wochen-T-Bill) · dividendenbereinigte Kurse, konstante Gewichte · "
                    f"Neutral = {ctx.alloc['neutral']['aktien']:.0f} % S&P 500 / "
-                   f"{100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} % Treasuries 3–7 J. (IEI) / "
+                   f"{100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} % Treasuries ({NEUTRAL_PROXY}) / "
                    f"{ctx.alloc['neutral'].get('cash', 5):.0f} % Cash. Vergangene Werte sind keine Prognose. Kurse {zeit}.")
 
     with t2:

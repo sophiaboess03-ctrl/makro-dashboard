@@ -137,9 +137,23 @@ def _team(tabellen: dict, team: list[str]) -> list[str]:
     return sorted(p for p in personen if p and p != "Unbekannt")
 
 
-def _renditen(einst: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    werte = {k: list(v) for k, v in RENDITE_PLATZHALTER.items()}
-    wer = "Platzhalter – bitte im Team schätzen"
+def szenario_renditen(defs: dict, bond: dict) -> dict:
+    """3-Monats-Renditen je Szenario aus den Monatsparametern der Seite «Szenarien» (Aktien, Treasury-Benchmark, Cash)."""
+    out = {}
+    for sid, d in defs.items():
+        p = d["param"]
+        w = min(max((bond.get("laufzeit", 6.5) - 2) / 8, 0), 1.2)
+        dy = p.get("dgs2", 0) + (p.get("dgs10", 0) - p.get("dgs2", 0)) * w
+        anl = bond.get("rendite", 4.5) / 12 - bond.get("duration", 5.5) * dy / 100
+        out[sid] = [round(((1 + p.get("sp500", 0) / 100) ** 3 - 1) * 100, 2), round(((1 + anl / 100) ** 3 - 1) * 100, 2),
+                    round(bond.get("cash", 4.0) / 4, 2)]
+    return out
+
+
+def _renditen(einst: pd.DataFrame, defs: dict | None = None, bond: dict | None = None) -> tuple[pd.DataFrame, str]:
+    werte = szenario_renditen(defs, bond or {}) if defs else {k: list(v) for k, v in RENDITE_PLATZHALTER.items()}
+    wer = ("aus den Szenario-Parametern (Monatswerte × 3, Seite «Szenarien») – ändern sich dort automatisch mit" if defs
+           else "Platzhalter – bitte im Team schätzen")
     if einst is not None and not einst.empty:
         d = einst[einst["schluessel"].str.startswith("ret|")].sort_values("zeit")
         for _, r in d.iterrows():
@@ -148,8 +162,9 @@ def _renditen(einst: pd.DataFrame) -> tuple[pd.DataFrame, str]:
             if sid in werte and v is not None:
                 werte[sid][["aktien", "treasuries", "cash"].index(klasse)] = v
         if len(d):
-            wer = f"zuletzt geändert von {d.iloc[-1]['person']} am {d.iloc[-1]['zeit'][:10]}"
-    df = pd.DataFrame([dict(id=k, Szenario=C.SZEN_BY_ID[k]["name"], **{"Aktien %": v[0], "Treasuries %": v[1], "Cash %": v[2]})
+            wer = (f"Team-Überschreibung von {d.iloc[-1]['person']} am {d.iloc[-1]['zeit'][:10]}; übrige Werte aus den "
+                   "Szenario-Parametern")
+    df = pd.DataFrame([dict(id=k, Szenario=(defs or C.SZEN_BY_ID)[k]["name"], **{"Aktien %": v[0], "Treasuries %": v[1], "Cash %": v[2]})
                        for k, v in werte.items()])
     return df, wer
 
@@ -212,7 +227,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         st.subheader("Szenariorenditen und Portfolioquoten")
         st.markdown("Schritte (3) und (4) der nächsten Sitzung: erwartete Renditen je Szenario für die **nächsten 3 Monate** schätzen, "
                     "dann 40/45/50/55/60 % Aktien vergleichen.")
-        ren, wer = _renditen(tab.get("einstellungen"))
+        ren, wer = _renditen(tab.get("einstellungen"), ctx.szdef, ctx.bond)
         st.caption(f"Renditeannahmen: {wer}")
         ed = st.data_editor(ren.drop(columns="id"), hide_index=True, width="stretch", disabled=["Szenario"], key="ren_edit",
                             column_config={k: st.column_config.NumberColumn(k, format="%.1f", step=0.5)
@@ -221,10 +236,14 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         cash = c1.slider("Cash-Anteil (%)", 0, 10, int(round(ctx.alloc["cash"])), 1, help="IC-Korridor 0–10 %")
         if c2.button("Renditeannahmen fürs Team speichern"):
             zeilen = []
-            for sid, (_, r) in zip(ren["id"], ed.iterrows()):
+            for sid, (_, r), (_, alt) in zip(ren["id"], ed.iterrows(), ren.iterrows()):
                 for klasse, spalte in (("aktien", "Aktien %"), ("treasuries", "Treasuries %"), ("cash", "Cash %")):
-                    zeilen.append(dict(zeit=jetzt(), person=ctx.person, schluessel=f"ret|{sid}|{klasse}", wert=float(r[spalte])))
-            ctx.speichern("einstellungen", zeilen, "Renditeannahmen gespeichert.")
+                    if abs(float(r[spalte]) - float(alt[spalte])) > 1e-9:  # nur geänderte Werte überschreiben
+                        zeilen.append(dict(zeit=jetzt(), person=ctx.person, schluessel=f"ret|{sid}|{klasse}", wert=float(r[spalte])))
+            if zeilen:
+                ctx.speichern("einstellungen", zeilen, "Renditeannahmen gespeichert.")
+            else:
+                st.info("Keine Änderung gegenüber den Werten aus den Szenarien.")
         p = {sid: szen.loc[sid, "p"] / 100 for sid in ["ic_base", "ic_bull", "ic_bear"]}
         R = {sid: ed.iloc[i] for i, sid in enumerate(ren["id"])}
         zeilen = []

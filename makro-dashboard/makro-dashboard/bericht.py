@@ -13,7 +13,7 @@ from makro import ui
 
 ERSATZ = {"−": "-", "–": "-", "—": "-", "≥": ">=", "≤": "<=", "→": "->", "↑": "(+)", "↓": "(-)", "↗": "(+)", "↘": "(-)",
           "≈": "~", "·": "-", "«": '"', "»": '"', "‘": "'", "’": "'", "“": '"', "”": '"', "…": "...", "×": "x", "Σ": "Summe",
-          "✓": "ok", "✔": "ok", "⚠": "!", "₿": "BTC", " ": " ", " ": " "}
+          "✓": "ok", "✔": "ok", "✗": "x", "■": "x", "□": "-", "●": "*", "Δ": "Delta ", "π": "pi", "σ": "Sigma", "⚠": "!", "₿": "BTC", " ": " ", " ": " "}
 
 
 def _t(x) -> str:
@@ -370,9 +370,9 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
     if perf:
         pdf.ln(18)
         _kpis(pdf, [("Portfoliowert", f"{ui.de(total, 0)} USD", f"Startkapital {ui.de(kapital, 0)} USD"),
-                    ("Rendite seit Start", f"{ui.de(perf['g_p'], 2, True)} %", f"neutral {ui.de(perf['g_n'], 2, True)} %"),
-                    ("Mehrrendite vs. neutral", f"{ui.de(perf['g_p'] - perf['g_n'], 2, True)} PP",
-                     f"vs. S&P 500 {ui.de(perf['g_p'] - perf['g_s'], 2, True)} PP"),
+                    ("Rendite seit Start", f"{ui.de(perf['g_p'], 2, True)} %", f"Benchmark 50/50 {ui.de(perf['g_b'], 2, True)} %"),
+                    ("Mehrrendite vs. Benchmark", f"{ui.de(perf['g_p'] - perf['g_b'], 2, True)} PP",
+                     f"vs. neutral (IPS) {ui.de(perf['g_p'] - perf['g_n'], 2, True)} PP"),
                     ("Sharpe Ratio", A._zahl(perf["kp"].get("sharpe")), f"neutral {A._zahl(perf['kn'].get('sharpe'))}")])
 
     # 1 These
@@ -398,18 +398,21 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
         kp, kn = perf["kp"], perf["kn"]
         ks = A.kennzahlen(perf["r_s"], A.rf_reihe({}, perf["r_s"].index), perf["r_s"]) if perf["tage"] >= 20 else {}
         zeilen = [["Rendite seit Start", f"{ui.de(perf['g_p'], 2, True)} %", f"{ui.de(perf['g_n'], 2, True)} %",
-                   f"{ui.de(perf['g_s'], 2, True)} %"]]
+                   f"{ui.de(perf['g_s'], 2, True)} %"],
+                  ["Benchmark Dozent (50/50)", f"{ui.de(perf['g_b'], 2, True)} %", "", ""],
+                  ["Tracking Error vs. Benchmark", f"{ui.de(kp.get('te_bench'), 2)} %" if kp.get("te_bench") else "-", "", ""]]
         for key, name, f, _ in A.ZEILEN:
             if key in kp or key in kn:
                 zeilen.append([name, f(kp.get(key)) if key in kp else "-", f(kn.get(key)) if key in kn else "-",
                                f(ks.get(key)) if key in ks else "-"])
-        _tabelle(pdf, ["Kennzahl", "Portfolio", "Neutral (IC)", "S&P 500"], zeilen, (70, 36, 36, 36))
+        _tabelle(pdf, ["Kennzahl", "Portfolio", "Neutral (IPS)", "S&P 500"], zeilen, (70, 36, 36, 36))
         if perf["tage"] < 20:
             _text(pdf, f"Erst {perf['tage']} Handelstage - Risikokennzahlen ab 20 Handelstagen.", gross=7.5, farbe=MUTED)
         idx = lambda r: pd.concat([pd.Series([100.0], index=[perf["v"].index[0]]), (1 + r).cumprod() * 100])  # noqa: E731
-        _linien(pdf, [("Portfolio", idx(perf["r_p"]), BLAU), ("Neutral (IC)", idx(perf["r_n"]), GOLD),
+        _linien(pdf, [("Portfolio", idx(perf["r_p"]), BLAU), ("Benchmark 50/50", idx(perf["r_b"]), (185, 58, 50)),
+                      ("Neutral (IPS)", idx(perf["r_n"]), GOLD),
                       ("S&P 500", idx(perf["r_s"]), STAHL)], titel="Wertentwicklung (Start = 100)")
-        _text(pdf, "Neutral = IC-Anker mit S&P 500 (SPY) / Treasuries 3-7 J. (IEI) / Cash zum T-Bill-Satz, konstante Gewichte. "
+        _text(pdf, "Neutral = strategische Allokation (IPS) mit S&P 500 (SPY) / Treasuries (Benchmark-ETF) / Cash zum T-Bill-Satz, konstante Gewichte. "
                    "S&P 500 inkl. Dividenden. Treasuries im Portfolio über die FRED-Zinskurve bewertet (Näherung).",
               gross=7, farbe=MUTED)
     else:
@@ -512,7 +515,7 @@ def seite_bericht(ctx, markt_tab, signale, termine_df, portfolio_info, team=None
                                f"Wochenbericht_Makro_USA_{datetime.now():%Y-%m-%d}.pdf", "application/pdf", icon=":material/download:")
     with c2.container(border=True):
         st.markdown("**Abgabe-Dossier**")
-        st.caption("Anhang für die Abgabe: Makrothese, Performance gegenüber dem neutralen IC-Portfolio und dem S&P 500, "
+        st.caption("Anhang für die Abgabe: Makrothese, Performance gegenüber Benchmark (50/50), neutralem Portfolio (IPS) und S&P 500, "
                    "Positionen, alle Transaktionen mit Begründung, Entscheidungsprotokoll, Verlauf eurer Einschätzungen, "
                    "geprüfte Vorauswahlen, Risiken und Methodik.")
         if st.button("Abgabe-Dossier erstellen", type="primary", icon=":material/folder_zip:", disabled=fred is None):

@@ -126,7 +126,10 @@ Secrets später ändern: in der App unten rechts **Manage app → ⋮ → Settin
 - **Erwartungen (Dozent):** die 10 Monatsfragen, Wahrscheinlichkeit jeder Antwort aus den Szenarien, Vorschlag für Antwort und Überzeugung, eure Antwort mit Begründung, Hauptszenario, Auflösung nach Monatsende.
 - **Taktik:** Aktien/Anleihen/Cash und 11 Sektor-Zielgewichte wie in der Dozenten-App, plus Duration, TIPS, Begründung. Prüfung gegen IPS und Dozenten-Bandbreiten, Orientierung aus Szenarien, Signalen und Erwartungen.
 - **Anleihen & Duration:** Zinskurve, Carry/Roll, Markt-Forward gegen eure Erwartung, Laufzeiten-Plan gegen Benchmark, DV01, Stresstest und Ideen für Mehrrendite.
-- **PDF:** Oben auf jeder Seite «PDF dieser Seite» (Bericht im Dashboard-Design) oder «Ansicht drucken» (Browser → Als PDF speichern).
+- **PDF:** Oben auf den Seiten «PDF erstellen» → «PDF herunterladen» (Bericht im Dashboard-Design).
+- **Risiko & Risikobudget:** Tracking Error der Taktik gegenüber der Benchmark 50/50 und wofür er gebraucht wird (Asset Allocation, Sektor-Wetten, Duration & Kurve), VaR, Expected Shortfall, Safety-First, Stresstests (eure Szenarien und historische Monate), Reverse-Stresstest, Prüfung gegen die Risikoziele im IPS.
+- **CFA-Bausteine:** CME-Prozess und Verhaltensfehler (Szenarien → Tab «CFA-Check»), Konsistenz-Check der Szenarien, Taylor-Regel und Grinold-Kroner («Was ist eingepreist?»), Key-Rate-Durations und Zerlegung relativ zur Benchmark (Anleihen), Brier-Score und Kalibrierung (Erwartungen).
+- **Zusammenarbeit:** Speichert jemand anderes IPS, Taktik, Erwartungen oder Szenarien, laden sich die Felder bei den anderen automatisch neu (Hinweis «Inzwischen neu gespeichert von …»). So überschreibt niemand versehentlich den Stand der anderen.
 - **Daten eintragen:** Werte, die nicht automatisch kommen, immer mit 2 Quellen.
 
 ---

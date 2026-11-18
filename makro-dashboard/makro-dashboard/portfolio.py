@@ -245,7 +245,14 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
         if cash < -1:
             warn.append(f"Cash negativ ({_usd(cash)}) – mehr gekauft als Kapital vorhanden")
         if warn:
-            st.warning("Ausserhalb des IC-Korridors bzw. der Regeln: " + "; ".join(warn))
+            st.warning("Ausserhalb der IPS-Bänder bzw. der Regeln: " + "; ".join(warn))
+        tol = ctx.ips.get("rebal_toleranz", 5.0)
+        abw = [(n, ist, soll) for n, ist, soll in (("Aktien", aktien / total * 100, ctx.alloc["aktien"]),
+                                                   ("Anleihen", treas / total * 100, ctx.alloc["anleihen"]),
+                                                   ("Cash", cash / total * 100, ctx.alloc["cash"])) if abs(ist - soll) > tol]
+        if abw and ctx.alloc.get("quelle") == "Team":
+            st.error("Rebalancing nötig (IPS-Toleranz ±" + ui.de(tol, 0) + " PP): " +
+                     "; ".join(f"{n} Ist {ui.de(i, 1)} % vs. Taktik {ui.de(s_, 1)} %" for n, i, s_ in abw))
 
     t1, t2, t3, t5, t4 = st.tabs(["Positionen", "Struktur & Abweichungen", "Verlauf", "Performance & Risiko", "Transaktionen"])
     with t1:
@@ -391,15 +398,21 @@ def performance_daten(tx, kurse, fred, kapital, neutral: dict) -> dict | None:
     rf = A.rf_reihe(hist, r_p.index)
     na, nc = neutral["aktien"] / 100, neutral.get("cash", 5) / 100
     r_n = A.portfolio_reihe(R, rf, {A.SPX: na, A.NEUTRAL_PROXY: 1 - na - nc}, nc)
+    r_b = A.portfolio_reihe(R, rf, {A.SPX: C.BENCHMARK["aktien"] / 100, A.NEUTRAL_PROXY: C.BENCHMARK["anleihen"] / 100},
+                            C.BENCHMARK["cash"] / 100)
     r_s = R[A.SPX]
     kp, kn = A.kennzahlen(r_p, rf, r_s), A.kennzahlen(r_n, rf, r_s)
     akt = r_p - r_n
     if len(akt) >= 20 and akt.std() > 0:
         te = float(akt.std(ddof=1) * np.sqrt(A.TAGE))
         kp.update(te_neutral=te * 100, ir_neutral=float(akt.mean() * A.TAGE / te))
+    akt_b = r_p - r_b
+    if len(akt_b) >= 20 and akt_b.std() > 0:
+        te_b = float(akt_b.std(ddof=1) * np.sqrt(A.TAGE))
+        kp.update(te_bench=te_b * 100, ir_bench=float(akt_b.mean() * A.TAGE / te_b))
     gesamt = lambda r: float((1 + r).prod() - 1) * 100  # noqa: E731
-    return dict(v=v, r_p=r_p, r_n=r_n, r_s=r_s, kp=kp, kn=kn, g_p=gesamt(r_p), g_n=gesamt(r_n), g_s=gesamt(r_s),
-                tage=len(r_p))
+    return dict(v=v, r_p=r_p, r_n=r_n, r_s=r_s, r_b=r_b, kp=kp, kn=kn, g_p=gesamt(r_p), g_n=gesamt(r_n), g_s=gesamt(r_s),
+                g_b=gesamt(r_b), tage=len(r_p))
 
 
 def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
@@ -410,13 +423,15 @@ def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
         st.info("Für den Vergleich fehlen noch Kursdaten (Yahoo Finance) – bitte später nochmals öffnen.")
         return
     kp, kn = d["kp"], d["kn"]
-    st.markdown("**Realisiert seit dem ersten Trade** · Vergleich mit dem neutralen IC-Portfolio "
+    st.markdown("**Realisiert seit dem ersten Trade** · Vergleich mit der Benchmark des Dozenten (50 % S&P 500 / 50 % Treasuries), "
+                "dem neutralen Portfolio laut IPS "
                 f"({ctx.alloc['neutral']['aktien']:.0f} / {100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} / "
                 f"{ctx.alloc['neutral'].get('cash', 5):.0f}) und dem S&P 500 inkl. Dividenden")
     ui.kopf_kpis([
-        ("Rendite seit Start", A._pct(d["g_p"], 2, True), f"neutral {A._pct(d['g_n'], 2, True)} · S&P 500 {A._pct(d['g_s'], 2, True)}"),
-        ("Mehrrendite vs. neutral", f"{ui.de(d['g_p'] - d['g_n'], 2, True)} PP",
-         f"vs. S&P 500 {ui.de(d['g_p'] - d['g_s'], 2, True)} PP"),
+        ("Rendite seit Start", A._pct(d["g_p"], 2, True),
+         f"Benchmark {A._pct(d['g_b'], 2, True)} · neutral {A._pct(d['g_n'], 2, True)} · S&P {A._pct(d['g_s'], 2, True)}"),
+        ("Mehrrendite vs. Benchmark", f"{ui.de(d['g_p'] - d['g_b'], 2, True)} PP",
+         f"IPS-Ziel {ui.de(ctx.ips['rendite_rel'], 1, True)} PP · vs. neutral {ui.de(d['g_p'] - d['g_n'], 2, True)} PP"),
         ("Sharpe Ratio", A._zahl(kp.get("sharpe")), f"neutral {A._zahl(kn.get('sharpe'))}"),
         ("Max. Drawdown", A._pct(kp.get("mdd")), f"neutral {A._pct(kn.get('mdd'))}"),
     ])
@@ -427,11 +442,13 @@ def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
         ui.kopf_kpis([
             ("Volatilität p.a.", A._pct(kp.get("vola")), f"neutral {A._pct(kn.get('vola'))}"),
             ("Beta zum S&P 500", A._zahl(kp.get("beta")), f"Korrelation {A._zahl(kp.get('korr'))}"),
-            ("Tracking Error vs. neutral", A._pct(kp.get("te_neutral")), f"Information Ratio {A._zahl(kp.get('ir_neutral'))}"),
+            ("Tracking Error vs. Benchmark", A._pct(kp.get("te_bench")),
+             f"IPS höchstens {ui.de(ctx.ips['te_max'], 0)} % · IR {A._zahl(kp.get('ir_bench'))}"),
             ("Jensen-Alpha p.a.", A._pct(kp.get("alpha"), 1, True), f"Sortino {A._zahl(kp.get('sortino'))}"),
         ])
     fig = go.Figure()
-    for name, rr, farbe, breite in (("Portfolio", d["r_p"], ui.BLAU, 2.6), ("Neutral (IC)", d["r_n"], ui.GOLD, 1.8),
+    for name, rr, farbe, breite in (("Portfolio", d["r_p"], ui.BLAU, 2.6), ("Benchmark 50/50", d["r_b"], "#B93A32", 1.8),
+                                    ("Neutral (IPS)", d["r_n"], ui.GOLD, 1.6),
                                     ("S&P 500", d["r_s"], ui.STAHL, 1.6)):
         w = pd.concat([pd.Series([100.0], index=[d["v"].index[0]]), (1 + rr).cumprod() * 100])
         fig.add_trace(go.Scatter(x=w.index, y=w, name=name, line=dict(color=farbe, width=breite)))
@@ -456,7 +473,7 @@ def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
     top = erg["beitrag"].sort_values(ascending=False).head(3)
     ui.kopf_kpis([
         ("VaR 95 % · 1 Tag", f"{ui.de(kv.get('var95', 0) / 100 * total, 0)} USD", f"CVaR {ui.de(kv.get('cvar95', 0) / 100 * total, 0)} USD"),
-        ("Volatilität p.a. (ex ante)", A._pct(kv.get("vola")), f"neutral {A._pct(erg['k']['Neutral (IC)'].get('vola'))}"),
+        ("Volatilität p.a. (ex ante)", A._pct(kv.get("vola")), f"neutral {A._pct(erg['k']['Neutral (IPS)'].get('vola'))}"),
         ("Beta zum S&P 500", A._zahl(kv.get("beta")), f"Sharpe 12 Mt. {A._zahl(kv.get('sharpe'))}"),
         ("Grösste Risikotreiber", ", ".join(A.PROXY_NAME.get(t, t) for t in top.index[:2]),
          " · ".join(f"{A.PROXY_NAME.get(t, t)} {ui.de(v, 0)} %" for t, v in top.items())),

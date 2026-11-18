@@ -316,6 +316,8 @@ def seite_ips(ctx, hist: dict, gew: dict, defs: dict, bond: dict):
                   "Gleiche Felder wie in der Dozenten-App. Hier im Team erarbeiten, prüfen und dann in die Dozenten-App übertragen. "
                   f"Zuletzt gespeichert: {ips['_stand'][:16].replace('T', ' ') or 'noch nie'}.")
     ph = st.empty()
+    letzte = max(ips["_meta"].values(), key=lambda m: m[1], default=("", ""))
+    ui.stand_abgleich("ips", ips["_stand"], ("ips_",), letzte[0])
     txt, offen = _frist_text()
     (st.error if offen else st.info)(txt, icon=":material/schedule:")
     st.caption("Wirkt im ganzen Dashboard: strategische Allokation = neutraler Anker, Bänder = Korridor der Taktik, Duration-Grenzen "

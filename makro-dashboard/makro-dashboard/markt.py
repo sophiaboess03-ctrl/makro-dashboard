@@ -489,6 +489,18 @@ def seite_maerkte(tab: pd.DataFrame, yahoo: dict, fred: dict, quelle_info: str, 
     if tab.empty or tab["kurs"].isna().all():
         st.error("Keine Marktdaten verfügbar – Yahoo Finance und FRED waren nicht erreichbar. Später nochmals versuchen.")
         return
+    import seitenpdf as SP
+    ph = st.empty()
+    R = SP.Sammler("Märkte heute", quelle_info, kurz="Märkte")
+    for gruppe in MARKT:
+        d = tab[tab["gruppe"] == gruppe]
+        R.h(gruppe)
+        R.tabelle(pd.DataFrame({"Instrument": d["name"], "Kurs": [_fmt_kurs(n, k) for n, k in zip(d["name"], d["kurs"])],
+                                "1 Tag": [_fmt_ver(x, a) for x, a in zip(d["d1"], d["art"])],
+                                "1 Woche": [_fmt_ver(x, a) for x, a in zip(d["w1"], d["art"])],
+                                "1 Monat": [_fmt_ver(x, a) for x, a in zip(d["m1"], d["art"])],
+                                "YTD": [_fmt_ver(x, a) for x, a in zip(d["ytd"], d["art"])], "Stand": d["datum"].map(ui.datum_txt)}))
+    SP.knopf(ph, R, "maerkte")
 
     top = ["S&P 500", "Dow Jones", "Nasdaq Composite", "VIX", "US-Treasury 10 J.", "EUR/USD", "USD/CHF",
            "Brent (USD/bbl)", "Gold (USD/oz)", "Bitcoin (USD)"]
