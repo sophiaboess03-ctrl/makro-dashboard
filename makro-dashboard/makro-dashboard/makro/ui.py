@@ -417,3 +417,17 @@ def iframe_html(code: str, hoehe: int):
         import streamlit.components.v1 as components
 
         components.html(code, height=hoehe)
+
+
+def stand_abgleich(name: str, stand: str, prefixe: tuple[str, ...], wer: str = "") -> None:
+    """Hat jemand anderes inzwischen gespeichert, werden die Eingabefelder neu geladen – sonst würde man mit
+    veralteten Werten dessen Änderungen überschreiben."""
+    k = f"_stand_{name}"
+    alt = st.session_state.get(k)
+    if alt is not None and alt != stand:
+        for key in [x for x in list(st.session_state.keys()) if str(x).startswith(prefixe)]:
+            del st.session_state[key]
+        if not st.session_state.get("_selbst_dieser_lauf", False):
+            st.info(f"Inzwischen neu gespeichert{(' von ' + wer) if wer else ''} – die Felder zeigen jetzt den neusten Stand.",
+                    icon=":material/sync:")
+    st.session_state[k] = stand

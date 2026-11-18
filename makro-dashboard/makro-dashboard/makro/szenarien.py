@@ -428,3 +428,62 @@ def daten_anker(fred: dict, hist: dict, status: pd.DataFrame, fed_markt_bp: floa
     if m is not None and len(m) > 2:
         out["dxy"] = f"letzter Monat {_de(float(m.pct_change().iloc[-1] * 100))} %"
     return out
+
+
+def taylor(status: pd.DataFrame) -> dict | None:
+    """Taylor-Regel mit Kern-PCE und Output Gap; Vergleich mit der Obergrenze des Fed-Zielbands."""
+    def w(i):
+        v = status.loc[i, "wert"] if i in status.index else None
+        return None if v is None or pd.isna(v) else float(v)
+    pi, gap, fed = w("kernpce"), w("outputgap"), w("fedfunds")
+    if pi is None or gap is None:
+        return None
+    i = C.TAYLOR_R_NEUTRAL + pi + 0.5 * (pi - C.TAYLOR_PI_ZIEL) + 0.5 * gap
+    return dict(i=i, pi=pi, gap=gap, fed=fed, diff=(i - fed) if fed is not None else None)
+
+
+# ---------------------------------------------------------------------------
+# Konsistenz-Check: Sind die Szenarien in sich stimmig? (CFA: Szenarien müssen intern konsistent sein)
+# ---------------------------------------------------------------------------
+def konsistenz(defs: dict, szen: pd.DataFrame) -> list[tuple[str, str]]:
+    out = []
+    for sid, s in defs.items():
+        p, k = s["param"], s["kurz"]
+        sp, vix, fed, d2, d10 = (float(p.get(x, 0) or 0) for x in ("sp500", "vix", "fed", "dgs2", "dgs10"))
+        if sp <= -2 and vix < 0:
+            out.append(("fehler", f"{k}: Aktien fallen ({_de(sp)} %), aber der VIX sinkt – in Stressphasen steigt der VIX."))
+        if sp >= 2 and vix > 2:
+            out.append(("warnung", f"{k}: Starker Aktienmonat ({_de(sp)} %) mit steigendem VIX ({_de(vix)}) ist selten."))
+        if fed > 0 and d2 < -10:
+            out.append(("warnung", f"{k}: Die Fed erhöht, aber die 2-J.-Rendite fällt um {_de(-d2, 0, False)} bp – das passt nur, wenn der "
+                                   "Markt danach rasche Senkungen erwartet."))
+        if fed < 0 and d2 > 10:
+            out.append(("warnung", f"{k}: Die Fed senkt, aber die 2-J.-Rendite steigt."))
+        dz = def_minus_zykl(s)
+        if sp >= 2 and dz > 0.5:
+            out.append(("warnung", f"{k}: Defensive schlagen Zykliker ({_de(dz)} PP) in einem starken Aktienmonat – eher untypisch."))
+        if sp <= -2 and dz < -0.5:
+            out.append(("warnung", f"{k}: Zykliker schlagen Defensive in einem schwachen Aktienmonat – eher untypisch."))
+        wti, en = float(p.get("wti", 0) or 0), float(s["sektoren"].get("Energie", 0) or 0)
+        if wti >= 5 and en < 0:
+            out.append(("fehler", f"{k}: Öl steigt ({_de(wti)} %), Energie liegt aber unter dem S&P 500."))
+        if wti <= -5 and en > 0:
+            out.append(("fehler", f"{k}: Öl fällt ({_de(wti)} %), Energie liegt aber über dem S&P 500."))
+        gv = float(p.get("growth_value", 0) or 0)
+        if d10 >= 25 and gv >= 1.5:
+            out.append(("warnung", f"{k}: Stark steigende lange Zinsen (+{_de(d10, 0, False)} bp) und gleichzeitig Growth deutlich vorne – "
+                                   "höhere Zinsen belasten normalerweise lange Duration-Aktien (Growth)."))
+        sek_mittel = sum(float(s["sektoren"].get(x, 0) or 0) * C.SP500_GEWICHT[x] for x in C.SEKTOREN) / 100
+        if abs(sek_mittel) > 0.3:
+            out.append(("warnung", f"{k}: Die Sektor-Mehrrenditen ergeben gewichtet {_de(sek_mittel, 2)} PP – gegenüber dem S&P 500 "
+                                   "sollten sie sich (mit S&P-Gewichten) ungefähr aufheben."))
+    if {"ic_base", "ic_bull", "ic_bear"} <= set(defs):
+        sp = {s: float(defs[s]["param"].get("sp500", 0) or 0) for s in defs}
+        if not sp["ic_bull"] > sp["ic_base"] > sp["ic_bear"]:
+            out.append(("fehler", "Reihenfolge: Die Aktienrendite sollte Bull > Base > Bear sein."))
+    for sid in defs:
+        if szen.loc[sid, "p"] < 5:
+            out.append(("warnung", f"{defs[sid]['kurz']}: Wahrscheinlichkeit unter 5 % – dann eher als Risiko führen."))
+    if szen["p"].max() >= 75:
+        out.append(("warnung", f"Ein Szenario hat {szen['p'].max():.0f} % – Vorsicht vor Überzuversicht (overconfidence)."))
+    return out

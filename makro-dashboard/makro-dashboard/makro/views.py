@@ -336,6 +336,19 @@ def seite_gesamtbild(ctx: Ctx, prog: dict | None = None, monat: dict | None = No
         uw = a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"].tolist()
         st.markdown(f"**Übergewichtet:** {', '.join(ow) or '–'}  \n**Untergewichtet:** {', '.join(uw) or '–'}")
         st.caption(f"Quelle: {a.get('quelle_txt', '')}. Eintragen auf der Seite «Taktik».")
+        try:
+            import risiko
+            rr = risiko.berechne(ctx)
+        except Exception:  # noqa: BLE001
+            rr = None
+        if rr:
+            farbe = ui.FARBE[L.ROT] if rr["te"] > ctx.ips["te_max"] else ui.FARBE[L.GRUEN]
+            st.markdown(f"<span class='klein'><b>Risiko vs. Benchmark:</b> Tracking Error <span style='color:{farbe}; font-weight:700'>"
+                        f"{ui.de(rr['te'], 2)} %</span> von {ui.de(ctx.ips['te_max'], 1)} % Budget · erwartete Mehrrendite 3 Mt. "
+                        f"{ui.de(rr['akt3'], 2, True)} PP · VaR 95 % 1 Mt. −{ui.de(rr['var95'], 1)} % · ES 3 Mt. −{ui.de(rr['es95_3'], 1)} %"
+                        "</span>", unsafe_allow_html=True)
+            R.text(f"Risiko vs. Benchmark: TE {ui.de(rr['te'], 2)} % (Budget {ui.de(ctx.ips['te_max'], 1)} %), erwartete Mehrrendite 3 Mt. "
+                   f"{ui.de(rr['akt3'], 2, True)} PP, VaR 95 % 1 Mt. -{ui.de(rr['var95'], 1)} %, ES 3 Mt. -{ui.de(rr['es95_3'], 1)} %")
         R.text(f"{a['aktien']:.0f} % Aktien / {a['anleihen']:.0f} % Anleihen / {a['cash']:.0f} % Cash · Duration {ui.de(a['duration'])} J. · "
                f"Übergewichtet: {', '.join(ow) or '-'} · Untergewichtet: {', '.join(uw) or '-'} ({a.get('quelle_txt', '')})")
     with r:
@@ -646,7 +659,14 @@ def _termine_tabelle(n: int | None = None):
 
 
 def seite_termine(ctx: Ctx):
+    import seitenpdf as SP
+
     ui.seitenkopf("Termine bis Abgabe", "Datenveröffentlichungen, Fed-Sitzungen und Fristen bis zur Abgabe am 28.02.2027.")
+    ph = st.empty()
+    d = TERMINE_DF.copy() if TERMINE_DF is not None else pd.DataFrame(C.TERMINE, columns=["sort", "Datum", "Ereignis", "Betrifft"])
+    R = SP.Sammler("Termine bis Abgabe", "Datenveröffentlichungen, Fed-Sitzungen und Fristen", kurz="Termine")
+    R.tabelle(d[["Datum", "Ereignis", "Betrifft"]], [30, 90, 60], max_zeilen=120)
+    SP.knopf(ph, R, "termine")
     _termine_tabelle()
     if TERMINE_INFO:
         st.caption(TERMINE_INFO)

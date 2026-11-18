@@ -479,6 +479,8 @@ ZYKLISCH = ["Zykl. Konsum", "Industrie", "Finanzen", "IT"]
 # Alles hier sind STARTWERTE. Das Team ändert sie in der App (Seite «Szenarien»), gespeichert wird in der Google-Tabelle.
 # Herkunft der Zahlen: Richtung aus IC-Statement und Themen-Szenarien eurer Analyse, Höhe = Vorschlag Claude.
 # ---------------------------------------------------------------------------
+# Sektorwirkung = Rendite gegenüber dem S&P 500 (PP). Mit S&P-Gewichten gewichtet sollte sie sich ungefähr aufheben
+# (IT ist ≈ 38 % des Index – eine IT-Wette verschiebt sonst den ganzen Index).
 # Parameter je Szenario. sigma = typische Streuung in einem Monat (Fallback, die App rechnet sie aus den Daten nach).
 # fragen = Nummern der Dozentenfragen, die davon abhängen.
 PARAMETER = [
@@ -547,8 +549,8 @@ SZENARIEN = [
          param=dict(sp500=3.0, fed=0, dgs2=-20, dgs10=-25, cpi_mm=0.15, wti=-8.0, vix=-2.5, growth_value=1.5,
                     arbeitslos=0.0, dxy=-1.0),
          alloc=dict(aktien_tilt=5, duration=4.5, tips=10),
-         sektoren={"IT": 1.0, "Zykl. Konsum": 1.0, "Industrie": 0.8, "Finanzen": 0.5, "Kommunikation": 0.5,
-                   "Immobilien": 0.5, "Energie": -1.5, "Basiskonsum": -1.0, "Versorger": -0.8, "Gesundheit": -0.5},
+         sektoren={"IT": 0.5, "Zykl. Konsum": 1.0, "Industrie": 0.8, "Finanzen": 0.5, "Kommunikation": 0.5,
+                   "Immobilien": 0.5, "Energie": -1.5, "Basiskonsum": -1.0, "Versorger": -0.8, "Gesundheit": -1.0},
          indizien=[
              dict(ind="kerncpi", op="<", wert=0.25, text="Kern-CPI < 0,25 % m/m"),
              dict(ind="brent", op="<", wert=85, text="Brent < 85 USD"),
@@ -569,8 +571,8 @@ SZENARIEN = [
                     arbeitslos=0.1, dxy=1.5),
          alloc=dict(aktien_tilt=-10, duration=2.5, tips=25),
          sektoren={"Energie": 3.0, "Basiskonsum": 1.5, "Gesundheit": 1.5, "Versorger": 1.0, "Grundstoffe": 0.5,
-                   "IT": -2.0, "Zykl. Konsum": -2.0, "Industrie": -1.0, "Finanzen": -1.0, "Kommunikation": -1.0,
-                   "Immobilien": -1.0},
+                   "IT": -0.7, "Zykl. Konsum": -1.5, "Industrie": -0.5, "Finanzen": -0.5, "Kommunikation": -0.5,
+                   "Immobilien": -0.5},
          indizien=[
              dict(ind="kerncpi", op=">", wert=0.39, text="Kern-CPI ≥ 0,4 % m/m"),
              dict(ind="brent", op=">", wert=100, text="Brent > 100 USD"),
@@ -785,3 +787,7 @@ KAPITEL_WORUM = {
     "gewinne": "Rechtfertigen Gewinne und Bewertung die Aktienkurse? Bestimmt Aktienquote, Stil und Sektoren (Fragen 1, 3, 12–14).",
     "geopolitik": "Welche politischen Schocks können das Szenario kippen? Iran/Öl, USA–China, Cyber, Russland, Zölle und Tail Risks.",
 }
+
+# Taylor-Regel (CFA Level III, Capital Market Expectations): i* = r_neutral + π + 0,5 × (π − π_Ziel) + 0,5 × Output Gap
+TAYLOR_R_NEUTRAL = 1.0   # neutraler Realzins in % (Annahme, z. B. Laubach-Williams-Schätzung der NY Fed prüfen)
+TAYLOR_PI_ZIEL = 2.0
