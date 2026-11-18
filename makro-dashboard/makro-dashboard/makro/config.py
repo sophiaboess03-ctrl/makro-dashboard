@@ -449,138 +449,191 @@ ZINSKURVE = {"DGS1MO": 1 / 12, "DGS3MO": 0.25, "DGS6MO": 0.5, "DGS1": 1, "DGS2":
 ERWARTUNGS_SERIEN = ["DFF", "T5YIE", "T10YIE"]
 
 # ---------------------------------------------------------------------------
-# Szenarien (Wahrscheinlichkeit = Startwert; das Team schätzt selbst, die App mittelt)
-# sektoren: Wirkung je GICS-Sektor (−2 … +2), aus der "Folge"-Spalte eurer Analyse
+# Sektoren (S&P-500-Sektoren, gemessen über die SPDR-Sektor-ETFs)
+# faktor: +1 = zyklisch (Risk-on), −1 = defensiv (Risk-off) – für die Simulation der Sektor-Fragen
 # ---------------------------------------------------------------------------
 SEKTOREN = ["Energie", "Grundstoffe", "Industrie", "Zykl. Konsum", "Basiskonsum", "Gesundheit",
             "Finanzen", "IT", "Kommunikation", "Versorger", "Immobilien"]
-
-THEMEN = [
-    {"id": "gesamt", "name": "Gesamtmarkt (Investment Committee)", "kapitel": ["wachstum"],
-     "quelle": "Investment-Committee-Statement 16.11.2026 – Base/Bull/Bear für Dez. 2026 – Feb. 2027"},
-    {"id": "zinsen", "name": "Zinsen & Inflation", "kapitel": ["inflation", "zinsen"],
-     "quelle": "Makroanalyse Inflation, Geldpolitik, Anleihen"},
-    {"id": "gewinne", "name": "Gewinne & Bewertung", "kapitel": ["gewinne"],
-     "quelle": "S&P 500 Unternehmensgewinne und Bewertung"},
-    {"id": "iran", "name": "Öl & Iran-Krieg", "kapitel": ["geopolitik", "kredit"],
-     "quelle": "Geopolitik (Konsum-Teil: Eskalation und Deal je 25–35 %)"},
-    {"id": "china", "name": "USA–China (Frist 10.01.2027)", "kapitel": ["geopolitik"],
-     "quelle": "Geopolitik"},
-]
-THEMA_BY_ID = {t["id"]: t for t in THEMEN}
-
-SZENARIEN = [
-    # Gesamtmarkt gemäss Investment Committee (nicht mit den Themen-Szenarien addieren oder vergleichen)
-    dict(id="ic_base", thema="gesamt", name="Base: Späte Expansion, erhöhte Inflation", p=55,
-         annahmen="Wachstum schwächer als Q3, Arbeitsmarkt stabil, realer Konsum und Wohnbau bremsen; Inflation sinkt höchstens langsam",
-         folge="Fed bleibt restriktiv, Renditen hoch; Gewinne stützen Aktien, Aufwärtspotenzial durch Finanzierungskosten und enge Risikoprämie begrenzt",
-         aktion="Arbeitskorridor Aktien 40–50 %, Treasuries 45–55 %, Duration um 3,5 J.", sektoren={}),
-    dict(id="ic_bull", thema="gesamt", name="Bull: Disinflation ohne Rezession", p=25,
-         annahmen="Entspannung bei Energie und Handel, Löhne und Inflation kühlen ab, Beschäftigung und Gewinne robust",
-         folge="Fed strafft weniger, Renditen sinken; Aktien profitieren von Gewinnen und Bewertung, Treasuries mit Kursgewinnen",
-         aktion="Aktienquote Richtung oberer Korridor, Duration eher länger", sektoren={}),
-    dict(id="ic_bear", thema="gesamt", name="Bear: Inflations-/Zinsschock, Gewinnenttäuschung", p=20,
-         annahmen="Energie-, Zoll- oder Lieferkettenschocks halten Inflation hoch, Fed restriktiver",
-         folge="Höhere Renditen belasten Bewertungen und lange Treasuries; schwacher Konsum trifft Umsätze; Aktienverluste überproportional",
-         aktion="Aktienquote am unteren Korridor, kurze Duration", sektoren={}),
-    # Zinsen & Inflation – Duration / TIPS-Ziel je Szenario aus euren Aktionen
-    dict(id="z_basis", thema="zinsen", name="Basis: Hawkishe Fed", p=55,
-         annahmen="Fed erhöht im Dez. auf 4,00–4,25 % und signalisiert mehr; Kern-PCE ≈ 3 %; Brent 85–100 USD",
-         folge="2 J. 4,8–5,1 %, 10 J. 5,0–5,3 %; Bear Flattening",
-         aktion="Duration ≈ 3,5 J., Schwerpunkt 1–7 J., TIPS 15 %, nichts > 10 J.",
-         duration=3.5, tips=15, sektoren={}),
-    dict(id="z_infl", thema="zinsen", name="Inflationsschock", p=25,
-         annahmen="Erneut heisse Preisdaten, Brent > 100 USD, Fed +50 bp, schwache Auktionen",
-         folge="2 J. 5,1–5,4 %, 10 J. 5,3–5,7 %; Bear Steepening; Aktien und Anleihen fallen gleichzeitig",
-         aktion="Duration ≈ 2,5 J., TIPS-Anteil 25 %",
-         duration=2.5, tips=25, sektoren={}),
-    dict(id="z_riskoff", thema="zinsen", name="Risk-off / Abkühlung", p=20,
-         annahmen="Arbeitsmarkt schwach, Konsum bricht ein, KI-Ausverkauf, CCC-Stress greift auf BB/BBB über, Fed pausiert",
-         folge="2 J. 4,3–4,6 %, 10 J. 4,6–4,9 %; Bull Steepening",
-         aktion="Duration 4–5 J.; bei Kreditstress Aktien −10 PP",
-         duration=4.5, tips=15, tips_annahme=True, sektoren={}),
-    # Gewinne & Bewertung – in der Analyse nicht beziffert: Startwerte 25/50/25 (Vorschlag)
-    dict(id="g_pos", thema="gewinne", name="Positiv", p=25, p_vorschlag=True,
-         annahmen="10 J. Richtung 4,5 %, Ausblick 2027 angehoben",
-         folge="KGV-Ausweitung Richtung 19",
-         aktion="Aktienrisikoprämie > 1 PP → Anleihen zurück auf neutral",
-         sektoren={"IT": 1}),
-    dict(id="g_basis", thema="gewinne", name="Basis", p=50, p_vorschlag=True,
-         annahmen="Q4-Gewinnwachstum ≈ 28 %, 10 J. 4,7–5,0 %, Schätzungen 2027 halten",
-         folge="KGV stabil um 17–18, Kurse folgen den Gewinnen",
-         aktion="Zur Diskussion: IT übergewichten (Halbleiter + Software), Energie selektiv, zyklischen und Basiskonsum untergewichten",
-         sektoren={"IT": 1, "Energie": 0.5, "Zykl. Konsum": -1, "Basiskonsum": -1}),
-    dict(id="g_neg", thema="gewinne", name="Negativ", p=25, p_vorschlag=True,
-         annahmen="10 J. über 5,25 %, Ausblicke 2027 enttäuschen",
-         folge="KGV-Druck und sinkende Schätzungen",
-         aktion="KI-Konzentration begrenzen, Aktienquote am unteren Rand",
-         sektoren={"IT": -1}),
-    # Öl & Iran-Krieg
-    dict(id="i_basis", thema="iran", name="Basis: weder Frieden noch Krieg", p=55,
-         annahmen="US-Blockade bleibt, vereinzelte Angriffe auf Schiffe, Brent ≈ 85–100 USD",
-         folge="+ Energie; − Transport/Airlines, Chemie",
-         aktion="Energie leicht übergewichten, Airlines meiden",
-         sektoren={"Energie": 1, "Industrie": -1, "Grundstoffe": -1}),
-    dict(id="i_esk", thema="iran", name="Eskalation", p=25,
-         annahmen="Angriffe auf Golf-Infrastruktur oder US-Truppen, Hormus faktisch zu, Brent > 118 USD",
-         folge="++ Energie, + Rüstung, Gesundheit, Basiskonsum; −− zyklischer Konsum, Transport",
-         aktion="Bei Brent > 110 USD Zykliker reduzieren, Cash ↑; keine langen Treasuries",
-         sektoren={"Energie": 2, "Industrie": -1, "Gesundheit": 1, "Basiskonsum": 1, "Zykl. Konsum": -2}),
-    dict(id="i_deal", thema="iran", name="Entspannung (Deal)", p=20,
-         annahmen="Iran öffnet Hormus und stoppt Angriffe auf Tanker",
-         folge="− Energie; + Transport, zyklischer Konsum, längere Laufzeiten",
-         aktion="Energie-Übergewicht bei Brent < 85 USD abbauen",
-         sektoren={"Energie": -1, "Industrie": 1, "Zykl. Konsum": 1}),
-    # USA–China
-    dict(id="c_basis", thema="china", name="Basis: kurze Verlängerung / Teil-Deal", p=50,
-         annahmen="Handelsfrieden bei APEC oder G20 verlängert; Streit um seltene Erden bleibt",
-         folge="Volatilität in IT/Halbleitern, sonst neutral",
-         aktion="Halbleiter mit grossem China-Geschäft nicht übergewichten, Positionsgrössen begrenzen",
-         sektoren={"IT": -0.5}),
-    dict(id="c_esk", thema="china", name="Eskalation", p=30,
-         annahmen="Handelsfrieden läuft aus, Exportverbot seltene Erden, schärfere Zölle und Chip-Kontrollen",
-         folge="−− Halbleiter, − Industrie, zyklischer Konsum; + Versorger, Gesundheit, Basiskonsum",
-         aktion="Vor dem 10.01. keine neuen Wetten auf China-abhängige Titel; defensive Sektoren",
-         sektoren={"IT": -2, "Industrie": -1, "Zykl. Konsum": -1, "Versorger": 1, "Gesundheit": 1, "Basiskonsum": 1}),
-    dict(id="c_ent", thema="china", name="Entspannung", p=20,
-         annahmen="Breiterer Handels-Deal",
-         folge="++ Halbleiter/IT, + Industrie",
-         aktion="Nach G20 (15.12.) aufstocken, falls das Signal klar ist",
-         sektoren={"IT": 2, "Industrie": 1}),
-]
-SZEN_BY_ID = {s["id"]: s for s in SZENARIEN}
+SEKTOR_DOZENT = {  # Bezeichnung in der Dozenten-App
+    "Energie": "Energie", "Grundstoffe": "Roh-, Hilfs- und Betriebsstoffe", "Industrie": "Industrie",
+    "Zykl. Konsum": "Zyklischer Konsum", "Basiskonsum": "Basiskonsumgüter", "Gesundheit": "Gesundheit",
+    "Finanzen": "Finanzen", "IT": "Informationstechnologie", "Kommunikation": "Kommunikationsdienste",
+    "Versorger": "Versorger", "Immobilien": "Immobilien",
+}
+SEKTOR_ETF = {"Energie": "XLE", "Grundstoffe": "XLB", "Industrie": "XLI", "Zykl. Konsum": "XLY", "Basiskonsum": "XLP",
+              "Gesundheit": "XLV", "Finanzen": "XLF", "IT": "XLK", "Kommunikation": "XLC", "Versorger": "XLU",
+              "Immobilien": "XLRE"}
+SEKTOR_FAKTOR = {"Energie": 0.5, "Grundstoffe": 0.8, "Industrie": 1.0, "Zykl. Konsum": 1.0, "Basiskonsum": -1.0,
+                 "Gesundheit": -0.8, "Finanzen": 0.9, "IT": 1.0, "Kommunikation": 0.6, "Versorger": -1.0,
+                 "Immobilien": -0.2}
+DEFENSIV = ["Basiskonsum", "Gesundheit", "Versorger"]                 # Dozenten-Frage 14
+ZYKLISCH = ["Zykl. Konsum", "Industrie", "Finanzen", "IT"]
 
 # ---------------------------------------------------------------------------
-# Risiken (Wahrscheinlichkeit in % bis 28.02.2027, Auswirkung 1–5)
+# Szenarien: Base / Bull / Bear (gemäss Investment Committee 16.11.2026)
+#
+# Jedes Szenario hat konkrete Parameter für den laufenden Monat. Daraus rechnet die App:
+#   gewichteter Wert = Σ Wahrscheinlichkeit × Szenariowert
+#   Wahrscheinlichkeit je Antwort der Dozentenfragen (Simulation mit der historischen Streuung)
+#   Orientierung für Allokation und Anleihen
+# Alles hier sind STARTWERTE. Das Team ändert sie in der App (Seite «Szenarien»), gespeichert wird in der Google-Tabelle.
+# Herkunft der Zahlen: Richtung aus IC-Statement und Themen-Szenarien eurer Analyse, Höhe = Vorschlag Claude.
+# ---------------------------------------------------------------------------
+# Parameter je Szenario. sigma = typische Streuung in einem Monat (Fallback, die App rechnet sie aus den Daten nach).
+# fragen = Nummern der Dozentenfragen, die davon abhängen.
+PARAMETER = [
+    dict(id="sp500", name="S&P 500 Total Return", einheit="%", dez=1, sigma=4.3, fragen=[1, 2],
+         hilfe="Rendite des S&P 500 inkl. Dividenden im Monat"),
+    dict(id="fed", name="Fed: Obergrenze Zielband", einheit="bp", dez=0, sigma=None, fragen=[4],
+         hilfe="Veränderung an der Fed-Sitzung im Monat (−25 = Senkung, 0 = unverändert, +25 = Erhöhung)"),
+    dict(id="dgs2", name="Rendite 2 J.", einheit="bp", dez=0, sigma=22, fragen=[],
+         hilfe="Veränderung der 2-jährigen Treasury-Rendite im Monat (für die Zinskurve im Anleihen-Tool)"),
+    dict(id="dgs10", name="Rendite 10 J.", einheit="bp", dez=0, sigma=24, fragen=[2, 5],
+         hilfe="Veränderung der 10-jährigen Treasury-Rendite im Monat"),
+    dict(id="cpi_mm", name="CPI gesamt im Berichtsmonat", einheit="% m/m", dez=2, sigma=0.12, fragen=[7],
+         hilfe="Monatsveränderung des CPI, der im Monat veröffentlicht wird. Die App rechnet daraus mit dem Basiseffekt die neue Jahresrate."),
+    dict(id="wti", name="Ölpreis WTI", einheit="%", dez=1, sigma=8.5, fragen=[10],
+         hilfe="Veränderung des WTI-Preises (CL=F) im Monat"),
+    dict(id="vix", name="VIX", einheit="Pkt.", dez=1, sigma=4.0, fragen=[3],
+         hilfe="Veränderung des VIX vom Monatsanfang bis Monatsende"),
+    dict(id="growth_value", name="Growth minus Value", einheit="PP", dez=1, sigma=2.6, fragen=[13],
+         hilfe="Rendite IWF minus Rendite IWD im Monat"),
+    dict(id="arbeitslos", name="Arbeitslosenquote", einheit="PP", dez=1, sigma=0.12, fragen=[],
+         hilfe="Veränderung der Arbeitslosenquote im Arbeitsmarktbericht des Monats"),
+    dict(id="dxy", name="Dollar-Index (DXY)", einheit="%", dez=1, sigma=1.8, fragen=[],
+         hilfe="Veränderung des Dollar-Index im Monat"),
+]
+PARAM_BY_ID = {p["id"]: p for p in PARAMETER}
+SEKTOR_SIGMA = 2.6       # Streuung eines Sektors gegenüber dem S&P 500 in einem Monat (PP), ohne Risk-on/off-Faktor
+FAKTOR_SIGMA = 1.6       # Streuung des gemeinsamen Risk-on/off-Faktors (PP)
+STREUUNG_IM_SZENARIO = 0.75  # Anteil der historischen Streuung, der innerhalb eines Szenarios bleibt
+
+# Orientierung für die Allokation je Szenario
+ALLOK_PARAMETER = [
+    dict(id="aktien_tilt", name="Aktienquote vs. neutral", einheit="PP", dez=0),
+    dict(id="duration", name="Duration Anleihen", einheit="J.", dez=1),
+    dict(id="tips", name="TIPS-Anteil an Anleihen", einheit="%", dez=0),
+]
+
+SZENARIEN = [
+    dict(id="ic_base", kurz="Base", name="Base: Späte Expansion, erhöhte Inflation", p=55,
+         narrativ="Das Wachstum ist schwächer als im Q3, der Arbeitsmarkt bleibt stabil. Realer Konsum und Wohnbau bremsen. "
+                  "Die Inflation sinkt höchstens langsam, die Fed bleibt restriktiv.",
+         annahmen="Wachstum schwächer als Q3, Arbeitsmarkt stabil, realer Konsum und Wohnbau bremsen; Inflation sinkt höchstens langsam; "
+                  "Iran: weder Frieden noch Krieg (Brent 85–100 USD); USA–China: kurze Verlängerung",
+         folge="Fed bleibt restriktiv, Renditen hoch, leichtes Bear Flattening; Gewinne stützen Aktien, Aufwärtspotenzial durch "
+               "Finanzierungskosten und enge Risikoprämie begrenzt",
+         aktion="Aktien im Korridor 40–50 %, Treasuries 45–55 %, Duration um 3,5 J., Schwerpunkt 1–7 J.",
+         param=dict(sp500=0.8, fed=25, dgs2=10, dgs10=5, cpi_mm=0.30, wti=0.0, vix=0.5, growth_value=0.5, arbeitslos=0.0,
+                    dxy=0.3),
+         alloc=dict(aktien_tilt=0, duration=3.5, tips=15),
+         sektoren={"IT": 0.5, "Energie": 0.5, "Zykl. Konsum": -0.5, "Basiskonsum": -0.5, "Industrie": -0.3,
+                   "Grundstoffe": -0.3},
+         indizien=[
+             dict(ind="unrate", op="<", wert=4.3, text="Arbeitsmarkt stabil"),
+             dict(ind="kerncpi", op="zwischen", wert="0.2;0.4", text="Kern-CPI 0,2–0,4 % m/m"),
+             dict(ind="dgs10", op="zwischen", wert="4.7;5.3", text="10 J. 4,7–5,3 %"),
+             dict(ind="brent", op="zwischen", wert="80;100", text="Brent 80–100 USD"),
+             dict(ind="bb", op="<", wert=300, text="Keine Kreditkrise (BB < 300 bp)"),
+             dict(ind="ism_no", op=">", wert=50, text="Industrie expansiv (ISM-Neuaufträge > 50)"),
+         ]),
+    dict(id="ic_bull", kurz="Bull", name="Bull: Disinflation ohne Rezession", p=25,
+         narrativ="Energie und Handel entspannen sich, Löhne und Inflation kühlen ab. Beschäftigung und Gewinne bleiben robust. "
+                  "Die Fed strafft weniger, die Renditen sinken.",
+         annahmen="Entspannung bei Energie und Handel (Iran-Deal oder China-Deal), Löhne und Inflation kühlen ab, "
+                  "Beschäftigung und Gewinne robust",
+         folge="Fed strafft weniger, Renditen sinken; Aktien profitieren von Gewinnen und Bewertung, Treasuries mit Kursgewinnen",
+         aktion="Aktienquote Richtung oberer Korridor, Duration eher länger, Zykliker und IT übergewichten",
+         param=dict(sp500=3.0, fed=0, dgs2=-20, dgs10=-25, cpi_mm=0.15, wti=-8.0, vix=-2.5, growth_value=1.5,
+                    arbeitslos=0.0, dxy=-1.0),
+         alloc=dict(aktien_tilt=5, duration=4.5, tips=10),
+         sektoren={"IT": 1.0, "Zykl. Konsum": 1.0, "Industrie": 0.8, "Finanzen": 0.5, "Kommunikation": 0.5,
+                   "Immobilien": 0.5, "Energie": -1.5, "Basiskonsum": -1.0, "Versorger": -0.8, "Gesundheit": -0.5},
+         indizien=[
+             dict(ind="kerncpi", op="<", wert=0.25, text="Kern-CPI < 0,25 % m/m"),
+             dict(ind="brent", op="<", wert=85, text="Brent < 85 USD"),
+             dict(ind="dgs10", op="<", wert=4.8, text="10 J. < 4,8 %"),
+             dict(ind="nfp", op=">", wert=100, text="Stellenaufbau > 100'000"),
+             dict(ind="vix", op="<", wert=16, text="VIX < 16"),
+             dict(ind="ism_preise", op="<", wert=70, text="ISM-Preise < 70 (Kostendruck lässt nach)"),
+         ]),
+    dict(id="ic_bear", kurz="Bear", name="Bear: Inflations-/Zinsschock, Gewinnenttäuschung", p=20,
+         narrativ="Energie-, Zoll- oder Lieferkettenschocks halten die Inflation hoch, die Fed wird restriktiver. "
+                  "Höhere Renditen belasten Bewertungen und lange Treasuries, schwacher Konsum trifft die Umsätze.",
+         annahmen="Energie-, Zoll- oder Lieferkettenschocks (Iran-Eskalation, China-Eskalation) halten Inflation hoch, "
+                  "Fed restriktiver, Gewinnschätzungen sinken",
+         folge="Höhere Renditen belasten Bewertungen und lange Treasuries; schwacher Konsum trifft Umsätze; Aktienverluste "
+               "überproportional; Aktien und Anleihen fallen gleichzeitig",
+         aktion="Aktienquote am unteren Korridor, kurze Duration, TIPS-Anteil hoch, Energie und Defensive übergewichten",
+         param=dict(sp500=-5.0, fed=50, dgs2=40, dgs10=35, cpi_mm=0.50, wti=15.0, vix=7.0, growth_value=-2.5,
+                    arbeitslos=0.1, dxy=1.5),
+         alloc=dict(aktien_tilt=-10, duration=2.5, tips=25),
+         sektoren={"Energie": 3.0, "Basiskonsum": 1.5, "Gesundheit": 1.5, "Versorger": 1.0, "Grundstoffe": 0.5,
+                   "IT": -2.0, "Zykl. Konsum": -2.0, "Industrie": -1.0, "Finanzen": -1.0, "Kommunikation": -1.0,
+                   "Immobilien": -1.0},
+         indizien=[
+             dict(ind="kerncpi", op=">", wert=0.39, text="Kern-CPI ≥ 0,4 % m/m"),
+             dict(ind="brent", op=">", wert=100, text="Brent > 100 USD"),
+             dict(ind="dgs10", op=">", wert=5.25, text="10 J. > 5,25 %"),
+             dict(ind="bb", op=">", wert=300, text="Kreditstress (BB > 300 bp)"),
+             dict(ind="vix", op=">", wert=25, text="VIX > 25"),
+             dict(ind="sahm", op=">", wert=0.49, text="Sahm-Regel ≥ 0,5"),
+         ]),
+]
+SZEN_IDS = [s["id"] for s in SZENARIEN]
+SZEN_BY_ID = {s["id"]: s for s in SZENARIEN}
+SZEN_FARBE = {"ic_base": "#1F4E8C", "ic_bull": "#2F855A", "ic_bear": "#B93A32"}
+INDIZ_OPS = [">", "<", "zwischen"]
+
+# ---------------------------------------------------------------------------
+# Risiken und Chancen (Wahrscheinlichkeit in % bis 28.02.2027, Auswirkung 1–5)
 # auto: Schlüssel eines automatischen Warnsignals (siehe logic.auto_warnsignale)
+# richtung: auf welches Szenario das Risiko hinarbeitet (ein ausgelöstes Warnsignal zählt dort als Indiz)
 # Auswirkung ist ein Startwert (Vorschlag) – das Team bewertet selbst.
 # ---------------------------------------------------------------------------
 RISIKEN = [
     dict(id="r_ki", name="KI-/Tech-Korrektur", kapitel="gewinne", p=50, p_text="40–60 %", impact=4,
          warnsignal="Fondsmanager-Cash < 4 %, Tech-Übergewicht > 37 %, KI-Blasen-Erwartung > 45 %, Gesetzesentwürfe zu Rechenzentren",
-         reaktion="KI-/Halbleiter-Konzentration begrenzen", auto="fms_cash",
+         reaktion="KI-/Halbleiter-Konzentration begrenzen", auto="fms_cash", richtung="ic_bear", art="Risiko",
          quelle="Konsumenten, Finanzbedingungen, Stimmung, Politik"),
     dict(id="r_konsum", name="Konsumrückgang", kapitel="konsum", p=35, p_text="30–40 %", impact=3,
          warnsignal="Sparquote < 3,5 %, Realkonsum 2 Monate ≤ 0, ISM-Neuaufträge < 52 bei Preisen > 75, NFIB < 95",
-         reaktion="Zyklischen Konsum und Small Caps untergewichten; Basiskonsum, Gesundheit relativ besser", auto="konsum",
+         reaktion="Zyklischen Konsum und Small Caps untergewichten; Basiskonsum, Gesundheit relativ besser", auto="konsum", richtung="ic_bear", art="Risiko",
          quelle="Konsumenten, Finanzbedingungen, Stimmung, Politik"),
     dict(id="r_cyber", name="Cyber-Eskalation", kapitel="geopolitik", p=30, p_text="30 % (von 25 % angehoben)", impact=3,
          warnsignal="CISA-Notfallwarnungen, Ausfall von Strom, Wasser, Zahlungsverkehr oder Börse",
-         reaktion="Cybersecurity-Titel halten, Versorger breit streuen, nicht panisch verkaufen", auto=None,
+         reaktion="Cybersecurity-Titel halten, Versorger breit streuen, nicht panisch verkaufen", auto=None, richtung="ic_bear", art="Risiko",
          quelle="Geopolitik; Extremrisiken"),
     dict(id="r_russland", name="Russland–NATO-Eskalation", kapitel="geopolitik", p=20, p_text="20 %", impact=4,
          warnsignal="Vorfall mit Toten auf NATO-Gebiet, Debatte über Artikel 4/5",
-         reaktion="Cash-Puffer nutzen, keine Panikverkäufe, Rüstung nicht überziehen", auto=None,
+         reaktion="Cash-Puffer nutzen, keine Panikverkäufe, Rüstung nicht überziehen", auto=None, richtung="ic_bear", art="Risiko",
          quelle="Geopolitik"),
     dict(id="r_protekt", name="Protektionismus / USMCA", kapitel="geopolitik", p=25, p_text="25 %", impact=3,
          warnsignal="Neue Verfahren nach Section 232/301/338, Drohung mit USMCA-Kündigung",
-         reaktion="Autos untergewichten, Firmen mit nordamerikanisch integrierter Lieferkette reduzieren", auto=None,
+         reaktion="Autos untergewichten, Firmen mit nordamerikanisch integrierter Lieferkette reduzieren", auto=None, richtung="ic_bear", art="Risiko",
          quelle="Geopolitik"),
     dict(id="r_tail", name="Tail Risks (Weltkrieg ≈ 1 %, Pandemie 1–2 %, Bürgerkrieg < 0,5 %)", kapitel="geopolitik",
          p=2, p_text="je ≤ 2 %", impact=5,
          warnsignal="Artikel 5, Mobilmachung, Taiwan-Blockade; H5N1 ohne Tierkontakt oder WHO-Notstand; Gerichtsurteile nicht umgesetzt",
          reaktion="Keine Absicherung. Bei Warnsignal: Aktienquote senken, Cash und kurze Treasuries ↑ (Pandemie: Reisen verkaufen, Gesundheit und lange Treasuries ↑)",
-         auto=None, quelle="Extremrisiken"),
+         auto=None, quelle="Extremrisiken", richtung="ic_bear", art="Risiko"),
+    # Geopolitische Themen (bisher eigene Themen-Szenarien) – jetzt als Risiken und Chancen mit Richtung Bear/Bull
+    dict(id="r_iran_esk", name="Iran: Eskalation (Hormus zu)", kapitel="geopolitik", p=25, p_text="25 %", impact=4,
+         warnsignal="Angriffe auf Golf-Infrastruktur oder US-Truppen, Hormus faktisch zu, Brent > 110 USD",
+         reaktion="Zykliker reduzieren, Cash ↑, keine langen Treasuries; Energie, Gesundheit, Basiskonsum relativ besser",
+         auto="oel_hoch", richtung="ic_bear", art="Risiko", quelle="Geopolitik (Öl & Iran-Krieg)"),
+    dict(id="r_iran_deal", name="Iran: Entspannung (Deal)", kapitel="geopolitik", p=20, p_text="20 %", impact=3,
+         warnsignal="Iran öffnet Hormus und stoppt Angriffe auf Tanker, Brent < 85 USD",
+         reaktion="Energie-Übergewicht abbauen; Transport, zyklischer Konsum und längere Laufzeiten profitieren",
+         auto="oel_tief", richtung="ic_bull", art="Chance", quelle="Geopolitik (Öl & Iran-Krieg)"),
+    dict(id="r_china_esk", name="USA–China: Eskalation (Frist 10.01.)", kapitel="geopolitik", p=30, p_text="30 %", impact=3,
+         warnsignal="Handelsfrieden läuft aus, Exportverbot seltene Erden, schärfere Zölle und Chip-Kontrollen",
+         reaktion="Vor dem 10.01. keine neuen Wetten auf China-abhängige Titel; Halbleiter untergewichten, defensive Sektoren",
+         auto=None, richtung="ic_bear", art="Risiko", quelle="Geopolitik (USA–China)"),
+    dict(id="r_china_deal", name="USA–China: breiter Handels-Deal", kapitel="geopolitik", p=20, p_text="20 %", impact=3,
+         warnsignal="Breiterer Handels-Deal an G20 (15.12.) oder vor dem 10.01.",
+         reaktion="Halbleiter/IT und Industrie aufstocken, falls das Signal klar ist",
+         auto=None, richtung="ic_bull", art="Chance", quelle="Geopolitik (USA–China)"),
 ]
 RISIKO_BY_ID = {r["id"]: r for r in RISIKEN}
 
@@ -629,4 +682,106 @@ TERMINE = [
 NEUTRAL_DEFAULT = {"aktien": 45.0, "cash": 5.0, "duration": 3.5, "tips": 15.0}
 KORRIDOR = {"aktien": (40, 50), "treasuries": (45, 55), "cash": (0, 10)}  # Arbeitskorridor IC, zur Diskussion
 AKTIEN_MAX_ABWEICHUNG = 15  # PP
-SEKTOR_SCHWELLE = 0.5       # Score > 0,5 = übergewichten, < −0,5 = untergewichten
+SEKTOR_SCHWELLE = 0.25      # aktives Gewicht > 0,25 PP = übergewichtet, < −0,25 PP = untergewichtet
+
+# ---------------------------------------------------------------------------
+# Vorgaben der Simulation (Dozenten-App)
+# ---------------------------------------------------------------------------
+STARTKAPITAL = 10_000_000
+BENCHMARK = {"aktien": 50.0, "anleihen": 50.0, "cash": 0.0}            # Strategie des Dozenten
+DOZENT_BAND = {"aktien": (40, 60), "anleihen": (40, 60), "cash": (0, 10)}
+# Gewicht der Sektoren im S&P 500 (% der Aktien), Stand Dozenten-App Nov. 2026 – bei Änderung hier nachführen
+SP500_GEWICHT = {"Energie": 3.70, "Grundstoffe": 1.69, "Industrie": 8.11, "Zykl. Konsum": 9.24, "Basiskonsum": 4.76,
+                 "Gesundheit": 10.01, "Finanzen": 11.79, "IT": 37.88, "Kommunikation": 9.05, "Versorger": 2.03,
+                 "Immobilien": 1.75}
+GICS_CODE = {"Energie": 10, "Grundstoffe": 15, "Industrie": 20, "Zykl. Konsum": 25, "Basiskonsum": 30, "Gesundheit": 35,
+             "Finanzen": 40, "IT": 45, "Kommunikation": 50, "Versorger": 55, "Immobilien": 60}
+
+# Monate der Simulation: Frist = Börseneröffnung am ersten Handelstag (15:30 Schweizer Zeit)
+MONATE = [
+    dict(id="2026-12", name="Dezember 2026", frist="2026-12-01 15:30", fed_sitzung="09.12.2026"),
+    dict(id="2027-01", name="Januar 2027", frist="2027-01-04 15:30", fed_sitzung="27.01.2027"),
+    dict(id="2027-02", name="Februar 2027", frist="2027-02-01 15:30", fed_sitzung=None),
+]
+MONAT_BY_ID = {m["id"]: m for m in MONATE}
+IPS_FRIST = "2026-12-01 15:30"
+
+# Überzeugung in der Dozenten-App. Sichtbar ist «mittel (70 %)»; die anderen Stufen bitte mit der App abgleichen.
+UEBERZEUGUNG = [("tief", 55), ("mittel", 70), ("hoch", 85)]
+
+# Dozentenfragen. art: bereich (Zahl → 3 Antworten), fed (diskret), sektoren (3 oben / 3 unten)
+# groesse = Simulationsgrösse; optionen = (Text, untere Grenze, obere Grenze), Grenzen in der Einheit der Grösse
+FRAGEN = [
+    dict(nr=1, gruppe="Zwischen den Anlageklassen", titel="Rendite des S&P 500 (Total Return) im Monat", art="bereich",
+         groesse="sp500", einheit="%",
+         optionen=[("unter −2 %", None, -2), ("−2 % bis +2 %", -2, 2), ("über +2 %", 2, None)],
+         aufloesung="Yahoo: ^SP500TR, Schlusskurs des letzten Handelstags vor dem Monat bis Monatsende.",
+         portfolio="Aktienquote der Taktik gegen die Strategie."),
+    dict(nr=2, gruppe="Zwischen den Anlageklassen", titel="Aktien gegen Anleihen: Welche Klasse schneidet besser ab?",
+         art="bereich", groesse="aktien_minus_anleihen", einheit="PP",
+         optionen=[("Anleihen besser um mehr als 2 Punkte", None, -2), ("innerhalb von ±2 Punkten", -2, 2),
+                   ("Aktien besser um mehr als 2 Punkte", 2, None)],
+         aufloesung="Yahoo: S&P 500 Total Return gegen den Treasury-Index der App.",
+         portfolio="Aktien- gegen Anleihenquote der Taktik."),
+    dict(nr=3, gruppe="Zwischen den Anlageklassen", titel="Risikoappetit: VIX am Monatsende gegen Monatsanfang",
+         art="bereich", groesse="vix", einheit="Pkt.",
+         optionen=[("sinkt um mehr als 2 Punkte", None, -2), ("−2 bis +2 Punkte", -2, 2), ("steigt um mehr als 2 Punkte", 2, None)],
+         aufloesung="Yahoo: ^VIX, Monatsende gegen Monatsanfang.", portfolio="Aktienquote und defensive Sektoren."),
+    dict(nr=4, gruppe="Zinsen", titel="Entscheid der Fed: Obergrenze des Zielbands am Monatsende gegen Monatsanfang",
+         art="fed", groesse="fed", einheit="bp",
+         optionen=[("Senkung", None, -1), ("unverändert", -1, 1), ("Erhöhung", 1, None)],
+         aufloesung="FRED: DFEDTARU (nur Monate mit Sitzung).", portfolio="Duration der Anleihen gegen die Benchmark."),
+    dict(nr=5, gruppe="Zinsen", titel="Rendite 10-jähriger US-Staatsanleihen: Veränderung im Monat", art="bereich",
+         groesse="dgs10", einheit="bp",
+         optionen=[("fällt um mehr als 15 Basispunkte", None, -15), ("−15 bis +15 Basispunkte", -15, 15),
+                   ("steigt um mehr als 15 Basispunkte", 15, None)],
+         aufloesung="FRED: DGS10.", portfolio="Duration der Anleihen gegen die Benchmark."),
+    dict(nr=7, gruppe="Inflation und Wachstum", titel="US-Inflation (CPI gesamt, Jahresrate): Veröffentlichung im Monat gegen die vorherige",
+         art="bereich", groesse="cpi_yoy_diff", einheit="PP",
+         optionen=[("tiefer (−0.2 Punkte oder mehr)", None, -0.15), ("−0.1 bis +0.1 Punkte", -0.15, 0.15),
+                   ("höher (+0.2 Punkte oder mehr)", 0.15, None)],
+         aufloesung="Veröffentlichte Jahresrate (eine Nachkommastelle) gegen die vorherige Veröffentlichung.",
+         portfolio="TIPS-Anteil und Duration."),
+    dict(nr=10, gruppe="Rohstoffe und Währung", titel="Ölpreis (WTI): Veränderung im Monat", art="bereich", groesse="wti",
+         einheit="%", optionen=[("fällt um mehr als 5 %", None, -5), ("−5 % bis +5 %", -5, 5), ("steigt um mehr als 5 %", 5, None)],
+         aufloesung="Yahoo: CL=F.", portfolio="Gewicht des Sektors Energie gegen die Benchmark."),
+    dict(nr=12, gruppe="Innerhalb der Aktien", titel="Sektoren: Welche 3 der 11 Sektoren schlagen den S&P 500 am stärksten (oben), welche 3 am schwächsten (unten)?",
+         art="sektoren", groesse="sektoren", einheit="PP", optionen=[],
+         aufloesung="Yahoo: Sektorindizes (wie im Marktüberblick), Rang der Monatsrendite.",
+         portfolio="Aktive Sektorgewichte der Taktik."),
+    dict(nr=13, gruppe="Innerhalb der Aktien", titel="Stil: Wachstum gegen Substanz (Growth gegen Value)", art="bereich",
+         groesse="growth_value", einheit="PP",
+         optionen=[("Value besser um mehr als 1.5 Punkte", None, -1.5), ("innerhalb von ±1.5 Punkten", -1.5, 1.5),
+                   ("Growth besser um mehr als 1.5 Punkte", 1.5, None)],
+         aufloesung="Yahoo: IWF gegen IWD.", portfolio="Faktorprofil Growth und Value."),
+    dict(nr=14, gruppe="Innerhalb der Aktien", titel="Defensiv gegen zyklisch: Korb aus Basiskonsum, Gesundheit, Versorger gegen Korb aus Zyklischer Konsum, Industrie, Finanzen, Technologie",
+         art="bereich", groesse="def_minus_zykl", einheit="PP",
+         optionen=[("Defensive besser um mehr als 1.5 Punkte", 1.5, None), ("innerhalb von ±1.5 Punkten", -1.5, 1.5),
+                   ("Zyklische besser um mehr als 1.5 Punkte", None, -1.5)],
+         aufloesung="Yahoo: Sektorindizes.", portfolio="Sektorgewichte der Taktik."),
+]
+FRAGE_BY_NR = {f["nr"]: f for f in FRAGEN}
+ERWARTUNG_TICKER = ("^SP500TR", "IWF", "IWD", "GOVT", "IEI", "^IRX")  # zusätzlich zu den Markt-Tickern
+
+# Anleihen-Benchmark (Treasury-Index der Dozenten-App unbekannt → Näherung wählbar in «Einstellungen»)
+# Gewichte je Laufzeit-Stützstelle (Jahre)
+BOND_BENCHMARKS = {
+    "US-Treasury-Markt gesamt (≈ GOVT)": {1: 0.20, 2: 0.15, 3: 0.12, 5: 0.15, 7: 0.10, 10: 0.10, 20: 0.06, 30: 0.12},
+    "Treasuries 3–7 J. (≈ IEI)": {3: 0.35, 5: 0.40, 7: 0.25},
+    "Treasuries 1–3 J. (≈ SHY)": {1: 0.45, 2: 0.55},
+    "Treasuries 7–10 J. (≈ IEF)": {7: 0.40, 10: 0.60},
+}
+BOND_BENCHMARK_DEFAULT = "US-Treasury-Markt gesamt (≈ GOVT)"
+LAUFZEITEN = [0.25, 1, 2, 3, 5, 7, 10, 20, 30]
+
+# Worum es im Kapitel geht (Kurzzusammenfassung oben auf jeder Kapitelseite)
+KAPITEL_WORUM = {
+    "wachstum": "Wie stark wächst die US-Wirtschaft und wo stehen wir im Zyklus? Bestimmt, ob Aktien und zyklische Sektoren Rückenwind haben.",
+    "arbeitsmarkt": "Hält der Arbeitsmarkt? Ein kippender Arbeitsmarkt ist das wichtigste Rezessionssignal und verändert den Fed-Pfad.",
+    "inflation": "Wie hartnäckig ist die Inflation und was macht die Fed? Bestimmt Zinsen, Duration und TIPS-Anteil (Fragen 4 und 7).",
+    "zinsen": "Wo stehen die Renditen und die Zinskurve? Bestimmt Duration, Laufzeiten und die Konkurrenz für Aktien (Fragen 2 und 5).",
+    "kredit": "Wie locker sind die Finanzbedingungen, wie teuer ist Öl? Steigende Spreads warnen früh vor Risk-off (Frage 10).",
+    "konsum": "Kann der Konsum (≈ 70 % des BIP) mithalten? Schwacher Konsum trifft zyklischen Konsum und Gewinne.",
+    "gewinne": "Rechtfertigen Gewinne und Bewertung die Aktienkurse? Bestimmt Aktienquote, Stil und Sektoren (Fragen 1, 3, 12–14).",
+    "geopolitik": "Welche politischen Schocks können das Szenario kippen? Iran/Öl, USA–China, Cyber, Russland, Zölle und Tail Risks.",
+}

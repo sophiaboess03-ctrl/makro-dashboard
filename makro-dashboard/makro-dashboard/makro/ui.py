@@ -30,6 +30,12 @@ def css():
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap');
       .block-container {{padding-top: 2.4rem; padding-bottom: 4rem; max-width: 1360px;}}
       [data-testid="stDecoration"], .stAppDeployButton {{display: none;}}
+      @media print {{
+        section[data-testid="stSidebar"], header[data-testid="stHeader"], [data-testid="stSidebarCollapsedControl"],
+        .stButton, .stDownloadButton, iframe[height="40"], [data-testid="stToolbar"] {{display: none !important;}}
+        .block-container {{max-width: 100% !important; padding-top: 0 !important;}}
+        details {{display: block;}}
+      }}
       .kopf, .kpi, .karte, .badge, .signal, .ticker, .klein, .pill, .nutzer, .login {{font-family: {SCHRIFT};}}
 
       /* Seitenkopf */
@@ -325,26 +331,21 @@ def zyklus_chart(team: pd.DataFrame, modell: dict, hoehe=260):
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
 
 
-def szenario_chart(szen: pd.DataFrame, themen: list[str] | None = None, hoehe=None):
-    themen = themen or [t["id"] for t in C.THEMEN]
+def szenario_chart(szen: pd.DataFrame, themen=None, hoehe=None):
+    """Gestapelter Balken Base/Bull/Bear (gültige Wahrscheinlichkeiten)."""
     fig = go.Figure()
-    palette = [BLAU, GOLD, PETROL, "#A0A8B4"]
-    for t in themen:
-        d = szen[szen["thema"] == t]
-        for j, (_, r) in enumerate(d.iterrows()):
-            spanne = "" if r["n"] == 0 else f" · Team {r['p_min']:.0f}–{r['p_max']:.0f} % (n={r['n']})"
-            kurz = r["name"].replace("Basis: ", "").replace("Base: ", "Base: ")
-            kurz = kurz if len(kurz) <= 24 else kurz[:22] + "…"
-            text = f"{r['p']:.0f} %" if r["p"] < 30 else f"{kurz} · {r['p']:.0f} %"
-            fig.add_trace(go.Bar(y=[C.THEMA_BY_ID[t]["name"]], x=[r["p"]], orientation="h", name=r["name"],
-                                 marker=dict(color=palette[j % len(palette)], line=dict(color="white", width=1)),
-                                 text=text, textposition="inside", insidetextanchor="middle", textangle=0,
-                                 textfont=dict(size=11, color="white"), constraintext="none",
-                                 hovertemplate=f"{html.escape(r['name'])}: {r['p']:.0f} %{spanne} · {r['basis']}<extra></extra>"))
-    _layout(fig, hoehe or 70 + 62 * len(themen))
-    fig.update_layout(barmode="stack", hovermode="closest", uniformtext=dict(minsize=9, mode="show"))
+    for sid in szen.index:
+        r = szen.loc[sid]
+        spanne = "" if r["n"] == 0 else f" · Einzelschätzungen {r['p_min']:.0f}–{r['p_max']:.0f} % (n={r['n']})"
+        fig.add_trace(go.Bar(y=["Szenarien"], x=[r["p"]], orientation="h", name=r["name"],
+                             marker=dict(color=C.SZEN_FARBE.get(sid, BLAU), line=dict(color="white", width=1)),
+                             text=f"{r['kurz']} · {r['p']:.0f} %", textposition="inside", insidetextanchor="middle",
+                             textfont=dict(size=12, color="white"),
+                             hovertemplate=f"{html.escape(r['name'])}: {r['p']:.0f} %{spanne} · {html.escape(r['basis'])}<extra></extra>"))
+    _layout(fig, hoehe or 100)
+    fig.update_layout(barmode="stack", hovermode="closest")
     fig.update_xaxes(range=[0, 100], ticksuffix=" %")
-    fig.update_yaxes(autorange="reversed")
+    fig.update_yaxes(visible=False)
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
 
 
@@ -360,7 +361,7 @@ def risiko_matrix(ris: pd.DataFrame, hoehe=360):
         if len(grp) > 1:
             for k, idx in enumerate(grp.index):
                 d.loc[idx, "px"] = grp.loc[idx, "p"] + (k - (len(grp) - 1) / 2) * 3.5
-    farbe = np.where(d["signal"], FARBE[L.ROT], BLAU)
+    farbe = np.where(d["signal"], FARBE[L.ROT], np.where(d.get("art", pd.Series("Risiko", index=d.index)) == "Chance", FARBE[L.GRUEN], BLAU))
     spanne = [("" if r["n"] == 0 else f"<br>Team: {r['p_min']:.0f}–{r['p_max']:.0f} % (n={r['n']})") for _, r in d.iterrows()]
     fig.add_trace(go.Scatter(
         x=d["px"], y=d["impact"], mode="markers+text", text=[str(i + 1) for i in range(len(d))],
@@ -376,7 +377,7 @@ def risiko_matrix(ris: pd.DataFrame, hoehe=360):
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
     legende = " · ".join(f"**{i + 1}** {n}" for i, n in enumerate(d["name"]))
     st.markdown(f"<span class='klein'>{legende}</span>".replace("**", ""), unsafe_allow_html=True)
-    st.caption("Rot = Warnsignal aktiv (automatisch oder vom Team gemeldet). Punktgrösse = Wahrscheinlichkeit × Auswirkung.")
+    st.caption("Rot = Warnsignal aktiv (automatisch oder vom Team gemeldet), grün = Chance (Richtung Bull). Punktgrösse = Wahrscheinlichkeit × Auswirkung.")
 
 
 def sektor_chart(sek: pd.DataFrame, hoehe=360):
@@ -391,7 +392,7 @@ def sektor_chart(sek: pd.DataFrame, hoehe=360):
     m = max(1.5, float(d["score"].abs().max()) + 0.5)
     _layout(fig, hoehe)
     fig.update_layout(hovermode="closest")
-    fig.update_xaxes(range=[-m, m], title="Score (> +0,5 übergewichten · < −0,5 untergewichten)", zeroline=True,
+    fig.update_xaxes(range=[-m, m], title="Aktives Gewicht gegenüber S&P 500 (PP der Aktien)", zeroline=True,
                      zerolinecolor="#94A3B8")
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
 
@@ -406,3 +407,13 @@ def allokation_donut(aktien: float, neutral: float, cash: float = 0.0, neutral_c
                        showarrow=False, font=dict(size=16, color=INK))
     fig.update_layout(height=220, margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
     zeige(fig)
+
+
+def iframe_html(code: str, hoehe: int):
+    """HTML mit Skript einbetten (neue Streamlit-Versionen: st.iframe, ältere: components.html)."""
+    if hasattr(st, "iframe"):
+        st.iframe(code, height=max(1, int(hoehe)))
+    else:
+        import streamlit.components.v1 as components
+
+        components.html(code, height=hoehe)

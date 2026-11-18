@@ -245,6 +245,7 @@ def auto_warnsignale(st: pd.DataFrame, kombis: list[dict]) -> dict[str, tuple[bo
     k = {x["id"]: x["aktiv"] for x in kombis}
     fms = wert(st, "fms_cash")
     spar, nfib = wert(st, "sparquote"), wert(st, "nfib")
+    brent = wert(st, "brent")
     gruende_konsum = []
     if spar is not None and spar < 3.5:
         gruende_konsum.append("Sparquote < 3,5 %")
@@ -257,6 +258,8 @@ def auto_warnsignale(st: pd.DataFrame, kombis: list[dict]) -> dict[str, tuple[bo
     return {
         "fms_cash": (fms is not None and fms < 4.0, "Fondsmanager-Cash < 4 %" if fms is not None and fms < 4.0 else ""),
         "konsum": (bool(gruende_konsum), ", ".join(gruende_konsum)),
+        "oel_hoch": (brent is not None and brent > 110, f"Brent {brent:.0f} USD > 110" if brent is not None and brent > 110 else ""),
+        "oel_tief": (brent is not None and brent < 85, f"Brent {brent:.0f} USD < 85" if brent is not None and brent < 85 else ""),
     }
 
 
@@ -269,42 +272,7 @@ def _neuste_pro_person(df: pd.DataFrame, schluessel: str) -> pd.DataFrame:
     return df.sort_values("zeit").drop_duplicates(["person", schluessel], keep="last")
 
 
-def szenario_wahrscheinlichkeiten(votes: pd.DataFrame) -> pd.DataFrame:
-    """Pro Szenario: Team-Mittel (je Person pro Thema auf 100 % normiert), Min, Max, Anzahl, Startwert."""
-    v = _neuste_pro_person(votes, "szenario")
-    if not v.empty:
-        v = v.copy()
-        v["p"] = v["p"].map(zahl)
-        v = v.dropna(subset=["p"])
-        v["thema"] = v["szenario"].map(lambda s: C.SZEN_BY_ID.get(s, {}).get("thema"))
-        v = v.dropna(subset=["thema"])
-        summe = v.groupby(["person", "thema"])["p"].transform("sum")
-        v["p_norm"] = np.where(summe > 0, v["p"] / summe * 100, np.nan)
-    zeilen = []
-    for s in C.SZENARIEN:
-        d = v[v["szenario"] == s["id"]] if not v.empty else pd.DataFrame()
-        if len(d):
-            zeilen.append(dict(id=s["id"], thema=s["thema"], name=s["name"], p=d["p_norm"].mean(),
-                               p_min=d["p_norm"].min(), p_max=d["p_norm"].max(), n=len(d),
-                               start=s["p"], basis="Team"))
-        else:
-            zeilen.append(dict(id=s["id"], thema=s["thema"], name=s["name"], p=float(s["p"]), p_min=np.nan,
-                               p_max=np.nan, n=0, start=s["p"],
-                               basis="Startwert (Vorschlag)" if s.get("p_vorschlag") else "Startwert (Analyse)"))
-    df = pd.DataFrame(zeilen).set_index("id", drop=False)
-    # Je Thema: Mischung aus Team-Szenarien und Startwerten wieder auf 100 % bringen
-    df["p"] = df.groupby("thema")["p"].transform(lambda x: x / x.sum() * 100 if x.sum() > 0 else x)
-    df["uneinig"] = (df["p_max"] - df["p_min"]).fillna(0)
-    return df
-
-
-def risiko_bewertung(votes: pd.DataFrame, neue: pd.DataFrame, st: pd.DataFrame, kombis) -> pd.DataFrame:
-    risiken = list(C.RISIKEN)
-    if neue is not None and not neue.empty:
-        for _, r in neue.sort_values("zeit").drop_duplicates("id", keep="last").iterrows():
-            risiken.append(dict(id=r["id"], name=r["name"], kapitel=r["kapitel"] or "geopolitik", p=None, p_text="neu",
-                                impact=None, warnsignal=r["warnsignal"], reaktion=r["reaktion"], auto=None,
-                                quelle=f"Team ({r['person']})"))
+def risiko_bewertung(votes: pd.DataFrame, risiken: list[dict], st: pd.DataFrame, kombis) -> pd.DataFrame:
     v = _neuste_pro_person(votes, "risiko")
     if not v.empty:
         v = v.copy()
@@ -324,7 +292,8 @@ def risiko_bewertung(votes: pd.DataFrame, neue: pd.DataFrame, st: pd.DataFrame, 
                            p_min=d["p"].min() if len(d) else np.nan, p_max=d["p"].max() if len(d) else np.nan,
                            n=len(d), p_text=r["p_text"], warnsignal=r["warnsignal"], reaktion=r["reaktion"],
                            signal=team_signal or auto_aktiv, signal_team=wer_signal, signal_auto=auto_grund,
-                           basis="Team" if len(d) else "Startwert", quelle=r["quelle"]))
+                           basis="Team" if len(d) else "Startwert", quelle=r["quelle"],
+                           richtung=r.get("richtung", "ic_bear"), art=r.get("art", "Risiko")))
     df = pd.DataFrame(zeilen).set_index("id", drop=False)
     df["score"] = df["p"].fillna(0) / 100 * df["impact"].fillna(0)
     return df
@@ -395,7 +364,8 @@ def einstellungen(df: pd.DataFrame) -> dict:
     return out
 
 
-def allokation(st: pd.DataFrame, szen: pd.DataFrame, risiken: pd.DataFrame, kombis: list[dict], neutral: dict) -> dict:
+def signal_regeln(st: pd.DataFrame, risiken: pd.DataFrame, kombis: list[dict]) -> list[dict]:
+    """Was die Daten-Signale für die Taktik nahelegen (Orientierung, keine Empfehlung)."""
     regeln = []
     k = {x["id"]: x["aktiv"] for x in kombis}
 
@@ -409,13 +379,16 @@ def allokation(st: pd.DataFrame, szen: pd.DataFrame, risiken: pd.DataFrame, komb
         regeln.append(dict(name=name, aktiv=bool(aktiv), grund=grund, aktien=aktien, duration=duration, tips=tips,
                            sektoren=sektoren or {}, herkunft=herkunft))
 
+    def sig(rid):
+        return bool(risiken.loc[rid, "signal"]) if rid in risiken.index else False
+
     brent, erp = w("brent"), w("erp")
-    kreditstress = a("bb") == ROT or a("bbb") == ROT
-    regel("Kreditstress", kreditstress, "BB > 300 bp oder BBB > 150 bp", aktien=-10, duration=4.5)
+    regel("Kreditstress", a("bb") == ROT or a("bbb") == ROT, "BB > 300 bp oder BBB > 150 bp", aktien=-10, duration=4.5)
     regel("Kern-CPI heiss", a("kerncpi") == ROT, "Kern-CPI ≥ 0,4 % zum Vormonat", duration=2.5, tips=25)
-    regel("Öl ≥ 100 USD", brent is not None and brent >= 100, "Brent ≥ 100 USD", duration=2.5, tips=25)
+    regel("Öl ≥ 100 USD", brent is not None and brent >= 100, "Brent ≥ 100 USD", duration=2.5, tips=25,
+          sektoren={"Energie": 1})
     regel("Öl ≥ 110 USD", brent is not None and brent >= 110, "Brent ≥ 110 USD: Zykliker reduzieren, Cash ↑",
-          aktien=-5, sektoren={"Zykl. Konsum": -0.5, "Industrie": -0.5}, herkunft="Eure Aktion · Grösse: Vorschlag")
+          aktien=-5, sektoren={"Zykl. Konsum": -1, "Industrie": -1}, herkunft="Eure Aktion · Grösse: Vorschlag")
     regel("Öl < 85 USD", brent is not None and brent < 85, "Brent < 85 USD: Energie-Übergewicht abbauen",
           sektoren={"Energie": -1})
     regel("Arbeitsmarkt kippt", k.get("arbeitsmarkt_kippt"), "Quote ≥ 4,3 % und Stellen < 50'000", duration=4.5)
@@ -424,62 +397,19 @@ def allokation(st: pd.DataFrame, szen: pd.DataFrame, risiken: pd.DataFrame, komb
           aktien=-5, herkunft="Eure Aktion · Grösse: Vorschlag")
     regel("Finanzstress", a("nfci") == ROT or a("stlfsi") == ROT, "NFCI oder St. Louis-Index > 0 → Risk-off höher gewichten",
           aktien=-5, herkunft="Eure Aktion · Grösse: Vorschlag")
-    konsum = risiken.loc["r_konsum", "signal"] if "r_konsum" in risiken.index else False
-    regel("Warnsignal Konsumrückgang", konsum, "Sparquote < 3,5 %, Realkonsum 2 Mt. ≤ 0, ISM-Stagflation oder NFIB < 95",
-          sektoren={"Zykl. Konsum": -1, "Basiskonsum": 0.5, "Gesundheit": 0.5})
-    ki = risiken.loc["r_ki", "signal"] if "r_ki" in risiken.index else False
-    regel("Warnsignal KI-/Tech-Korrektur", ki, "Fondsmanager-Cash < 4 % oder vom Team gemeldet",
+    regel("Warnsignal Konsumrückgang", sig("r_konsum"), "Sparquote < 3,5 %, Realkonsum 2 Mt. ≤ 0, ISM-Stagflation oder NFIB < 95",
+          sektoren={"Zykl. Konsum": -1, "Basiskonsum": 1, "Gesundheit": 1})
+    regel("Warnsignal KI-/Tech-Korrektur", sig("r_ki"), "Fondsmanager-Cash < 4 % oder vom Team gemeldet",
           sektoren={"IT": -1}, herkunft="Eure Aktion · Grösse: Vorschlag")
-    prot = risiken.loc["r_protekt", "signal"] if "r_protekt" in risiken.index else False
-    regel("Warnsignal Protektionismus", prot, "Vom Team gemeldet: Autos untergewichten",
-          sektoren={"Zykl. Konsum": -0.5})
-    tail = risiken.loc["r_tail", "signal"] if "r_tail" in risiken.index else False
-    regel("Warnsignal Tail Risk", tail, "Vom Team gemeldet: Aktienquote senken, Cash und kurze Treasuries ↑",
+    regel("Warnsignal Protektionismus", sig("r_protekt"), "Vom Team gemeldet: Autos untergewichten",
+          sektoren={"Zykl. Konsum": -1})
+    regel("Warnsignal Iran-Eskalation", sig("r_iran_esk"), "Brent > 110 USD oder vom Team gemeldet",
+          aktien=-5, sektoren={"Energie": 1, "Zykl. Konsum": -1, "Industrie": -1}, duration=2.5)
+    regel("Warnsignal China-Eskalation", sig("r_china_esk"), "Vom Team gemeldet: Halbleiter/IT und Industrie meiden",
+          sektoren={"IT": -1, "Industrie": -1, "Versorger": 1})
+    regel("Chance Iran-Deal", sig("r_iran_deal"), "Brent < 85 USD oder vom Team gemeldet",
+          sektoren={"Energie": -1, "Industrie": 1, "Zykl. Konsum": 1})
+    regel("Chance China-Deal", sig("r_china_deal"), "Vom Team gemeldet", sektoren={"IT": 1, "Industrie": 1})
+    regel("Warnsignal Tail Risk", sig("r_tail"), "Vom Team gemeldet: Aktienquote senken, Cash und kurze Treasuries ↑",
           aktien=-10, duration=2.0, herkunft="Eure Aktion · Grösse: Vorschlag")
-    p_neg = szen.loc["g_neg", "p"] if "g_neg" in szen.index else 0
-    regel("Gewinne-Negativszenario ≥ 40 %", p_neg >= 40, f"Team-Wahrscheinlichkeit Negativ: {p_neg:.0f} %",
-          aktien=-5, sektoren={"IT": -0.5}, herkunft="Eure Aktion · Schwelle: Vorschlag")
-
-    aktive = [r for r in regeln if r["aktiv"]]
-
-    # Duration: Szenario-gewichtet (Zinsen & Inflation), gemittelt mit den Zielen aktiver Regeln
-    z = szen[szen["thema"] == "zinsen"]
-    dur_szen = sum(z.loc[i, "p"] / 100 * C.SZEN_BY_ID[i]["duration"] for i in z.index)
-    tips_szen = sum(z.loc[i, "p"] / 100 * C.SZEN_BY_ID[i]["tips"] for i in z.index)
-    dur_ziele = [r["duration"] for r in aktive if r["duration"] is not None]
-    duration = float(np.mean([dur_szen] + dur_ziele))
-    tips_ziele = [r["tips"] for r in aktive if r["tips"] is not None]
-    tips = max([tips_szen] + tips_ziele)
-    konflikt = bool(dur_ziele) and (max(dur_ziele) - min(dur_ziele + [dur_szen]) >= 1.5)
-
-    aktien_tilt = sum(r["aktien"] for r in aktive)
-    aktien_tilt = max(-C.AKTIEN_MAX_ABWEICHUNG, min(C.AKTIEN_MAX_ABWEICHUNG, aktien_tilt))
-    cash = max(0.0, min(100.0, neutral.get("cash", 0.0)))
-    aktien = max(0.0, min(100.0 - cash, neutral["aktien"] + aktien_tilt))
-    treasuries = 100.0 - aktien - cash
-    korridor = []
-    for name, wert_ in (("aktien", aktien), ("treasuries", treasuries), ("cash", cash)):
-        lo, hi = C.KORRIDOR[name]
-        if not lo <= wert_ <= hi:
-            korridor.append(f"{name.capitalize()} {wert_:.0f} % ausserhalb {lo}–{hi} %")
-
-    # Sektoren: Σ Wahrscheinlichkeit × Wirkung über alle Themen + aktive Regeln
-    sek = {s: 0.0 for s in C.SEKTOREN}
-    beitrag = {s: [] for s in C.SEKTOREN}
-    for sid, row in szen.iterrows():
-        for s_name, eff in C.SZEN_BY_ID[sid]["sektoren"].items():
-            b = row["p"] / 100 * eff
-            sek[s_name] += b
-            beitrag[s_name].append(f"{C.THEMA_BY_ID[row['thema']]['name']}: {row['name']} ({row['p']:.0f} % × {eff:+g})")
-    for r in aktive:
-        for s_name, eff in r["sektoren"].items():
-            sek[s_name] += eff
-            beitrag[s_name].append(f"Signal: {r['name']} ({eff:+g})")
-    sek_df = pd.DataFrame([dict(sektor=s, score=v, beitraege="; ".join(beitrag[s]) or "–") for s, v in sek.items()])
-    sek_df["empfehlung"] = np.where(sek_df["score"] > C.SEKTOR_SCHWELLE, "Übergewichten",
-                                    np.where(sek_df["score"] < -C.SEKTOR_SCHWELLE, "Untergewichten", "Neutral"))
-    sek_df = sek_df.sort_values("score", ascending=False)
-
-    return dict(neutral=neutral, aktien=aktien, aktien_tilt=aktien_tilt, anleihen=treasuries, cash=cash, korridor=korridor,
-                duration=duration, duration_szen=dur_szen, duration_ziele=dur_ziele, konflikt=konflikt,
-                tips=tips, tips_szen=tips_szen, regeln=regeln, sektoren=sek_df)
+    return regeln
