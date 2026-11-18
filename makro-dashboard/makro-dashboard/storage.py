@@ -33,6 +33,16 @@ TABELLEN = {
     "sektordaten": ["zeit", "person", "sektor", "feld", "wert", "quelle"],
     "analysen": ["zeit", "person", "id", "name", "eingabe", "kennzahlen", "notiz"],
     "signal_log": ["zeit", "person", "signale"],
+    # neu: Szenarien, Erwartungen, IPS, Taktik, Dokumente
+    "definitionen": ["zeit", "person", "bereich", "objekt", "feld", "wert"],
+    "szenario_beschluss": ["zeit", "person", "ic_base", "ic_bull", "ic_bear", "begruendung"],
+    "erwartungen": ["zeit", "person", "monat", "frage", "antwort", "ueberzeugung", "begruendung", "modell_p", "modell_antwort",
+                    "szenario_p"],
+    "ips": ["zeit", "person", "feld", "wert"],
+    "taktik": ["zeit", "person", "monat", "aktien", "anleihen", "cash", "sektoren", "duration", "tips", "laufzeiten",
+               "begruendung"],
+    "markt_erwartung": ["zeit", "person", "groesse", "wert", "quelle", "datum"],
+    "dateien": ["zeit", "person", "id", "bereich", "name", "typ", "groesse", "datei_id", "beschreibung", "geloescht"],
 }
 
 
@@ -68,6 +78,27 @@ class LocalStore:
 
 
 LocalStore.newsletter = lambda self: []
+
+
+def _lokal_datei_pfad(self, datei_id: str) -> str:
+    os.makedirs(os.path.join(self.ordner, "dateien"), exist_ok=True)
+    return os.path.join(self.ordner, "dateien", re.sub(r"[^A-Za-z0-9_.-]", "_", datei_id))
+
+
+def _lokal_hochladen(self, name: str, typ: str, inhalt: bytes, bereich: str) -> str:
+    datei_id = f"{datetime.now():%Y%m%d%H%M%S}_{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}"
+    with open(_lokal_datei_pfad(self, datei_id), "wb") as f:
+        f.write(inhalt)
+    return datei_id
+
+
+def _lokal_laden(self, datei_id: str) -> bytes:
+    with open(_lokal_datei_pfad(self, datei_id), "rb") as f:
+        return f.read()
+
+
+LocalStore.datei_hochladen = _lokal_hochladen
+LocalStore.datei_laden = _lokal_laden
 
 
 class SpeicherFehler(Exception):
@@ -132,6 +163,25 @@ class GoogleTabelleStore:
 
     def mail(self, empfaenger: list[str], betreff: str, html: str):
         self._rufe({"aktion": "mail", "empfaenger": empfaenger, "betreff": betreff, "html": html})
+
+    def datei_hochladen(self, name: str, typ: str, inhalt: bytes, bereich: str) -> str:
+        """Speichert die Datei im Google-Drive-Ordner «Makro-Dashboard Dokumente» (über das Skript). Gibt die Datei-ID zurück."""
+        import base64
+
+        try:
+            a = self._rufe({"aktion": "datei_hochladen", "name": name, "typ": typ or "application/octet-stream", "bereich": bereich,
+                            "inhalt": base64.b64encode(inhalt).decode("ascii")}, versuche=1)
+        except SpeicherFehler as e:
+            if "Unbekannte Aktion" in str(e):
+                raise SpeicherFehler("Das Google-Skript kennt das Hochladen noch nicht. Neuen Code aus google-script.txt einfügen, "
+                                     "Drive-Berechtigung erlauben und als «Neue Version» bereitstellen.") from None
+            raise
+        return a["datei_id"]
+
+    def datei_laden(self, datei_id: str) -> bytes:
+        import base64
+
+        return base64.b64decode(self._rufe({"aktion": "datei_laden", "datei_id": datei_id})["inhalt"])
 
     def anhaengen(self, tabelle: str, zeilen: list[dict]):
         kopf = TABELLEN[tabelle]

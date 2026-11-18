@@ -322,8 +322,8 @@ def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: 
     ak = float(pos.loc[pos["klasse"] == "Aktie", "wert"].sum()) / total * 100 if len(pos) else 0
     tr = float(pos.loc[pos["klasse"] == "Treasury", "wert"].sum()) / total * 100 if len(pos) else 0
     ca = cash / total * 100
-    for name, wert, (lo, hi) in (("Aktien", ak, C.KORRIDOR["aktien"]), ("Treasuries", tr, C.KORRIDOR["treasuries"]),
-                                 ("Cash", ca, C.KORRIDOR["cash"])):
+    for name, wert, (lo, hi) in (("Aktien", ak, alloc["baender"]["aktien"]), ("Treasuries", tr, alloc["baender"]["treasuries"]),
+                                 ("Cash", ca, alloc["baender"]["cash"])):
         out.append((L.GRUEN if lo <= wert <= hi else L.ROT,
                     f"{name} {ui.de(wert, 1)} % – IC-Korridor {lo}–{hi} %"))
     for _, z in pos[pos["klasse"] == "Aktie"].iterrows():
@@ -338,7 +338,7 @@ def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: 
         dur = float(sum(PROXY[b][1] * w for b, w in zip(t["band"], t["wert"])) / t["wert"].sum())
         ziel = alloc["duration"]
         out.append((L.GRUEN if abs(dur - ziel) <= 1 else L.GELB,
-                    f"Duration Treasuries ≈ {ui.de(dur, 1)} J. (ETF-Näherung) – Empfehlung {ui.de(ziel, 1)} J."))
+                    f"Duration Treasuries ≈ {ui.de(dur, 1)} J. (ETF-Näherung) – Taktik {ui.de(ziel, 1)} J."))
         lang = t[t["band"].isin(["10–20 J.", "20+ J."])]
         if len(lang):
             out.append((L.GELB, "Laufzeiten über 10 J. enthalten – Regel aus der Analyse: nichts > 10 J."))
@@ -351,7 +351,7 @@ def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: 
     for s, w in sorted(sek.items(), key=lambda x: -x[1]):
         e = emp.get(s)
         if e == "Untergewichten" and aw and w / aw > 0.15:
-            out.append((L.GELB, f"{s}: {ui.de(w / aw * 100, 0)} % des Aktienteils, Empfehlung «Untergewichten»"))
+            out.append((L.GELB, f"{s}: {ui.de(w / aw * 100, 0)} % des Aktienteils, Taktik «Untergewichtet»"))
     fehlt = [s for s, e in emp.items() if e == "Übergewichten" and s not in sek]
     if fehlt and aw and "Unbekannt" not in sek:
         out.append((L.GELB, "Empfohlene Übergewichte ohne Titel: " + ", ".join(fehlt)))
@@ -695,18 +695,18 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             zeilen = [{"Sektor": s, "Gewicht": _pct(gw.get(s, 0.0)),
                        "S&P 500": _pct(bm.get(s)) if bm.get(s) is not None else "–",
                        "Abweichung": f"{ui.de(gw.get(s, 0.0) - bm[s], 1, True)} PP" if bm.get(s) is not None else "–",
-                       "Empfehlung": emp.get(s, "–")} for s in C.SEKTOREN + (["Unbekannt"] if "Unbekannt" in gw.index else [])]
+                       "Taktik": emp.get(s, "–")} for s in C.SEKTOREN + (["Unbekannt"] if "Unbekannt" in gw.index else [])]
             st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch", height=430)
             if not bm:
                 st.caption("S&P-500-Sektorgewichte auf der Seite «Portfolio» unter «Einstellungen Portfolio» eintragen, "
                            "dann erscheint die Abweichung zum Index.")
         with c2:
-            st.markdown("**Anlageklassen vs. Empfehlung**")
+            st.markdown("**Anlageklassen vs. Taktik**")
             ist = [ak_w / total * 100, tr_w / total * 100, cash / total * 100]
             soll = [ctx.alloc["aktien"], ctx.alloc["anleihen"], ctx.alloc["cash"]]
             fig = go.Figure([go.Bar(name="Vorauswahl", x=["Aktien", "Treasuries", "Cash"], y=ist, marker_color=ui.BLAU,
                                     text=[f"{x:.0f} %" for x in ist], textposition="outside"),
-                             go.Bar(name="Empfehlung", x=["Aktien", "Treasuries", "Cash"], y=soll, marker_color=ui.STAHL,
+                             go.Bar(name="Taktik", x=["Aktien", "Treasuries", "Cash"], y=soll, marker_color=ui.STAHL,
                                     text=[f"{x:.0f} %" for x in soll], textposition="outside")])
             fig.update_layout(barmode="group", height=300, margin=dict(l=8, r=8, t=10, b=8))
             fig.update_yaxes(ticksuffix=" %")

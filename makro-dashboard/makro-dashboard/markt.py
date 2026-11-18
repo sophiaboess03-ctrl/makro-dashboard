@@ -431,7 +431,7 @@ def tagesupdate_saetze(tab: pd.DataFrame, alloc: dict | None, signale: int | Non
         if alloc is not None:
             emp = dict(zip(alloc["sektoren"]["sektor"], alloc["sektoren"]["empfehlung"]))
             if emp.get(top["name"], "Neutral") != "Neutral" or emp.get(flop["name"], "Neutral") != "Neutral":
-                txt += (f" Eure Empfehlung: {top['name']} {emp.get(top['name'], 'Neutral').lower()}, "
+                txt += (f" Eure Taktik: {top['name']} {emp.get(top['name'], 'Neutral').lower()}, "
                         f"{flop['name']} {emp.get(flop['name'], 'Neutral').lower()}.")
         s.append(txt)
     z = [x for x in (_teil(tab, "US-Treasury 2 J.", "2 J."), _teil(tab, "US-Treasury 10 J.", "10 J.")) if x]
@@ -537,10 +537,10 @@ def seite_maerkte(tab: pd.DataFrame, yahoo: dict, fred: dict, quelle_info: str, 
         t["rel"] = t[spalte] - (spx[spalte] if spx is not None and spx.get(spalte) is not None else np.nan)
         out = pd.DataFrame({"Sektor": t["name"], "ETF": t["ticker"], zeitraum: t[spalte].map(lambda x: _fmt_ver(x, "pct")),
                             "vs. S&P": t["rel"].map(lambda x: _fmt_ver(x, "pct").replace(" %", " PP")),
-                            "Eure Empfehlung": t["name"].map(lambda n: emp.get(n, "–"))})
+                            "Eure Taktik": t["name"].map(lambda n: emp.get(n, "–"))})
         out = out.iloc[t[spalte].fillna(-999).argsort()[::-1]]
         st.dataframe(out, hide_index=True, width="stretch", height=420)
-        st.caption("«Eure Empfehlung» kommt aus der Seite Allokation (Szenarien × Wirkung + Signale).")
+        st.caption("«Eure Taktik» kommt aus der Seite «Taktik» (aktives Gewicht gegenüber dem S&P 500).")
 
     st.subheader("Alle Kurse")
     tabs = st.tabs(list(MARKT.keys()))

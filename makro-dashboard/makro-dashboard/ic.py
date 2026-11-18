@@ -178,7 +178,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
             st.markdown(f"<span class='klein'>{BEGRUENDUNG}</span>", unsafe_allow_html=True)
         with c2:
             ui.zyklus_chart(ctx.zyklus_team, ctx.zyklus_modell, 240)
-            st.caption(f"Modell heute: {ctx.zyklus_modell['phase']} · Team-Einordnungen auf der Seite «Bewerten» anpassen.")
+            st.caption(f"Modell heute: {ctx.zyklus_modell['phase']} · Team-Einordnungen auf der Seite «Wachstum & Zyklus» anpassen.")
         st.subheader("Beweiskette – IC-Stand vs. heute")
         _html_tabelle(["Bereich", f"IC {STAND}", "Bedeutung", "Signal IC", "Heute (live)"],
                       [[f"<b>{html.escape(b)}</b>", html.escape(z), html.escape(m),
@@ -197,17 +197,17 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
     with t2:
         szen = ctx.szen[ctx.szen["thema"] == "gesamt"]
         st.subheader("Gemeinsame Szenarien Dez. 2026 – Feb. 2027")
-        ui.szenario_chart(ctx.szen, ["gesamt"], 120)
+        ui.szenario_chart(ctx.szen)
         cols = st.columns(3)
         for c, sid in zip(cols, ["ic_base", "ic_bull", "ic_bear"]):
-            s, r = C.SZEN_BY_ID[sid], szen.loc[sid]
+            s, r = ctx.szdef[sid], szen.loc[sid]
             spanne = f"Team {r['p_min']:.0f}–{r['p_max']:.0f} % (n={r['n']})" if r["n"] else "Startwert IC"
             with c.container(border=True):
                 st.markdown(f"**{html.escape(s['name'])}**  \n<span style='font-size:1.5rem; font-weight:700'>{r['p']:.0f} %</span> "
                             f"<span class='klein'>{spanne} · IC: {s['p']} %</span>", unsafe_allow_html=True)
                 st.markdown(f"<span class='klein'>{html.escape(s['annahmen'])}. {html.escape(s['folge'])}.</span>", unsafe_allow_html=True)
         st.caption("Subjektive Team-Arbeitshypothesen, an Marktpreisen zu spiegeln. Nicht mit den Fed-Wahrscheinlichkeiten oder den "
-                   "Themen-Szenarien addieren (Datenabgleich E). Wahrscheinlichkeiten ändern: Seite «Bewerten».")
+                   "Szenarien anderer Analysen addieren (Datenabgleich E). Wahrscheinlichkeiten und Parameter ändern: Seite «Szenarien».")
 
         st.subheader("Szenariorenditen und Portfolioquoten")
         st.markdown("Schritte (3) und (4) der nächsten Sitzung: erwartete Renditen je Szenario für die **nächsten 3 Monate** schätzen, "
@@ -235,7 +235,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
             r_s = {sid: (a * R[sid]["Aktien %"] + t * R[sid]["Treasuries %"] + cash * R[sid]["Cash %"]) / 100 for sid in R}
             er = sum(p[sid] * r_s[sid] for sid in r_s)
             sd = float(np.sqrt(sum(p[sid] * (r_s[sid] - er) ** 2 for sid in r_s)))
-            lo, hi = C.KORRIDOR["aktien"]
+            lo, hi = ctx.alloc["baender"]["aktien"]
             zeilen.append(dict(aktien=a, treasuries=t, cash=cash, er=er, base=r_s["ic_base"], bull=r_s["ic_bull"],
                                bear=r_s["ic_bear"], sd=sd, korridor=lo <= a <= hi))
         res = pd.DataFrame(zeilen)
@@ -252,8 +252,8 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
             })
             st.dataframe(out, hide_index=True, width="stretch")
             st.caption("Erwartete Rendite = Σ Wahrscheinlichkeit × Szenariorendite (3 Monate). Streuung = Standardabweichung über "
-                       "die drei Szenarien. Modell-Empfehlung heute: "
-                       f"{ctx.alloc['aktien']:.0f} % Aktien (Seite «Allokation»).")
+                       "die drei Szenarien. Taktik heute: "
+                       f"{ctx.alloc['aktien']:.0f} % Aktien (Seite «Taktik»).")
         with c2:
             fig = go.Figure(go.Scatter(x=res["bear"], y=res["er"], mode="markers+text", text=[f"{a} %" for a in res["aktien"]],
                                        textposition="top center", marker=dict(size=14, color=[ui.BLAU if k else "#94A3B8" for k in res["korridor"]]),
@@ -293,12 +293,12 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
             werte = [VOTUM_WERT.get(v, 0) for v in d["votum"]]
             konsens = "–" if not werte else ("Übergewicht" if np.mean(werte) > 0.33 else "Untergewicht" if np.mean(werte) < -0.33 else "Neutral")
             zeilen.append({"Sektor": s, "Voten Team": ", ".join(f"{p}: {v}" for p, v in zip(d["person"], d["votum"])) or "–",
-                           "Team-Konsens": konsens, "Modell (Allokation)": modell.get(s, "–").replace("gewichten", "gewicht"),
+                           "Team-Konsens": konsens, "Taktik": modell.get(s, "–").replace("gewichten", "gewicht"),
                            "Markt 1 Mt. vs. S&P": f"{ui.de(markt1m[s], 2, True)} PP" if s in markt1m else "–",
                            "IC-Sektorthema": SEKTORTHEMEN.get(s, "")})
         st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
-        abw = [z["Sektor"] for z in zeilen if z["Team-Konsens"] not in ("–", "Neutral") and z["Modell (Allokation)"] not in ("–",)
-               and z["Team-Konsens"] != z["Modell (Allokation)"]]
+        abw = [z["Sektor"] for z in zeilen if z["Team-Konsens"] not in ("–", "Neutral") and z["Taktik"] not in ("–",)
+               and z["Team-Konsens"] != z["Taktik"]]
         if abw:
             st.info("Team-Konsens weicht vom Modell ab bei: " + ", ".join(abw) + " – Begründung im Votum dokumentieren.")
 

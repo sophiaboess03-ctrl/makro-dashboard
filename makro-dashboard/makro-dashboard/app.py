@@ -31,6 +31,13 @@ import kalender
 import export
 import ic
 import analyse
+import anleihen
+import dateien
+import dozent
+import ips as ips_mod
+import szenarien_seite
+import taktik
+from makro import szenarien as SZ
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
 
@@ -97,12 +104,9 @@ def _aus_cookie() -> str | None:
 
 def _cookie_js(wert: str | None):
     """Setzt bzw. löscht das Login-Cookie im Browser (kleines unsichtbares Skript)."""
-    import streamlit.components.v1 as components
-
     attr = f"max-age={COOKIE_TAGE * 86400}" if wert else "max-age=0"
-    components.html(f"<script>try{{window.parent.document.cookie='{COOKIE}={wert or ''}; path=/; {attr}; SameSite=Lax; Secure';}}"
-                    f"catch(e){{document.cookie='{COOKIE}={wert or ''}; path=/; {attr}; SameSite=Lax; Secure';}}</script>",
-                    height=0)
+    ui.iframe_html(f"<script>try{{window.parent.document.cookie='{COOKIE}={wert or ''}; path=/; {attr}; SameSite=Lax; Secure';}}"
+                    f"catch(e){{document.cookie='{COOKIE}={wert or ''}; path=/; {attr}; SameSite=Lax; Secure';}}</script>", 0)
 
 
 def anmeldeseite():
@@ -274,8 +278,15 @@ if lese_fehler:
 yahoo, yahoo_fehler, yahoo_zeit = markt.lade_yahoo(markt.YAHOO)
 fred_roh = fred
 fred, labels = pipeline.mische_markt(fred_roh, yahoo)
-_r = pipeline.berechne(fred, labels, tabellen)
+hist, hist_fehler, _ = analyse.lade_historie(pipeline.HIST_TICKER, 6)
+_r = pipeline.berechne(fred, labels, tabellen, hist)
 daten, status, kombis, szen, risiken, alloc = _r["daten"], _r["status"], _r["kombis"], _r["szen"], _r["risiken"], _r["alloc"]
+try:
+    _fp = erwartungen.fed_pfad(fred)
+    _fed_markt = _fp["punkte"][0]["diff"] if _fp["punkte"] else None
+except Exception:  # noqa: BLE001
+    _fed_markt = None
+anker = SZ.daten_anker(fred, hist, status, _fed_markt)
 
 # ---------------------------------------------------------------------------
 # Seitenleiste: angemeldete Person, Status, Sicherung
@@ -327,7 +338,38 @@ if msg := st.session_state.pop("meldung", None):
 ctx = views.Ctx(daten=daten, status=status, kombis=kombis, szen=szen, risiken=risiken, alloc=alloc, tabellen=tabellen,
                 person=person, speichern=speichern, rezession=fred.get(C.REZESSION_SERIE), fred_fehler=fred_fehler,
                 fred_stand=f"FRED-Daten geladen {fred_zeit}", zyklus_team=L.zyklus_team(tabellen["zyklus_votes"]),
-                zyklus_modell=L.zyklus_modell(status))
+                zyklus_modell=L.zyklus_modell(status), szdef=_r["szdef"], gew=_r["gew"], lage=_r["lage"], ips=_r["ips"],
+                einst=_r["einst"], bond=_r["bond"], sig=_r["sig"], anker=anker, fred=fred, hist=hist,
+                erw_antworten={m["id"]: dozent.antworten_kurz(tabellen.get("erwartungen"), m["id"]) for m in C.MONATE},
+                store=store, nur_lesen=NUR_LESEN)
+MONAT_ARBEIT = _r["monat_arbeit"]
+
+
+def _prog(monat_id: str | None = None):
+    mid = monat_id or MONAT_ARBEIT["id"]
+    try:
+        p = dozent.prognose(ctx, mid)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Prognose für die Dozentenfragen nicht berechenbar: {e}")
+        return None
+    if p.get("sektoren_df") is not None:
+        ctx.erw_sim_sektoren[mid] = p["sektoren_df"]
+    return p
+
+
+def _seite_gesamtbild():
+    views.seite_gesamtbild(ctx, _prog(), MONAT_ARBEIT)
+
+
+def _seite_taktik():
+    for m in C.MONATE:
+        if m["id"] not in ctx.erw_sim_sektoren:
+            _prog(m["id"])
+    taktik.seite_taktik(ctx, ctx.bond)
+
+
+def _seite_eingepreist():
+    erwartungen.seite_erwartungen(ctx, fred, _prog())
 
 # ---------------------------------------------------------------------------
 # Märkte & News
@@ -370,8 +412,7 @@ def _seite_verbindung():
 # ---------------------------------------------------------------------------
 M = ":material/{}:".format
 seiten = {
-    "Überblick": [st.Page(partial(views.seite_gesamtbild, ctx), title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild",
-                          default=True),
+    "Überblick": [st.Page(_seite_gesamtbild, title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild", default=True),
                   st.Page(lambda: ic.seite_ic(ctx, markt_tab, TEAM), title="Investment Committee", icon=M("gavel"), url_path="ic"),
                   st.Page(_seite_portfolio, title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio"),
                   st.Page(lambda: analyse.seite_analyse(ctx, fred, markt.lade_yahoo), title="Analyse",
@@ -383,24 +424,29 @@ seiten = {
     ],
     "Kapitel": [st.Page(partial(views.seite_kapitel, ctx, k["id"]), title=k["name"], icon=k["icon"], url_path=k["id"])
                 for k in C.KAPITEL],
-    "Auswertung": [
-        st.Page(partial(views.seite_szenarien_risiken, ctx), title="Szenarien & Risiken", icon=M("alt_route"),
-                url_path="szenarien"),
-        st.Page(partial(views.seite_allokation, ctx), title="Allokation", icon=M("donut_large"), url_path="allokation"),
-        st.Page(lambda: erwartungen.seite_erwartungen(ctx, fred), title="Was ist eingepreist?", icon=M("query_stats"),
-                url_path="erwartungen"),
-        st.Page(partial(views.seite_termine, ctx), title="Termine", icon=M("event"), url_path="termine"),
+    "Szenarien": [
+        st.Page(lambda: szenarien_seite.seite_szenarien(ctx), title="Szenarien", icon=M("alt_route"), url_path="szenarien"),
+        st.Page(_seite_eingepreist, title="Was ist eingepreist?", icon=M("query_stats"), url_path="erwartungen"),
+        st.Page(lambda: szenarien_seite.seite_risiken(ctx), title="Risiken & Chancen", icon=M("warning"), url_path="risiken"),
     ],
-    "Team": [
-        st.Page(partial(views.seite_bewerten, ctx), title="Bewerten", icon=M("how_to_vote"), url_path="bewerten"),
-        st.Page(partial(views.seite_eintragen, ctx), title="Daten eintragen", icon=M("edit_note"), url_path="eintragen"),
+    "Entscheiden & Abgabe": [
+        st.Page(lambda: ips_mod.seite_ips(ctx, hist, ctx.gew, ctx.szdef, ctx.bond), title="IPS", icon=M("policy"), url_path="ips"),
+        st.Page(lambda: dozent.seite_erwartungen(ctx), title="Erwartungen (Dozent)", icon=M("quiz"), url_path="dozent"),
+        st.Page(_seite_taktik, title="Taktik", icon=M("donut_large"), url_path="taktik"),
+        st.Page(lambda: anleihen.seite_anleihen(ctx, fred), title="Anleihen & Duration", icon=M("stacked_line_chart"),
+                url_path="anleihen"),
         st.Page(lambda: entscheide.seite_entscheide(ctx, TEAM), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
         st.Page(_seite_bericht, title="Berichte", icon=M("description"), url_path="bericht"),
+    ],
+    "Team": [
+        st.Page(partial(views.seite_eintragen, ctx), title="Daten eintragen", icon=M("edit_note"), url_path="eintragen"),
+        st.Page(lambda: dateien.seite_dokumente(ctx), title="Dokumente", icon=M("folder_open"), url_path="dokumente"),
+        st.Page(partial(views.seite_termine, ctx), title="Termine", icon=M("event"), url_path="termine"),
         st.Page(partial(views.seite_protokoll, ctx), title="Protokoll", icon=M("history"), url_path="protokoll"),
         st.Page(partial(views.seite_einstellungen, ctx), title="Einstellungen", icon=M("tune"), url_path="einstellungen"),
         st.Page(_seite_verbindung, title="Verbindung", icon=M("cable"), url_path="verbindung"),
     ],
 }
 if NUR_LESEN:  # Lesezugriff: keine Eingabeseiten
-    seiten["Team"] = [p for p in seiten["Team"] if p.url_path in ("entscheide", "bericht", "protokoll")]
+    seiten["Team"] = [p for p in seiten["Team"] if p.url_path in ("dokumente", "protokoll", "termine")]
 st.navigation(seiten, expanded=True).run()

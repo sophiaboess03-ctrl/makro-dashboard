@@ -22,12 +22,12 @@ def excel(tabellen: dict, status: pd.DataFrame, alloc: dict, szen: pd.DataFrame,
         uebersicht = pd.DataFrame([
             ("Stand", datetime.now().strftime("%d.%m.%Y %H:%M")),
             ("Exportiert von", person),
-            ("Empfehlung Aktien / Treasuries / Cash", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %"),
-            ("Empfehlung Duration", f"{ui.de(a['duration'], 1)} J."),
-            ("Empfehlung TIPS-Anteil", f"{a['tips']:.0f} %"),
-            ("Übergewichten", ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "–"),
-            ("Untergewichten", ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"]) or "–"),
-        ] + [(f"Szenario {C.THEMA_BY_ID[r['thema']]['name']}: {r['name']}", f"{r['p']:.0f} %") for _, r in szen.iterrows()],
+            ("Taktik Aktien / Anleihen / Cash", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %"),
+            ("Taktik Duration", f"{ui.de(a['duration'], 1)} J."),
+            ("Taktik TIPS-Anteil", f"{a['tips']:.0f} %"),
+            ("Übergewichtet", ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "–"),
+            ("Untergewichtet", ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"]) or "–"),
+        ] + [(f"Szenario {r['name']}", f"{r['p']:.0f} %") for _, r in szen.iterrows()],
             columns=["Feld", "Wert"])
         uebersicht.to_excel(xw, sheet_name="Übersicht", index=False)
         ind = status[["name", "anzeige", "ampel", "trend", "datum", "herkunft", "person", "quelle1", "quelle2", "schwelle"]].copy()

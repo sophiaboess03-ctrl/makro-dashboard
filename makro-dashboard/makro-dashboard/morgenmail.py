@@ -79,7 +79,7 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
 
     ow = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "–"
     uw = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"]) or "–"
-    teile.append(f"<h3 style='color:#1F4E8C'>Empfehlung (regelbasiert)</h3><p>Aktien {a['aktien']:.0f} % · Treasuries "
+    teile.append(f"<h3 style='color:#1F4E8C'>Taktik des Teams</h3><p>Aktien {a['aktien']:.0f} % · Treasuries "
                  f"{a['anleihen']:.0f} % · Cash {a['cash']:.0f} % · Duration {ui.de(a['duration'], 1)} J. · TIPS {a['tips']:.0f} %<br>"
                  f"Übergewichten: {html.escape(ow)} · Untergewichten: {html.escape(uw)}</p>")
 
@@ -114,7 +114,7 @@ def baue_mail(store, api_key: str | None, app_url: str | None) -> tuple[str, str
     body = (f"<div style='font-family:Arial,sans-serif;font-size:14px;max-width:720px'>"
             f"<h2>Makro-Update USA – {datum}</h2>{''.join(teile)}{link}"
             f"<p style='color:#6B7685;font-size:11px'>Automatisch erstellt aus dem Team-Dashboard (FRED, Yahoo Finance, "
-            f"Google News). Regelbasierte Empfehlung – kein Teamentscheid.</p></div>")
+            f"Google News). Taktik = vom Team erfasst (Seite «Taktik»).</p></div>")
     return f"Makro-Update USA {datum}: {len(neu_rot)} neue rote Signale", body
 
 

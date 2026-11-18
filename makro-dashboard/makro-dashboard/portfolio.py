@@ -225,9 +225,9 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
         ("Portfoliowert", _usd(total), f"Startkapital {_usd(kapital)}"),
         ("Rendite gesamt", f"{ui.de(rendite_tot, 2, True)} %", spx_txt),
         ("Aktien / Treasuries / Cash", f"{aktien / total * 100:.0f} / {treas / total * 100:.0f} / {cash / total * 100:.0f} %" if total else "–",
-         f"Empfehlung {ctx.alloc['aktien']:.0f} / {ctx.alloc['anleihen']:.0f} / {ctx.alloc['cash']:.0f} %"),
+         f"Taktik {ctx.alloc['aktien']:.0f} / {ctx.alloc['anleihen']:.0f} / {ctx.alloc['cash']:.0f} %"),
         ("Duration Treasuries", f"{ui.de(_wdur(b), 1)} J." if treas else "–",
-         f"Empfehlung {ui.de(ctx.alloc['duration'], 1)} J. · IC um 3,5 J."),
+         f"Taktik {ui.de(ctx.alloc['duration'], 1)} J. · IPS {ui.de(ctx.ips['duration_min'], 0)}–{ui.de(ctx.ips['duration_max'], 0)} J."),
     ])
     if not len(tx):
         st.info("Noch keine Transaktionen erfasst. Unten die erste Transaktion eintragen – ab dann rechnet die App Gewichte, "
@@ -237,9 +237,9 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
 
     if total and len(tx):
         warn = []
-        for name, wert_, (lo, hi) in (("Aktien", aktien / total * 100, C.KORRIDOR["aktien"]),
-                                     ("Treasuries", treas / total * 100, C.KORRIDOR["treasuries"]),
-                                     ("Cash", cash / total * 100, C.KORRIDOR["cash"])):
+        for name, wert_, (lo, hi) in (("Aktien", aktien / total * 100, ctx.alloc["baender"]["aktien"]),
+                                     ("Treasuries", treas / total * 100, ctx.alloc["baender"]["treasuries"]),
+                                     ("Cash", cash / total * 100, ctx.alloc["baender"]["cash"])):
             if not lo <= wert_ <= hi:
                 warn.append(f"{name} {ui.de(wert_, 1)} % (Korridor {lo}–{hi} %)")
         if cash < -1:
@@ -274,12 +274,12 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
     with t2:
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**Anlageklassen: Ist vs. Empfehlung**")
+            st.markdown("**Anlageklassen: Ist vs. Taktik**")
             ist = [aktien / total * 100 if total else 0, treas / total * 100 if total else 0, cash / total * 100 if total else 0]
             soll = [ctx.alloc["aktien"], ctx.alloc["anleihen"], ctx.alloc["cash"]]
             fig = go.Figure([go.Bar(name="Ist", x=["Aktien", "Treasuries", "Cash"], y=ist, marker_color=ui.BLAU,
                                     text=[f"{x:.0f} %" for x in ist], textposition="outside"),
-                             go.Bar(name="Empfehlung", x=["Aktien", "Treasuries", "Cash"], y=soll, marker_color="#94A3B8",
+                             go.Bar(name="Taktik", x=["Aktien", "Treasuries", "Cash"], y=soll, marker_color="#94A3B8",
                                     text=[f"{x:.0f} %" for x in soll], textposition="outside")])
             fig.update_layout(barmode="group", height=300, margin=dict(l=8, r=8, t=10, b=8), plot_bgcolor="white",
                               legend=dict(orientation="h", y=-0.15))
@@ -300,7 +300,7 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                 passt = "–" if diff is None else ("✓" if (richtung, e) in (("Über", "Über"), ("Unter", "Unter"), ("Neutral", "Neutral")) else "≠")
                 zeilen.append({"Sektor": s, "Ist": f"{ui.de(g, 1)} %", "Benchmark": f"{ui.de(ref, 1)} %" if ref is not None else "–",
                                "Abweichung": f"{ui.de(diff, 1, True)} PP" if diff is not None else "–",
-                               "Empfehlung": e, "Passt": passt})
+                               "Taktik": e, "Passt": passt})
             st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch", height=420)
             if not bm:
                 st.caption("Für die Abweichung zum S&P 500 unten unter «Einstellungen Portfolio» die aktuellen Sektorgewichte "
@@ -597,7 +597,7 @@ def transaktionen_pdf(liste: pd.DataFrame, b: pd.DataFrame, cash, total, kapital
         f"Stand {pd.Timestamp.today():%d.%m.%Y}, erstellt von {ctx.person}. Portfoliowert {ui.de(total, 0)} USD "
         f"({ui.de(r, 2, True)} % seit Start, Startkapital {ui.de(kapital, 0)} USD). Aktien {ui.de(aktien / total * 100 if total else 0, 1)} % · "
         f"Treasuries {ui.de(treas / total * 100 if total else 0, 1)} % · Cash {ui.de(cash / total * 100 if total else 0, 1)} %. "
-        f"Empfehlung Dashboard: {ctx.alloc['aktien']:.0f} / {ctx.alloc['anleihen']:.0f} / {ctx.alloc['cash']:.0f} %."),
+        f"Taktik des Teams: {ctx.alloc['aktien']:.0f} / {ctx.alloc['anleihen']:.0f} / {ctx.alloc['cash']:.0f} %."),
         new_x="LMARGIN", new_y="NEXT")
 
     if len(b):
@@ -711,7 +711,7 @@ def zusammenfassung(tabellen: dict, fred: dict, lade_kurse, alloc: dict) -> dict
     total = ak + tr + cash + (float(b["zins"].sum()) if len(b) else 0.0)
     r = (total / kapital - 1) * 100
     text = (f"Portfoliowert {ui.de(total, 0)} USD ({ui.de(r, 2, True)} % seit Start). Aktien {ak / total * 100:.1f} %, "
-            f"Treasuries {tr / total * 100:.1f} %, Cash {cash / total * 100:.1f} % (Empfehlung {alloc['aktien']:.0f} / "
+            f"Treasuries {tr / total * 100:.1f} %, Cash {cash / total * 100:.1f} % (Taktik {alloc['aktien']:.0f} / "
             f"{alloc['anleihen']:.0f} / {alloc['cash']:.0f}). Duration Treasuries {ui.de(_wdur(b), 1)} J. "
             f"{len(b)} Positionen.")
     return dict(text=text, total=total, rendite=r)

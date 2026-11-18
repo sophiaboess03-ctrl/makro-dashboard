@@ -115,19 +115,26 @@ Secrets später ändern: in der App unten rechts **Manage app → ⋮ → Settin
 
 ## Bedienung
 
-- **Gesamtbild:** Übersicht über Zyklus, Ampeln, Signale, Allokation, Szenarien, Risiken und Termine.
-- **Kapitelseiten:** Kennzahlen, Charts, Annahmen, Aktionen und Notizen je Kapitel der Makroanalyse.
-- **Daten eintragen:** Werte, die nicht automatisch kommen (ISM, Conference Board, NFIB, BofA-Umfrage, Forward-KGV, Forward-EPS, DXY), immer mit 2 Quellen. Die Tabelle «Fällige Updates» zeigt, was veraltet ist.
-- **Bewerten:** Jede Person schätzt Szenarien, Risiken und den Zyklus. Die App mittelt automatisch.
-- **Allokation:** Empfehlung für Aktienquote, Duration, TIPS-Anteil und Sektoren, mit Herleitung jeder Zahl.
-- **Einstellungen:** Neutrale Aktienquote per Regler.
+**Logik in einem Satz:** Kapitel (Daten) → Szenarien (Base/Bull/Bear mit Zahlen und Wahrscheinlichkeiten) → Erwartungen (Dozentenfragen) und Taktik (Allokation pro Monat) → Anleihen-Tool und Entscheide. Alles, was ihr irgendwo eintragt, wirkt sofort im ganzen Dashboard.
 
-FRED-Daten (BIP, Arbeitsmarkt, Inflation, Zinsen, Spreads, Öl usw.) werden automatisch alle 6 Stunden geladen. Für alle Werte gilt: Der Eintrag mit dem **neusten Datum** zählt.
+- **Gesamtbild:** Hauptszenario, Fristen (IPS, Taktik, Erwartungen), Szenario-Werte, Erwartungen des Monats, Taktik, Signale, Kapitel-Kurzfazits, Risiken, Zyklus, Termine.
+- **Kapitelseiten:** oben «Kurz zusammengefasst» (worum es geht, was die Zahlen sagen, welches Szenario sie stützen), dann Fazit, Kennzahlen, Charts, Bezug zu Szenarien und Risiken, Notizen und **Dokumente** (Analysen hochladen und öffnen). Auf «Wachstum & Zyklus» gebt ihr auch eure Zyklus-Einordnung ab.
+- **Szenarien:** Base/Bull/Bear mit Monatswerten (S&P 500, Fed, 2 J., 10 J., CPI, WTI, VIX, Growth/Value, Sektoren …). Einzelschätzung jeder Person + Team-Beschluss (der gilt). «Datenlage» zeigt, welche Indizien heute erfüllt sind und ob die Daten ein anderes Szenario stützen.
+- **Was ist eingepreist?** Markt gegen eure gewichtete Sicht, jede Zahl mit Quelle (FRED-Links, CME FedWatch als Team-Eintrag).
+- **Risiken & Chancen:** jedes Risiko mit Richtung (Bear/Bull); ein ausgelöstes Warnsignal zählt in der Datenlage des Szenarios. Hier wird auch bewertet.
+- **IPS:** alle Felder der Dozenten-App mit Prüfung (Bänder, Summen, leere Felder, Volatilität). Speist neutralen Anker, Bänder und Duration-Grenzen.
+- **Erwartungen (Dozent):** die 10 Monatsfragen, Wahrscheinlichkeit jeder Antwort aus den Szenarien, Vorschlag für Antwort und Überzeugung, eure Antwort mit Begründung, Hauptszenario, Auflösung nach Monatsende.
+- **Taktik:** Aktien/Anleihen/Cash und 11 Sektor-Zielgewichte wie in der Dozenten-App, plus Duration, TIPS, Begründung. Prüfung gegen IPS und Dozenten-Bandbreiten, Orientierung aus Szenarien, Signalen und Erwartungen.
+- **Anleihen & Duration:** Zinskurve, Carry/Roll, Markt-Forward gegen eure Erwartung, Laufzeiten-Plan gegen Benchmark, DV01, Stresstest und Ideen für Mehrrendite.
+- **PDF:** Oben auf jeder Seite «PDF dieser Seite» (Bericht im Dashboard-Design) oder «Ansicht drucken» (Browser → Als PDF speichern).
+- **Daten eintragen:** Werte, die nicht automatisch kommen, immer mit 2 Quellen.
+
+---
 
 ## Bitte im Team prüfen
 
-- **Schwellen «Vorschlag»:** Die Schwellen bei den Indikatoren, die Claude ergänzt hat, sind in der App als «Vorschlag» markiert.
-- **Grösse der Allokations-Signale:** Wo die Analyse nur eine Richtung nennt, steht auf der Seite «Allokation» «Grösse: Vorschlag».
-- **Startwerte «Gewinne & Bewertung»:** Für diese Szenarien gilt 25/50/25 %, bis ihr selbst bewertet.
-
-Inhalte wie Schwellen und Szenarien stehen in `makro/config.py`, die Allokationsregeln in `makro/logic.py`. Für Änderungen frag am einfachsten Claude.
+- **Szenario-Werte:** Die Monatswerte von Base/Bull/Bear sind Startwerte (Richtung aus IC-Statement und Themen-Szenarien, Höhe Vorschlag Claude). Auf der Seite «Szenarien» anpassen.
+- **Überzeugungs-Stufen:** In der App stehen tief 55 % / mittel 70 % / hoch 85 %. Sichtbar war nur «mittel (70 %)» – bitte mit der Dozenten-App abgleichen und in `makro/config.py` (UEBERZEUGUNG) korrigieren.
+- **Anleihen-Benchmark:** Den genauen Treasury-Index der Dozenten-App kennen wir nicht. Unter «Einstellungen» wählbar (Standard: gesamter Treasury-Markt ≈ GOVT).
+- **IPS-Startwerte:** 45/50/5 mit Bändern 40–50 / 45–55 / 0–10 aus dem IC-Statement, Rest wie in der Dozenten-App vorgeschlagen.
+- **Schwellen «Vorschlag»:** bei den von Claude ergänzten Indikatoren in der App markiert.

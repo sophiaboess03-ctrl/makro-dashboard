@@ -41,7 +41,7 @@ def liste(df: pd.DataFrame) -> pd.DataFrame:
 
 def seite_entscheide(ctx, team: list[str]):
     ui.seitenkopf("Entscheidungsprotokoll", "Jeder Teamentscheid mit Begründung, zwei Quellen und Gegenargument. Beim Speichern hält die App automatisch "
-               "fest, was das Dashboard in diesem Moment zeigte (Empfehlung, rote Indikatoren, Szenarien) – so bleibt "
+               "fest, was das Dashboard in diesem Moment zeigte (Taktik, rote Indikatoren, Szenarien) – so bleibt "
                "nachvollziehbar, auf welcher Datenlage entschieden wurde.")
     d = liste(ctx.tabellen.get("entscheide"))
 
@@ -101,7 +101,7 @@ def seite_entscheide(ctx, team: list[str]):
                 kz = " · ".join(C.IND_BY_ID[k]["name"].split(" (")[0] + " " + str(v) for k, v in sn["kennzahlen"].items())
                 sz = ", ".join(f"{k}: {v} %" for k, v in sn["szenarien_ic"].items())
                 st.markdown(f"<div class='klein' style='background:#F5F6F8; padding:8px; border-radius:6px'>"
-                            f"<b>Datenlage beim Entscheid ({sn['stand'][:10]}):</b> Empfehlung {html.escape(sn['empfehlung'])} · "
+                            f"<b>Datenlage beim Entscheid ({sn['stand'][:10]}):</b> Taktik {html.escape(sn['empfehlung'])} · "
                             f"Zyklus {html.escape(sn['zyklus'])} · Szenarien {html.escape(sz)}<br>"
                             f"Kennzahlen: {html.escape(kz)}<br>"
                             f"Rote Indikatoren: {html.escape(', '.join(sn['rote_indikatoren']) or 'keine')}</div>",

@@ -233,10 +233,10 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
                 ("Ampeln Rot / Gelb / Grün", f"{z.get('Rot', 0)} / {z.get('Gelb', 0)} / {z.get('Grün', 0)}",
                  f"von {len(ctx.status)} Indikatoren"),
                 ("Aktive Signale", str(len(signale)), "Indikatoren, Kombis, Risiken"),
-                ("Empfehlung A / T / C", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %",
+                ("Taktik A / A / C", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %",
                  f"Duration {a['duration']:.1f} J.  -  TIPS {a['tips']:.0f} %")])
 
-    _titel(pdf, "1. Gesamtempfehlung")
+    _titel(pdf, "1. Taktik des Teams")
     ow = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "-"
     uw = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"]) or "-"
     _text(pdf, f"Aktien {a['aktien']:.0f} % / Treasuries {a['anleihen']:.0f} % / Cash {a['cash']:.0f} % "
@@ -244,7 +244,7 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
                f"{a['neutral'].get('cash', 0):.0f}). Duration {a['duration']:.1f} J., TIPS {a['tips']:.0f} % der Anleihen.")
     _text(pdf, f"Übergewichten: {ow}. Untergewichten: {uw}.")
     if a["korridor"]:
-        _text(pdf, "Ausserhalb IC-Korridor: " + "; ".join(a["korridor"]), fett=True)
+        _text(pdf, "Ausserhalb IPS-Band: " + "; ".join(a["korridor"]), fett=True)
     aktiv = [r for r in a["regeln"] if r["aktiv"]]
     if aktiv:
         _tabelle(pdf, ["Aktives Signal", "Auslöser", "Wirkung"],
@@ -258,13 +258,10 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
     for s in signale[:15]:
         _text(pdf, f"- {s['titel']}: {s['text']}")
 
-    _titel(pdf, "3. Szenarien (Team-Wahrscheinlichkeiten)")
-    rows = []
-    for t in C.THEMEN:
-        d = ctx.szen[ctx.szen["thema"] == t["id"]]
-        rows.append([t["name"], " | ".join(f"{r['name']}: {r['p']:.0f} %" for _, r in d.iterrows()),
-                     "Team" if d["n"].max() else "Startwert"])
-    _tabelle(pdf, ["Thema", "Szenarien", "Basis"], rows, (45, 125, 20))
+    _titel(pdf, "3. Szenarien")
+    rows = [[ctx.szdef[s]["name"], f"{ctx.szen.loc[s, 'p']:.0f} %", ctx.szdef[s]["narrativ"][:150]] for s in ctx.szdef]
+    _tabelle(pdf, ["Szenario", "W.", "Kurzbeschreibung"], rows, (55, 15, 120))
+    _text(pdf, ctx.szen["basis"].iloc[0], gross=7.5, farbe=MUTED)
 
     _titel(pdf, "4. Risiken")
     _tabelle(pdf, ["Risiko", "W.", "Ausw.", "Warnsignal"],
@@ -315,7 +312,7 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
                      (30, 80, 80))
     pdf.ln(4)
     _text(pdf, "Automatisch erstellt aus dem Team-Dashboard. Werte mit Quelle «Analyse (Startwert)» stammen aus der "
-               "Makroanalyse; automatische Daten: FRED, Yahoo Finance. Regelbasierte Empfehlung - kein Teamentscheid.", gross=7,
+               "Makroanalyse; automatische Daten: FRED, Yahoo Finance. Taktik = Teameingabe (Seite Taktik).", gross=7,
           farbe=MUTED)
     return bytes(pdf.output())
 
@@ -380,12 +377,12 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
 
     # 1 These
     pdf.add_page()
-    _titel(pdf, "1. Makrothese und Gesamtempfehlung")
+    _titel(pdf, "1. Makrothese und Taktik")
     _text(pdf, ic.URTEIL.replace("**", ""))
     pdf.ln(1)
     _text(pdf, ic.BEGRUENDUNG, farbe=MUTED)
     a = ctx.alloc
-    _kpis(pdf, [("Empfehlung Aktien / Treas. / Cash", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %",
+    _kpis(pdf, [("Taktik Aktien / Anl. / Cash", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %",
                  f"neutral {a['neutral']['aktien']:.0f} / {100 - a['neutral']['aktien'] - a['neutral'].get('cash', 0):.0f} / "
                  f"{a['neutral'].get('cash', 0):.0f} %"),
                 ("Duration", f"{ui.de(a['duration'], 1)} J.", f"TIPS {a['tips']:.0f} % der Treasuries"),
@@ -455,14 +452,13 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
 
     # 6 Einschätzungen
     _titel(pdf, "6. Verlauf der Einschätzungen")
-    v = views.szenario_verlauf_df(tab.get("szenario_votes"))
+    v = views.szenario_verlauf_df(tab.get("szenario_votes"), tab.get("szenario_beschluss"))
     zeilen = []
-    for t in C.THEMEN:
-        for sid, g in v[v["thema"] == t["id"]].groupby("id", sort=False):
-            g = g.sort_values("tag")
-            zeilen.append([t["name"], g["name"].iloc[0], f"{g['p'].iloc[0]:.0f} %", f"{g['p'].iloc[-1]:.0f} %",
-                           f"{g['p'].iloc[-1] - g['p'].iloc[0]:+.0f} PP", str(len(g) - 1)])
-    _tabelle(pdf, ["Thema", "Szenario", "Start (IC)", "Heute", "Veränderung", "Updates"], zeilen, (40, 62, 18, 16, 22, 14), gross=7.2)
+    for sid, g in v.groupby("id", sort=False):
+        g = g.sort_values("tag")
+        zeilen.append([ctx.szdef.get(sid, {}).get("name", g["name"].iloc[0]), f"{g['p'].iloc[0]:.0f} %", f"{g['p'].iloc[-1]:.0f} %",
+                       f"{g['p'].iloc[-1] - g['p'].iloc[0]:+.0f} PP", str(len(g) - 1)])
+    _tabelle(pdf, ["Szenario", "Start (IC)", "Heute", "Veränderung", "Updates"], zeilen, (90, 22, 22, 30, 18), gross=7.2)
     z = views.zyklus_verlauf_df(tab.get("zyklus_votes"))
     _text(pdf, f"Zyklusposition Team: Start {ui.de((z['von'].iloc[0] + z['bis'].iloc[0]) / 2, 2)} "
                f"({L.phase((z['von'].iloc[0] + z['bis'].iloc[0]) / 2)}), heute {ui.de((z['von'].iloc[-1] + z['bis'].iloc[-1]) / 2, 2)} "
@@ -504,7 +500,7 @@ def seite_bericht(ctx, markt_tab, signale, termine_df, portfolio_info, team=None
     c1, c2 = st.columns(2)
     with c1.container(border=True):
         st.markdown("**Wochenbericht**")
-        st.caption("Schnappschuss mit Gesamtempfehlung, Signalen, Szenarien, Risiken, Kernindikatoren, Märkten, Portfolio, "
+        st.caption("Schnappschuss mit Taktik, Signalen, Szenarien, Risiken, Kernindikatoren, Märkten, Portfolio, "
                    "Entscheiden der Woche und Terminen. Am besten jeden Freitag herunterladen und im Team-Ordner ablegen.")
         if st.button("Wochenbericht erstellen", type="primary", icon=":material/description:"):
             try:
