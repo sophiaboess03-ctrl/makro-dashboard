@@ -148,7 +148,7 @@ def lauf(store, modus: str, api_key: str | None, app_url: str | None, trocken: b
     if not meldungen:
         info.append("Keine Mail nötig.")
     if not kont:
-        info.append("Keine Empfänger: in der App unter Monitoring → Einstellungen E-Mail-Adressen erfassen.")
+        info.append("Keine Empfänger: in der App unter Monitoring → «Zuständigkeit & E-Mails» E-Mail-Adressen erfassen.")
     if log_zeilen:
         store.anhaengen("monitor_log", log_zeilen)
     return info
