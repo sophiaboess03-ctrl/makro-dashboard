@@ -46,6 +46,8 @@ class Ctx:
     erw_sim_sektoren: dict = field(default_factory=dict)
     store: object = None
     nur_lesen: bool = False
+    sek_index: dict = field(default_factory=dict)
+    kurse: dict = field(default_factory=dict)
 
 
 

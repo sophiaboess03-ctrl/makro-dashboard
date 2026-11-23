@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import sektoren as SK
 from makro import config as C
 from makro import ui
 from storage import jetzt, zahl
@@ -293,25 +294,22 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
             fig.update_yaxes(ticksuffix=" %", gridcolor="#EEF0F3")
             ui.zeige(fig)
         with c2:
-            st.markdown("**Sektoren im Aktienteil**")
-            emp = dict(zip(ctx.alloc["sektoren"]["sektor"], ctx.alloc["sektoren"]["empfehlung"]))
-            ak = b[b["klasse"] == "Aktie"] if len(b) else pd.DataFrame(columns=["sektor", "wert"])
-            gew = ak.groupby("sektor")["wert"].sum() / aktien * 100 if aktien else pd.Series(dtype=float)
-            zeilen = []
-            for s in C.SEKTOREN:
-                g = float(gew.get(s, 0.0))
-                ref = bm.get(s)
-                diff = g - ref if ref is not None else None
-                richtung = "–" if diff is None else ("Über" if diff > 1 else "Unter" if diff < -1 else "Neutral")
-                e = emp.get(s, "Neutral").replace("gewichten", "")
-                passt = "–" if diff is None else ("✓" if (richtung, e) in (("Über", "Über"), ("Unter", "Unter"), ("Neutral", "Neutral")) else "≠")
-                zeilen.append({"Sektor": s, "Ist": f"{ui.de(g, 1)} %", "Benchmark": f"{ui.de(ref, 1)} %" if ref is not None else "–",
-                               "Abweichung": f"{ui.de(diff, 1, True)} PP" if diff is not None else "–",
-                               "Taktik": e, "Passt": passt})
-            st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch", height=420)
-            if not bm:
-                st.caption("Für die Abweichung zum S&P 500 unten unter «Einstellungen Portfolio» die aktuellen Sektorgewichte "
-                           "eintragen (Quelle: S&P-500-Factsheet von S&P Dow Jones Indices).")
+            st.markdown("**Aktienteil nach Sektoren: Ist vs. Ziel**")
+            sa = SK.lade_allokation(tab.get("sektor_allokation"))["sektoren"]
+            zl = SK.ziele(sa, C.SP500_GEWICHT)
+            ak_df = b[b["klasse"] == "Aktie"] if len(b) else pd.DataFrame(columns=["sektor", "wert"])
+            gew_ist = ak_df.groupby("sektor")["wert"].sum() / aktien * 100 if aktien else pd.Series(dtype=float)
+            fig = go.Figure([go.Bar(name="Ist", x=C.SEKTOREN, y=[float(gew_ist.get(s_, 0.0)) for s_ in C.SEKTOREN],
+                                    marker_color=ui.BLAU),
+                             go.Bar(name="Ziel", x=C.SEKTOREN, y=[zl[s_] if zl[s_] is not None else C.SP500_GEWICHT[s_]
+                                                                  for s_ in C.SEKTOREN], marker_color="#94A3B8")])
+            fig.update_layout(barmode="group", height=300, margin=dict(l=8, r=8, t=10, b=8), plot_bgcolor="white",
+                              legend=dict(orientation="h", y=-0.35))
+            fig.update_yaxes(ticksuffix=" %", gridcolor="#EEF0F3")
+            ui.zeige(fig)
+        ak_df = b[b["klasse"] == "Aktie"][["ticker", "name", "sektor", "wert"]] if len(b) else \
+            pd.DataFrame(columns=["ticker", "name", "sektor", "wert"])
+        SK.zeige_pruefung(ctx, ak_df, total, "Sektorallokation einhalten (nach den Transaktionen)", key="pf")
 
     with t3:
         if len(tx):
@@ -366,17 +364,13 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                 c3.download_button("Transaktionsübersicht", st.session_state["tx_pdf"],
                                    f"Transaktionen_Portfolio_{pd.Timestamp.today():%Y-%m-%d}.pdf", "application/pdf", icon=":material/download:")
 
-    with st.expander("Einstellungen Portfolio (Startkapital, S&P-500-Sektorgewichte)"):
+    with st.expander("Einstellungen Portfolio (Startkapital)"):
         with st.form("pf_einst"):
             k = st.number_input("Startkapital (USD)", min_value=0.0, value=float(kapital), step=100000.0, format="%.0f")
-            st.markdown("S&P-500-Sektorgewichte in % (Benchmark für die Abweichung, mit Stand und Quelle notieren):")
-            ed = st.data_editor(pd.DataFrame({"Sektor": C.SEKTOREN, "Gewicht %": [bm.get(s) for s in C.SEKTOREN]}),
-                                hide_index=True, disabled=["Sektor"], key="bm_edit")
+            st.caption("Die S&P-500-Sektorgewichte (Benchmark) werden neu zentral auf der Seite «Sektorallokation» gepflegt.")
             if st.form_submit_button("Speichern"):
-                zeilen = [dict(zeit=jetzt(), person=ctx.person, schluessel="startkapital", wert=k)]
-                zeilen += [dict(zeit=jetzt(), person=ctx.person, schluessel=f"bm|{r['Sektor']}", wert=r["Gewicht %"])
-                           for _, r in ed.iterrows() if r["Gewicht %"] is not None and not pd.isna(r["Gewicht %"])]
-                ctx.speichern("einstellungen", zeilen, "Portfolio-Einstellungen gespeichert.")
+                ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="startkapital", wert=k)],
+                              "Portfolio-Einstellungen gespeichert.")
 
 
 def performance_daten(tx, kurse, fred, kapital, neutral: dict) -> dict | None:

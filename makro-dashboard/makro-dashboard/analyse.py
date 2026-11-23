@@ -324,7 +324,8 @@ def vorschlag(R: pd.DataFrame, rf: pd.Series, gew: dict, cash: float, n: int = 4
 
 
 def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: dict) -> list[tuple[str, str]]:
-    """Regel-Check gegen IPS-Bänder, Mandat (S&P 500), Klumpen, Duration und Sektorempfehlung. (Stufe, Text)."""
+    """Regel-Check gegen IPS-Bänder, Mandat (S&P 500), Klumpen und Duration. (Stufe, Text).
+    Die Sektoren prüft sektoren.pruefe_portfolio (Seite «Sektorallokation»)."""
     out = []
     ak = float(pos.loc[pos["klasse"] == "Aktie", "wert"].sum()) / total * 100 if len(pos) else 0
     tr = float(pos.loc[pos["klasse"] == "Treasury", "wert"].sum()) / total * 100 if len(pos) else 0
@@ -349,19 +350,6 @@ def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: 
         lang = t[t["band"].isin(["10–20 J.", "20+ J."])]
         if len(lang):
             out.append((L.GELB, "Laufzeiten über 10 J. enthalten – Regel aus der Analyse: nichts > 10 J."))
-    emp = dict(zip(alloc["sektoren"]["sektor"], alloc["sektoren"]["empfehlung"]))
-    sek = {}
-    for _, z in pos[pos["klasse"] == "Aktie"].iterrows():
-        s = info.get(z["ticker"], {}).get("sektor") or "Unbekannt"
-        sek[s] = sek.get(s, 0) + z["wert"]
-    aw = sum(sek.values())
-    for s, w in sorted(sek.items(), key=lambda x: -x[1]):
-        e = emp.get(s)
-        if e == "Untergewichten" and aw and w / aw > 0.15:
-            out.append((L.GELB, f"{s}: {ui.de(w / aw * 100, 0)} % des Aktienteils, Taktik «Untergewichtet»"))
-    fehlt = [s for s, e in emp.items() if e == "Übergewichten" and s not in sek]
-    if fehlt and aw and "Unbekannt" not in sek:
-        out.append((L.GELB, "Empfohlene Übergewichte ohne Titel: " + ", ".join(fehlt)))
     return out
 
 
@@ -684,29 +672,28 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             st.caption("Für eine Korrelationsmatrix mindestens zwei Positionen eingeben.")
 
     with t4:
-        checks = pruefungen(pos, cash, total, info, ctx.alloc)
+        import sektoren as SK
+
+        ak_pos = pos[pos["klasse"] == "Aktie"]
+        ak_df = pd.DataFrame({"ticker": ak_pos["ticker"].tolist(),
+                              "name": [info.get(t, {}).get("name", "") for t in ak_pos["ticker"]],
+                              "sektor": [info.get(t, {}).get("sektor") or "Unbekannt" for t in ak_pos["ticker"]],
+                              "wert": ak_pos["wert"].astype(float).tolist()})
+        sa = SK.lade_allokation(ctx.tabellen.get("sektor_allokation"))["sektoren"]
+        sek_p = SK.pruefe_portfolio(ak_df, total, sa, ctx.sek_index["gewichte"], float(ctx.alloc["aktien"]))
+        n_aus = sek_p["n"][L.ROT] + sek_p["n"][L.GELB]
+        checks = pruefungen(pos, cash, total, info, ctx.alloc) + [
+            (sek_p["quote_stufe"], f"Aktienquote {ui.de(sek_p['quote'], 1)} % – Soll {ui.de(float(ctx.alloc['aktien']), 1)} % ±2 Pp."),
+            (L.ROT if sek_p["n"][L.ROT] else L.GELB if sek_p["n"][L.GELB] else L.GRUEN,
+             f"Sektorallokation: {sek_p['n'][L.GRUEN]} von 11 Sektoren eingehalten" + (f", {n_aus} ausserhalb – Details unten" if n_aus else ""))]
         n_rot = sum(1 for s_, _ in checks if s_ == L.ROT)
         st.markdown(f"**Prüfung gegen eure Regeln** · {ui.badge(L.ROT if n_rot else L.GRUEN, f'{n_rot} Verstösse' if n_rot else 'alles im Rahmen')}",
                     unsafe_allow_html=True)
         st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {L.ROT: "Verstoss", L.GELB: "Hinweis", L.GRUEN: "ok"}[s_])}'
                             f'&nbsp; {txt}</span><span></span></div>' for s_, txt in checks), unsafe_allow_html=True)
         st.markdown("")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Sektoren im Aktienteil**")
-            emp = dict(zip(ctx.alloc["sektoren"]["sektor"], ctx.alloc["sektoren"]["empfehlung"]))
-            sek = pd.Series({t: info.get(t, {}).get("sektor") or "Unbekannt"
-                             for t in pos.loc[pos["klasse"] == "Aktie", "ticker"]})
-            werte = pos[pos["klasse"] == "Aktie"].set_index("ticker")["wert"]
-            gw = werte.groupby(sek.reindex(werte.index)).sum() / ak_w * 100 if ak_w else pd.Series(dtype=float)
-            zeilen = [{"Sektor": s, "Gewicht": _pct(gw.get(s, 0.0)),
-                       "S&P 500": _pct(bm.get(s)) if bm.get(s) is not None else "–",
-                       "Abweichung": f"{ui.de(gw.get(s, 0.0) - bm[s], 1, True)} PP" if bm.get(s) is not None else "–",
-                       "Taktik": emp.get(s, "–")} for s in C.SEKTOREN + (["Unbekannt"] if "Unbekannt" in gw.index else [])]
-            st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch", height=430)
-            if not bm:
-                st.caption("S&P-500-Sektorgewichte auf der Seite «Portfolio» unter «Einstellungen Portfolio» eintragen, "
-                           "dann erscheint die Abweichung zum Index.")
+        SK.zeige_pruefung(ctx, ak_df, total, "Sektorallokation im Probe-Portfolio", key="an")
+        c2, _ = st.columns(2)
         with c2:
             st.markdown("**Anlageklassen vs. Taktik**")
             ist = [ak_w / total * 100, tr_w / total * 100, cash / total * 100]

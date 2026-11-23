@@ -696,6 +696,9 @@ DOZENT_BAND = {"aktien": (40, 60), "anleihen": (40, 60), "cash": (0, 10)}
 SP500_GEWICHT = {"Energie": 3.70, "Grundstoffe": 1.69, "Industrie": 8.11, "Zykl. Konsum": 9.24, "Basiskonsum": 4.76,
                  "Gesundheit": 10.01, "Finanzen": 11.79, "IT": 37.88, "Kommunikation": 9.05, "Versorger": 2.03,
                  "Immobilien": 1.75}
+# Feste Kopie der Dozenten-App-Werte. SP500_GEWICHT selbst wird beim Start mit den Indexgewichten der Seite
+# «Sektorallokation» überschrieben (letzter Stichtag, mit den Sektor-ETF-Kursen fortgeschrieben), siehe sektoren.index_info.
+SP500_GEWICHT_DOZENT = dict(SP500_GEWICHT)
 GICS_CODE = {"Energie": 10, "Grundstoffe": 15, "Industrie": 20, "Zykl. Konsum": 25, "Basiskonsum": 30, "Gesundheit": 35,
              "Finanzen": 40, "IT": 45, "Kommunikation": 50, "Versorger": 55, "Immobilien": 60}
 

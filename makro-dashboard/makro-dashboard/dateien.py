@@ -30,6 +30,7 @@ SEITEN_BEREICHE = {
     "risiken": "Risiken & Chancen",
     "ips": "IPS",
     "dozent": "Erwartungen (Dozent)",
+    "sektoren": "Sektorallokation",
     "taktik": "Taktik",
     "risiko": "Risiko & Risikobudget",
     "anleihen": "Anleihen & Duration",

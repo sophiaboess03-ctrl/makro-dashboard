@@ -266,12 +266,15 @@ def seite_taktik(ctx, bond: dict):
     rang = gew["sektoren"]
     sim_sek = ctx.erw_sim_sektoren.get(m_id)
     kopf = st.columns([1.7, 0.8, 1.1, 0.9, 0.9, 2.4])
-    for col, txt_ in zip(kopf, ["Sektor", "Gewicht S&P 500 (% der Aktien)", "Zielgewicht (% des Vermögens)", "% der Aktien",
+    for col, txt_ in zip(kopf, ["Sektor", "Gewicht S&P 500 (% der Aktien, Seite Sektorallokation)", "Zielgewicht (% des Vermögens)", "% der Aktien",
                                 "aktiv vs. S&P", "Orientierung"]):
         col.markdown(f"<span class='klein'><b>{txt_}</b></span>", unsafe_allow_html=True)
     sektoren = {}
     pdf_sek = []
     regel_sek = {sek: sum(r["sektoren"].get(sek, 0) for r in aktive) for sek in C.SEKTOREN}
+    import sektoren as SK
+    sa = SK.lade_allokation(ctx.tabellen.get("sektor_allokation"))["sektoren"]
+    sa_ziel = SK.ziele(sa, C.SP500_GEWICHT)
     for sek in C.SEKTOREN:
         cols = st.columns([1.7, 0.8, 1.1, 0.9, 0.9, 2.4])
         cols[0].markdown(f"{C.SEKTOR_DOZENT[sek]} ({C.GICS_CODE[sek]})")
@@ -284,7 +287,11 @@ def seite_taktik(ctx, bond: dict):
         cols[3].markdown(ui.de(anteil, 2))
         cols[4].markdown(f"<span style='color:{ui.FARBE['Rot'] if zu_viel else ui.INK if abs(aktiv) < 0.25 else ui.BLAU}; "
                          f"font-weight:600'>{ui.de(aktiv, 2, True)} PP</span>", unsafe_allow_html=True)
-        teile = [f"Szenarien {ui.de(rang[sek], 1, True)} PP/Mt."]
+        e_sa = sa[sek]
+        teile = [f"Sektorallokation: {SK.RICHTUNG_KURZ[e_sa['richtung']]}"
+                 + (f" {ui.de(e_sa['abweichung'], 1, True)} PP → {ui.de(sa_ziel[sek] * werte['aktien'] / 100, 2)} %"
+                    if sa_ziel[sek] is not None and SK._z(e_sa.get('abweichung')) is not None else ""),
+                 f"Szenarien {ui.de(rang[sek], 1, True)} PP/Mt."]
         if regel_sek[sek]:
             teile.append(f"Signale {ui.de(regel_sek[sek], 0, True)}")
         if sim_sek is not None and sek in sim_sek.index:

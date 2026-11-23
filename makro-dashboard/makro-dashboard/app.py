@@ -38,6 +38,7 @@ import ips as ips_mod
 import szenarien_seite
 import taktik
 import risiko
+import sektoren
 from makro import szenarien as SZ
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
@@ -281,7 +282,7 @@ yahoo, yahoo_fehler, yahoo_zeit = markt.lade_yahoo(markt.YAHOO)
 fred_roh = fred
 fred, labels = pipeline.mische_markt(fred_roh, yahoo)
 hist, hist_fehler, _ = analyse.lade_historie(pipeline.HIST_TICKER, 6)
-_r = pipeline.berechne(fred, labels, tabellen, hist)
+_r = pipeline.berechne(fred, labels, tabellen, hist, yahoo)
 analyse.setze_benchmark(_r["einst"]["bond_benchmark"])
 daten, status, kombis, szen, risiken, alloc = _r["daten"], _r["status"], _r["kombis"], _r["szen"], _r["risiken"], _r["alloc"]
 try:
@@ -352,7 +353,7 @@ ctx = views.Ctx(daten=daten, status=status, kombis=kombis, szen=szen, risiken=ri
                 zyklus_modell=L.zyklus_modell(status), szdef=_r["szdef"], gew=_r["gew"], lage=_r["lage"], ips=_r["ips"],
                 einst=_r["einst"], bond=_r["bond"], sig=_r["sig"], anker=anker, fred=fred, hist=hist,
                 erw_antworten={m["id"]: dozent.antworten_kurz(tabellen.get("erwartungen"), m["id"]) for m in C.MONATE},
-                store=store, nur_lesen=NUR_LESEN)
+                store=store, nur_lesen=NUR_LESEN, sek_index=_r["sek_index"], kurse=yahoo)
 MONAT_ARBEIT = _r["monat_arbeit"]
 try:
     _gk = erwartungen.grinold_kroner_eingaben(ctx)
@@ -460,6 +461,8 @@ seiten = {
     "Entscheiden & Abgabe": [
         st.Page(_doks(lambda: ips_mod.seite_ips(ctx, hist, ctx.gew, ctx.szdef, ctx.bond), "ips"), title="IPS", icon=M("policy"), url_path="ips"),
         st.Page(_doks(lambda: dozent.seite_erwartungen(ctx), "dozent"), title="Erwartungen (Dozent)", icon=M("quiz"), url_path="dozent"),
+        st.Page(_doks(lambda: sektoren.seite_sektoren(ctx, yahoo), "sektoren"), title="Sektorallokation", icon=M("pie_chart"),
+                url_path="sektoren"),
         st.Page(_doks(_seite_taktik, "taktik"), title="Taktik", icon=M("donut_large"), url_path="taktik"),
         st.Page(_doks(lambda: risiko.seite_risiko(ctx), "risiko"), title="Risiko & Risikobudget", icon=M("shield"), url_path="risiko"),
         st.Page(_doks(lambda: anleihen.seite_anleihen(ctx, fred), "anleihen"), title="Anleihen & Duration", icon=M("stacked_line_chart"),

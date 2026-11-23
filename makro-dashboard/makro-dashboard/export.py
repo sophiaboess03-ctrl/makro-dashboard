@@ -12,7 +12,8 @@ from makro import ui
 BLATT = {"werte": "Werte", "szenario_votes": "Szenario-Bewertungen", "risiko_votes": "Risiko-Bewertungen",
          "zyklus_votes": "Zyklus", "notizen": "Notizen & Briefings", "einstellungen": "Einstellungen",
          "risiken_neu": "Neue Risiken", "sektorvoten": "Sektorvoten", "transaktionen": "Transaktionen",
-         "entscheide": "Entscheide", "sektordaten": "Sektordaten"}
+         "entscheide": "Entscheide", "sektordaten": "Sektordaten", "sektor_index": "Sektor-Indexgewichte",
+         "sektor_allokation": "Sektorallokation"}
 
 
 def excel(tabellen: dict, status: pd.DataFrame, alloc: dict, szen: pd.DataFrame, person: str) -> bytes:

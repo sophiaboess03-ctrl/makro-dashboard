@@ -40,12 +40,16 @@ def text_einstellungen(df: pd.DataFrame | None) -> dict:
     return out
 
 
-def berechne(fred: dict, labels: dict, tabellen: dict, hist: dict | None = None) -> dict:
+def berechne(fred: dict, labels: dict, tabellen: dict, hist: dict | None = None, kurse: dict | None = None) -> dict:
     import anleihen as AN
     import ips as IPS
+    import sektoren as SK
     import taktik as T
 
     hist = hist or {}
+    # Eine Quelle für die S&P-500-Sektorgewichte im ganzen Dashboard (Seite «Sektorallokation»)
+    sek_index = SK.index_info(tabellen.get("sektor_index"), kurse, hist)
+    C.SP500_GEWICHT.update(sek_index["gewichte"])
     daten = L.Daten(fred, tabellen["werte"], labels)
     status = L.status(daten)
     kombis = L.kombi_signale(status, daten)
@@ -69,10 +73,17 @@ def berechne(fred: dict, labels: dict, tabellen: dict, hist: dict | None = None)
     bond = AN.bond_basis(fred, einst["bond_benchmark"])
     sig = SZ.sigmas(fred, hist)
     return dict(daten=daten, status=status, kombis=kombis, szen=szen, risiken=risiken, alloc=alloc, szdef=sdefs, gew=gew,
-                lage=lage, ips=ips, einst=einst, bond=bond, sig=sig, monat_arbeit=m_arbeit,
+                lage=lage, ips=ips, einst=einst, bond=bond, sig=sig, monat_arbeit=m_arbeit, sek_index=sek_index,
                 zyklus_team=L.zyklus_team(tabellen["zyklus_votes"]), zyklus_modell=L.zyklus_modell(status))
 
 
 def fred_serien(markt_fred: list[str]) -> list[str]:
     return sorted({i["series"] for i in C.INDIKATOREN if i["quelle"] == "fred"} | {"GDPC1", "GDPPOT", C.REZESSION_SERIE}
-                  | set(C.ZINSKURVE) | set(C.ERWARTUNGS_SERIEN) | set(markt_fred) | {"CPIAUCSL", "DFEDTARU", "T5YIFR"})
+                  | set(C.ZINSKURVE) | set(C.ERWARTUNGS_SERIEN) | set(markt_fred) | {"CPIAUCSL", "DFEDTARU", "T5YIFR"} | set(_trigger_serien()))
+
+
+def _trigger_serien() -> list[str]:
+    """FRED-Reihen für die Ausstiegs-Trigger der Sektorallokation (z. B. Hochzins-Spread)."""
+    import sektoren as SK
+
+    return SK.TRIGGER_SERIEN

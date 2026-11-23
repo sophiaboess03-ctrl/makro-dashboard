@@ -43,6 +43,10 @@ TABELLEN = {
                "begruendung"],
     "markt_erwartung": ["zeit", "person", "groesse", "wert", "quelle", "datum"],
     "dateien": ["zeit", "person", "id", "bereich", "name", "typ", "groesse", "datei_id", "beschreibung", "geloescht"],
+    # Sektorallokation: Indexgewichte mit Stichtag und Abweichung/Begründung je Sektor
+    "sektor_index": ["zeit", "person", "stichtag", "sektor", "gewicht", "quelle"],
+    "sektor_allokation": ["zeit", "person", "sektor", "richtung", "abweichung", "makro", "gewinne", "bewertung", "momentum",
+                          "begruendung", "gegenargument", "trigger", "regel_groesse", "regel_op", "regel_wert"],
 }
 
 
