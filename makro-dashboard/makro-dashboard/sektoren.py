@@ -505,6 +505,7 @@ def _lade_in_editor(sek: dict):
     for s in C.SEKTOREN:
         for k in ("begruendung", "gegenargument", "trigger", "regel_groesse", "regel_op", "regel_wert"):
             ss[f"sa_{k}_{s}"] = sek[s].get(k) or ""
+        ss[f"sa_bearb_{s}"] = False
     ss["sa_ver"] = ss.get("sa_ver", 0) + 1
 
 
@@ -522,6 +523,35 @@ def _regel_einsetzen(index: dict):
     df["Richtung"] = df["Sektor"].map(lambda s: "Übergewicht" if reg[s] > 0 else "Untergewicht" if reg[s] < 0 else "Neutral")
     ss["sa_df"] = df
     ss["sa_ver"] = ss.get("sa_ver", 0) + 1
+
+
+TEXT_FELDER = ("begruendung", "gegenargument", "trigger", "regel_groesse", "regel_op", "regel_wert")
+OPTIONEN_GROESSE = [""] + list(GROESSEN)
+OPTIONEN_OP = ["", "<", ">", "<=", ">="]
+
+
+def _md(t: str | None) -> str:
+    """Text sicher als Markdown anzeigen (kein LaTeX bei $, Zeilenumbrüche behalten)."""
+    t = (t or "").strip()
+    return t.replace("\\", "\\\\").replace("$", "\\$").replace("*", "\\*").replace("_", "\\_").replace("\n", "  \n")
+
+
+def _bearbeiten_start(s: str):
+    ss = st.session_state
+    for k in TEXT_FELDER:
+        v = ss.get(f"sa_{k}_{s}") or ""
+        if k == "regel_groesse" and v not in OPTIONEN_GROESSE or k == "regel_op" and v not in OPTIONEN_OP:
+            v = ""
+        ss[f"sa_edit_{k}_{s}"] = v
+    ss[f"sa_bearb_{s}"] = True
+
+
+def _bearbeiten_ende(s: str, uebernehmen: bool):
+    ss = st.session_state
+    if uebernehmen:
+        for k in TEXT_FELDER:
+            ss[f"sa_{k}_{s}"] = ss.get(f"sa_edit_{k}_{s}") or ""
+    ss[f"sa_bearb_{s}"] = False
 
 
 def seite_sektoren(ctx, kurse: dict):
@@ -638,29 +668,41 @@ def seite_sektoren(ctx, kurse: dict):
                                 f'&nbsp; {html.escape(txt)}</span><span></span></div>' for s_, txt in pm), unsafe_allow_html=True)
 
         st.markdown("#### Begründungen")
-        optionen = [""] + list(GROESSEN)
+        st.caption("Zum Ändern beim Sektor auf «Bearbeiten» klicken, anpassen und «Übernehmen». Gespeichert wird danach mit "
+                   "«Sektorallokation speichern» unten.")
         for s in sorted(C.SEKTOREN, key=lambda x: -(entwurf[x].get("abweichung") or 0)):
             e = entwurf[s]
             a, sc = e.get("abweichung"), score(e)
+            fehlt = e["richtung"] != "Neutral" and len(e["begruendung"]) < 20
+            bearb = ss.get(f"sa_bearb_{s}", False)
             kopf = (f"{s} · {e['richtung']}" + ("" if a is None else f" {ui.de(a, 1, True)} Pp.")
                     + ("" if sc is None else f" · Score {ui.de(sc, 2, True)}")
-                    + (" · Begründung fehlt" if e["richtung"] != "Neutral" and len(e["begruendung"]) < 20 else ""))
-            with st.expander(kopf):
-                st.text_area("Warum? (Begründung mit Belegen)", key=f"sa_begruendung_{s}", height=100)
-                st.text_area("Was spricht dagegen?", key=f"sa_gegenargument_{s}", height=80)
-                st.text_area("Wann ändern wir die Gewichtung? (Trigger als Text)", key=f"sa_trigger_{s}", height=68)
-                k1, k2, k3 = st.columns([1.6, 0.6, 1])
-                if ss.get(f"sa_regel_groesse_{s}") not in optionen:
-                    ss[f"sa_regel_groesse_{s}"] = ""
-                k1.selectbox("Automatisch überwachen", optionen, key=f"sa_regel_groesse_{s}",
-                             format_func=lambda g: "– nicht automatisch –" if not g else GROESSEN[g][0])
-                if ss.get(f"sa_regel_op_{s}") not in ("", "<", ">", "<=", ">="):
-                    ss[f"sa_regel_op_{s}"] = ""
-                k2.selectbox("Bedingung", ["", "<", ">", "<=", ">="], key=f"sa_regel_op_{s}")
-                k3.text_input("Schwelle (Zahl oder Datum JJJJ-MM-TT)", key=f"sa_regel_wert_{s}")
+                    + (" · ✎ in Bearbeitung" if bearb else "") + (" · Begründung fehlt" if fehlt else ""))
+            with st.expander(kopf, expanded=bearb):
                 tr = trig_e[s]
-                if tr["stufe"] != L.KONTEXT:
-                    st.caption(f"Aktuell: {tr['regel']} · Wert {tr['wert']} · {tr['text']}")
+                if not bearb:
+                    st.markdown(f"**Warum?**  \n{_md(e.get('begruendung')) or '–'}")
+                    st.markdown(f"**Was spricht dagegen?**  \n{_md(e.get('gegenargument')) or '–'}")
+                    st.markdown(f"**Wann ändern wir die Gewichtung?**  \n{_md(e.get('trigger')) or '–'}")
+                    if tr["stufe"] != L.KONTEXT:
+                        st.markdown(f"{ui.badge(tr['stufe'], tr['text'])} &nbsp; <span class='klein'>Automatisch überwacht: "
+                                    f"{html.escape(tr['regel'])} · aktuell {html.escape(tr['wert'])}</span>", unsafe_allow_html=True)
+                    st.button("Bearbeiten", key=f"sa_btn_b_{s}", icon=":material/edit:", on_click=_bearbeiten_start, args=(s,),
+                              disabled=ctx.nur_lesen)
+                else:
+                    st.text_area("Warum? (Begründung mit Belegen)", key=f"sa_edit_begruendung_{s}", height=110)
+                    st.text_area("Was spricht dagegen?", key=f"sa_edit_gegenargument_{s}", height=90)
+                    st.text_area("Wann ändern wir die Gewichtung? (Trigger als Text)", key=f"sa_edit_trigger_{s}", height=70)
+                    k1, k2, k3 = st.columns([1.6, 0.6, 1])
+                    k1.selectbox("Automatisch überwachen", OPTIONEN_GROESSE, key=f"sa_edit_regel_groesse_{s}",
+                                 format_func=lambda g: "– nicht automatisch –" if not g else GROESSEN[g][0])
+                    k2.selectbox("Bedingung", OPTIONEN_OP, key=f"sa_edit_regel_op_{s}")
+                    k3.text_input("Schwelle (Zahl oder Datum JJJJ-MM-TT)", key=f"sa_edit_regel_wert_{s}")
+                    b1, b2, _ = st.columns([1, 1, 3])
+                    b1.button("Übernehmen", key=f"sa_btn_ok_{s}", type="primary", icon=":material/check:",
+                              on_click=_bearbeiten_ende, args=(s, True), width="stretch")
+                    b2.button("Abbrechen", key=f"sa_btn_x_{s}", icon=":material/close:", on_click=_bearbeiten_ende,
+                              args=(s, False), width="stretch")
 
         def _gleich(x, y):
             return (x is None and y is None) or (x is not None and y is not None and abs(float(x) - float(y)) < 1e-9) \
@@ -670,7 +712,10 @@ def seite_sektoren(ctx, kurse: dict):
         if geaendert or sa["quelle"] == "Georg":
             st.warning("Ungespeicherte Änderungen" + (f": {', '.join(geaendert)}" if geaendert else " (Startwerte)") +
                        " – erst nach «Speichern» gelten sie für Taktik, Portfolio und Analyse.", icon=":material/edit_note:")
-        if st.button("Sektorallokation speichern", type="primary", icon=":material/save:", disabled=ctx.nur_lesen):
+        offen = [s_ for s_ in C.SEKTOREN if ss.get(f"sa_bearb_{s_}")]
+        if offen:
+            st.info(f"Noch in Bearbeitung: {', '.join(offen)} – dort zuerst «Übernehmen» oder «Abbrechen».", icon=":material/edit:")
+        if st.button("Sektorallokation speichern", type="primary", icon=":material/save:", disabled=ctx.nur_lesen or bool(offen)):
             fehler = [f"{s}: Begründung fehlt (mind. 20 Zeichen bei Über-/Untergewicht)" for s in C.SEKTOREN
                       if entwurf[s]["richtung"] != "Neutral" and len(entwurf[s]["begruendung"]) < 20]
             if fehler:
