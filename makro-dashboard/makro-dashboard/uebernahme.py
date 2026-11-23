@@ -98,7 +98,7 @@ def vorschlag(eingabe: dict, datum: pd.Timestamp, fred: dict, info_fn) -> tuple[
         else:
             stueck = None
         za.append({"Ticker": t, "Name": i.get("name", ""), "Sektor": i.get("sektor") or "", "Stück": stueck,
-                   "Kurs USD": k, "Betrag aus Vorauswahl": betrag, "Begründung": ""})
+                   "Kurs USD": k, "Betrag aus Vorauswahl": ui.de(betrag, 0) if betrag else "", "Begründung": ""})
     zt = []
     for r in eingabe.get("treas", []):
         betrag, kupon, faellig = zahl(r.get("Betrag USD")), zahl(r.get("Kupon %")), _datum(r.get("Fälligkeit"))
@@ -117,8 +117,8 @@ def vorschlag(eingabe: dict, datum: pd.Timestamp, fred: dict, info_fn) -> tuple[
             quelle = "Zinskurve FRED" if kurs is not None else "fehlt"
         nominal = math.floor(betrag / (kurs / 100) / 100) * 100 if kurs else None
         zt.append({"Bezeichnung": _txt(r.get("Bezeichnung")) or treasury_name(kupon, faellig), "Kupon %": kupon,
-                   "Fälligkeit": faellig.date(), "Nominal USD": nominal, "Kurs %": kurs, "Kurs-Quelle": quelle,
-                   "Betrag aus Vorauswahl": betrag, "Begründung": ""})
+                   "Fälligkeit": faellig.date(), "Nominal USD": ui.de(nominal, 0) if nominal else "", "Kurs %": kurs,
+                   "Kurs-Quelle": quelle, "Betrag aus Vorauswahl": ui.de(betrag, 0), "Begründung": ""})
     return pd.DataFrame(za), pd.DataFrame(zt), hinweise
 
 
@@ -259,16 +259,14 @@ def bereich(ctx, fred: dict, gespeichert: pd.DataFrame):
                                 column_config={"Stück": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
                                                "Kurs USD": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
                                                "Sektor": st.column_config.SelectboxColumn(options=C.SEKTOREN),
-                                               "Betrag aus Vorauswahl": st.column_config.NumberColumn(format="%.0f"),
                                                "Begründung": st.column_config.TextColumn(width="large")}) if len(vor["aktien"]) else vor["aktien"]
         if len(vor["treas"]):
             st.markdown(f"**Treasuries** · {len(vor['treas'])} Anleihen · Nominal, Kurs und Begründung änderbar")
             treas = st.data_editor(vor["treas"], hide_index=True, width="stretch", key=f"ue_t{v}",
                                    disabled=["Kupon %", "Fälligkeit", "Kurs-Quelle", "Betrag aus Vorauswahl"],
-                                   column_config={"Nominal USD": st.column_config.NumberColumn(min_value=0, step=100, format="%.0f"),
+                                   column_config={"Nominal USD": st.column_config.TextColumn(help="z. B. 3'000'000"),
                                                   "Kurs %": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
                                                   "Kupon %": st.column_config.NumberColumn(format="%.3f"),
-                                                  "Betrag aus Vorauswahl": st.column_config.NumberColumn(format="%.0f"),
                                                   "Begründung": st.column_config.TextColumn(width="large")})
         else:
             treas = pd.DataFrame(columns=["Bezeichnung", "Kupon %", "Fälligkeit", "Nominal USD", "Kurs %", "Begründung"])
