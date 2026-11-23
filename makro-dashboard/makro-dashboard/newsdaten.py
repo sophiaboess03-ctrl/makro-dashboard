@@ -404,12 +404,9 @@ def probe_analyse_id(tabellen: dict) -> str | None:
     e = tabellen.get("einstellungen")
     if e is not None and not e.empty:
         z = e[e["schluessel"] == "unternehmen|analyse_id"].sort_values("zeit")
-        if len(z) and str(z.iloc[-1]["wert"]).strip():
+        if len(z) and str(z.iloc[-1]["wert"]).strip() not in ("", "nan"):
             return str(z.iloc[-1]["wert"]).strip()
-    a = tabellen.get("analysen")
-    if a is not None and not a.empty:
-        return str(a.sort_values("zeit").iloc[-1]["id"])
-    return None
+    return None       # nur, wenn auf der Seite «Unternehmen» ausdrücklich zum Mitverfolgen gewählt
 
 
 def probe_ticker(tabellen: dict, analyse_id: str | None = None) -> list[str]:
@@ -427,8 +424,9 @@ def probe_ticker(tabellen: dict, analyse_id: str | None = None) -> list[str]:
     return sorted({str(x.get("Ticker") or "").strip().upper().replace(".", "-") for x in e.get("aktien", [])} - {""})
 
 
-def titel_liste(tabellen: dict, sp500: dict | None = None) -> dict:
-    """{Ticker: {name, sektor, herkunft: [Bestand|Watchlist|Probe-Portfolio]}}"""
+def titel_liste(tabellen: dict, sp500: dict | None = None, mit_probe: bool = True) -> dict:
+    """{Ticker: {name, sektor, herkunft: [Bestand|Watchlist|Probe-Portfolio]}} – Probe-Portfolio nur, wenn auf der Seite
+    «Unternehmen» eine Vorauswahl zum Mitverfolgen gewählt ist."""
     import monitoring as M
     import portfolio as P
 
@@ -452,7 +450,7 @@ def titel_liste(tabellen: dict, sp500: dict | None = None) -> dict:
                 add(p["ticker"], "Bestand", str(p["name"] or ""), str(p["sektor"] or ""))
     for w in M.watchlist(tabellen.get("watchlist")):
         add(w["ticker"], "Watchlist", w.get("name", ""), w.get("sektor", ""))
-    for t in probe_ticker(tabellen):
+    for t in probe_ticker(tabellen) if mit_probe else []:
         add(t, "Probe-Portfolio")
     sp500 = sp500 or {}
     for t, d in out.items():

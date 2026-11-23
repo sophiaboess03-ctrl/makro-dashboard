@@ -23,7 +23,7 @@ from storage import jetzt
 
 RATINGS = ["Kaufen", "Halten", "Verkaufen"]
 RATING_FARBE = {"Kaufen": "#2F855A", "Halten": "#B7791F", "Verkaufen": "#B93A32"}
-HERKUNFT_FARBE = {"Bestand": "#14325C", "Watchlist": "#5B7DB1", "Probe-Portfolio": "#8E5572"}
+HERKUNFT_FARBE = {"Bestand": "#14325C", "Watchlist": "#5B7DB1", "Probe-Portfolio": "#8E5572", "Analyse": "#B7791F"}
 
 
 @st.cache_data(ttl=12 * 3600, show_spinner="Lade Unternehmensdaten von Yahoo …")
@@ -101,17 +101,56 @@ def _position(tabellen: dict, fred: dict, lade_kurse) -> dict:
 
 def seite_unternehmen(ctx, fred: dict, lade_kurse):
     R = SP.Sammler("Unternehmen", "Profile, Kennzahlen, Analysten und News je Titel – nach Sektoren", kurz="Unternehmen")
-    ui.seitenkopf("Unternehmen", "Für jeden Titel aus Bestand, Watchlist und Probe-Portfolio: Profil, Kennzahlen, Analysten-"
-                                 "Einschätzung, News und eure Einschätzung – nach Sektoren gegliedert.")
+    ui.seitenkopf("Unternehmen", "Für jeden Titel aus Bestand und Watchlist (auf Wunsch auch aus der Analyse): Profil, Kennzahlen, "
+                                 "Analysten-Einschätzung, News und eure Einschätzung – nach Sektoren gegliedert.")
     ph = st.empty()
     tab = ctx.tabellen
     import portfolio as P
 
-    # Probe-Portfolio wählen
+    # Titel: Bestand + Watchlist (+ mitverfolgte Vorauswahl); Analyse-Titel nur auf Wunsch
     an = tab.get("analysen")
     an = an.sort_values("zeit", ascending=False).drop_duplicates("id") if an is not None and not an.empty else pd.DataFrame()
     aid = N.probe_analyse_id(tab)
     titel = N.titel_liste(tab, P.sp500_liste())
+    ss = st.session_state
+    with st.container(border=True):
+        c1, c2 = st.columns([1.2, 2.6])
+        zeigen = c1.toggle("Titel aus der Analyse anzeigen", key="un_an",
+                           help="Zum kurzen Ansehen: die Titel der aktuellen Eingabe auf der Seite «Analyse» oder einer gespeicherten "
+                                "Vorauswahl. Standardmässig nur Bestand und Watchlist.")
+        quelle = None
+        if zeigen:
+            opt = (["eingabe"] if "an_aktien" in ss else []) + list(an["id"]) if len(an) else (["eingabe"] if "an_aktien" in ss else [])
+            namen = {"eingabe": "Aktuelle Eingabe auf der Seite «Analyse» (nicht gespeichert)",
+                     **({r["id"]: f"Vorauswahl «{r['name']}» ({r['person']}, {str(r['zeit'])[:10]})" for _, r in an.iterrows()} if len(an) else {})}
+            if opt:
+                quelle = c2.selectbox("Welche Analyse?", opt, format_func=namen.get, key="un_an_quelle", label_visibility="collapsed")
+            else:
+                c2.caption("Noch keine Analyse: auf der Seite «Analyse» Titel eintragen oder eine Vorauswahl speichern.")
+        if quelle == "eingabe":
+            neu_t = [str(t).strip().upper() for t in ss["an_aktien"]["Ticker"] if str(t).strip() not in ("", "<NA>", "nan")]
+        elif quelle:
+            neu_t = N.probe_ticker(tab, quelle)
+        else:
+            neu_t = []
+        sp = P.sp500_liste()
+        for t in neu_t:
+            d = titel.setdefault(t, dict(name=sp.get(t, ("", ""))[0], sektor=sp.get(t, ("", ""))[1], herkunft=[]))
+            if "Analyse" not in d["herkunft"]:
+                d["herkunft"].append("Analyse")
+        if quelle and quelle != "eingabe" and not ctx.nur_lesen:
+            if aid == quelle:
+                st.caption("Diese Vorauswahl wird automatisch mitverfolgt (News, Analysten, KI-Profil im Sammel-Lauf).")
+                if st.button("Nicht mehr mitverfolgen", key="un_folgen_aus"):
+                    ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="unternehmen|analyse_id", wert="")],
+                                  "Vorauswahl wird nicht mehr mitverfolgt.")
+            elif st.button("Diese Vorauswahl automatisch mitverfolgen", key="un_folgen_an", icon=":material/track_changes:",
+                           help="Der Sammel-Lauf holt dann auch für diese Titel News, Analystendaten und ein KI-Profil."):
+                ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="unternehmen|analyse_id", wert=quelle)],
+                              "Vorauswahl wird ab dem nächsten Sammel-Lauf mitverfolgt.")
+        elif neu_t:
+            st.caption("Daten direkt von Yahoo (ohne KI-Profil und Firmen-Kurzfassung) – zum Mitverfolgen die Vorauswahl speichern "
+                       "und hier wählen.")
     U, fehler = SNS.lade("unternehmen.json")
     U = dict(U or {})
     fehlt = tuple(sorted(t for t in titel if t not in U or not (U[t].get("info"))))
@@ -143,22 +182,9 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
     ])
     if fehler:
         st.warning(fehler, icon=":material/cloud_off:")
-    with st.expander("Welche Titel? (Bestand, Watchlist, Probe-Portfolio)", icon=":material/tune:"):
-        st.caption("Bestand = Transaktionen auf der Seite «Portfolio» · Watchlist = Seite «Monitoring» → Kauf-Thesen & Watchlist · "
-                   "Probe-Portfolio = eine gespeicherte Vorauswahl der Seite «Analyse» (Standard: die zuletzt gespeicherte).")
-        if len(an):
-            optionen = list(an["id"])
-            namen = {r["id"]: f"{r['name']} ({r['person']}, {str(r['zeit'])[:10]})" for _, r in an.iterrows()}
-            c1, c2 = st.columns([3, 1])
-            w = c1.selectbox("Probe-Portfolio", optionen, index=optionen.index(aid) if aid in optionen else 0,
-                             format_func=namen.get, key="un_probe")
-            if c2.button("Übernehmen", key="un_probe_b", disabled=ctx.nur_lesen or w == aid, width="stretch"):
-                ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="unternehmen|analyse_id", wert=w)],
-                              "Probe-Portfolio für die Seite «Unternehmen» gewählt.")
-        else:
-            st.caption("Noch keine gespeicherte Vorauswahl in der Analyse.")
     if not titel:
-        st.info("Noch keine Titel: Vorauswahl in der «Analyse» speichern, Titel auf die Watchlist setzen oder Transaktionen erfassen.")
+        st.info("Noch keine Titel im Bestand oder auf der Watchlist. Oben «Titel aus der Analyse anzeigen» einschalten, um die "
+                "Unternehmen einer Analyse anzusehen.")
         return
 
     # --- Übersicht ---------------------------------------------------------------

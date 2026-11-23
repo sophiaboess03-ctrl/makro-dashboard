@@ -500,29 +500,82 @@ def _aktien_neu_rechnen(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def budget(ss) -> dict:
+    """Kapital × Prozentsatz je Klasse, investiert, verfügbar (für Anzeige und Deckel)."""
+    kap = _num(ss.get("an_kap_txt")) or 0.0
+    p = dict(aktien=float(ss.get("an_p_ak") or 0), treas=float(ss.get("an_p_tr") or 0), cash=float(ss.get("an_p_ca") or 0))
+    inv_a = sum(_num(x) or 0 for x in ss["an_aktien"]["Betrag USD"]) if "an_aktien" in ss else 0.0
+    inv_t = sum(_num(x) or 0 for x in ss["an_treas"]["Betrag USD"]) if "an_treas" in ss else 0.0
+    b_a, b_t = kap * p["aktien"] / 100, kap * p["treas"] / 100
+    return dict(kapital=kap, pct=p, budget_a=b_a, budget_t=b_t, cash_ziel=kap * p["cash"] / 100, inv_a=inv_a, inv_t=inv_t,
+                rest_a=b_a - inv_a, rest_t=b_t - inv_t, frei=kap - inv_a - inv_t, summe_pct=sum(p.values()))
+
+
+def _meldung(text: str):
+    st.session_state.setdefault("an_budget_meld", []).append(text)
+
+
+def _ak_deckeln(df: pd.DataFrame, i: int, offen: set | None = None):
+    """Zeile i so kürzen, dass die Aktien das Budget (Kapital × Aktien-%) nicht übersteigen. offen = Zeilen, die in derselben
+    Änderung erst danach geprüft werden (zählen noch nicht – Reihenfolge von oben nach unten)."""
+    ss = st.session_state
+    b = budget(ss)
+    if b["kapital"] <= 0:
+        return
+    andere = sum(_num(x) or 0 for j, x in zip(df.index, df["Betrag USD"]) if j != i and j not in (offen or set()))
+    rest = max(0.0, b["budget_a"] - andere)
+    betrag, kurs = _num(df.at[i, "Betrag USD"]) or 0.0, _num(df.at[i, "Kurs USD"])
+    if betrag <= rest + 0.5:
+        return
+    t = _txt(df.at[i, "Ticker"]) or "Titel"
+    if kurs:
+        menge = math.floor(rest / kurs)
+        df.at[i, "Menge"] = _fz_menge(menge)
+        df.at[i, "Betrag USD"] = _fz(menge * kurs)
+        _meldung(f"{t}: auf {ui.de(menge, 0)} Stück gekürzt – Aktienbudget ({ui.de(b['pct']['aktien'], 1)} % = "
+                 f"{ui.de(b['budget_a'], 0)} USD) wäre sonst überschritten.")
+    else:
+        df.at[i, "Betrag USD"] = _fz(rest)
+        _meldung(f"{t}: Betrag auf {ui.de(rest, 0)} USD gekürzt – Aktienbudget ausgeschöpft.")
+
+
 def _ak_aenderung(key: str):
     """Callback der Aktien-Tabelle: Änderungen übernehmen und die betroffenen Zeilen sofort rechnen."""
     ss = st.session_state
     ch = ss.get(key) or {}
     df = ss["an_aktien"].copy().reset_index(drop=True)     # genau die angezeigte Tabelle (Zeilennummern!)
     betroffen = {}
+    weg = {int(i) for i in (ch.get("deleted_rows") or []) if int(i) < len(df)}
     for i, werte in (ch.get("edited_rows") or {}).items():
         i = int(i)
         if i >= len(df):
             continue
+        if werte.get("Löschen"):
+            weg.add(i)
+            continue
         for c, v in werte.items():
             if c in AK_SPALTEN:
                 df.at[i, c] = "" if v is None else str(v)
+        if "Ticker" in werte and not _txt(df.at[i, "Ticker"]).strip():   # Ticker geleert → ganze Zeile weg
+            weg.add(i)
+            continue
         betroffen[i] = set(werte)
     for i, sp in betroffen.items():
-        _ak_rechnen(df, i, sp)
-    weg = [int(i) for i in (ch.get("deleted_rows") or []) if int(i) < len(df)]
+        if i not in weg:
+            _ak_rechnen(df, i, sp)
     if weg:
-        df = df.drop(index=weg).reset_index(drop=True)
+        df = df.drop(index=list(weg))
+    reihe = sorted(j for j in betroffen if j not in weg)
+    for n_, i in enumerate(reihe):
+        _ak_deckeln(df, i, set(reihe[n_ + 1:]))
+    df = df.reset_index(drop=True)
     for werte in ch.get("added_rows") or []:
+        if werte.get("Löschen"):
+            continue
         df = pd.concat([df, pd.DataFrame([{c: ("" if werte.get(c) is None else str(werte.get(c))) for c in AK_SPALTEN}])],
                        ignore_index=True)
         _ak_rechnen(df, len(df) - 1, set(werte))
+        _ak_deckeln(df, len(df) - 1)
     ss["an_aktien"] = _aktien_df(df)
     ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
 
@@ -543,6 +596,7 @@ def _such_hinzu():
     stueck = ss.get("an_such_stk") or 0
     df.at[i, "Menge"] = _fz_menge(stueck) if stueck else ""
     _ak_rechnen(df, i, {"Ticker", "Menge"} if stueck else {"Ticker"})
+    _ak_deckeln(df, i)
     ss["an_aktien"] = _aktien_df(df)
     ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
     ss["an_such"] = None
@@ -572,18 +626,38 @@ def _tr_aenderung(key: str):
     ss = st.session_state
     ch = ss.get(key) or {}
     df = _treas_df(ss["an_treas"]).reset_index(drop=True).astype(object)
+    weg = {int(i) for i in (ch.get("deleted_rows") or []) if int(i) < len(df)}
+    geaendert = []
     for i, werte in (ch.get("edited_rows") or {}).items():
         i = int(i)
         if i < len(df):
+            if werte.get("Löschen"):
+                weg.add(i)
+                continue
             for c, v in werte.items():
                 if c in TREAS_TYPEN:
                     df.at[i, c] = v
-    weg = [int(i) for i in (ch.get("deleted_rows") or []) if int(i) < len(df)]
+            if "Betrag USD" in werte:
+                geaendert.append(i)
     if weg:
-        df = df.drop(index=weg).reset_index(drop=True)
+        df = df.drop(index=list(weg))
     for werte in ch.get("added_rows") or []:
-        df = pd.concat([df, pd.DataFrame([{c: werte.get(c) for c in TREAS_TYPEN}])], ignore_index=True)
-    ss["an_treas"] = _treas_df(df)
+        if not werte.get("Löschen"):
+            df = pd.concat([df, pd.DataFrame([{c: werte.get(c) for c in TREAS_TYPEN}], index=[max(df.index, default=-1) + 1])])
+            geaendert.append(df.index[-1])
+    kap = _num(ss.get("an_kap_txt")) or 0.0
+    b_t = kap * float(ss.get("an_p_tr") or 0) / 100
+    for n_, i in enumerate(geaendert):          # Deckel: Treasuries höchstens Kapital × Treasury-% (von oben nach unten)
+        if i not in df.index or kap <= 0:
+            continue
+        spaeter = set(geaendert[n_ + 1:])
+        andere = sum(_num(x) or 0 for j, x in zip(df.index, df["Betrag USD"]) if j != i and j not in spaeter)
+        rest = max(0.0, b_t - andere)
+        if (_num(df.at[i, "Betrag USD"]) or 0) > rest + 0.5:
+            df.at[i, "Betrag USD"] = rest
+            _meldung(f"Treasury {_txt(df.at[i, 'Laufzeit']) or _txt(df.at[i, 'Bezeichnung'])}: Betrag auf {ui.de(rest, 0)} USD gekürzt "
+                     f"– Treasury-Budget ({ui.de(float(ss.get('an_p_tr') or 0), 1)} % = {ui.de(b_t, 0)} USD) ausgeschöpft.")
+    ss["an_treas"] = _treas_df(df.reset_index(drop=True))
     ss["an_tr_ver"] = ss.get("an_tr_ver", 0) + 1
 
 
@@ -641,7 +715,9 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
     if list(ss["an_aktien"].columns) != AK_SPALTEN:      # Sitzung aus der Zeit vor dem Update
         ss["an_aktien"] = _aktien_neu_rechnen(ss["an_aktien"])
     if "an_kap_txt" not in ss:
-        ss.update(an_kap_txt=ui.de(float(ss["an_kapital"]), 0), an_cash_txt=ui.de(float(ss["an_cash"]), 0))
+        ss.update(an_kap_txt=ui.de(float(ss["an_kapital"]), 0))
+    if "an_p_ak" not in ss:
+        ss.update(an_p_ak=float(ctx.alloc["aktien"]), an_p_tr=float(ctx.alloc["anleihen"]), an_p_ca=float(ctx.alloc["cash"]))
 
     # --- Vorlage laden --------------------------------------------------------
     gespeichert = tab.get("analysen")
@@ -667,13 +743,16 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             e = json.loads(z["eingabe"])
             a_ = pd.DataFrame(e["aktien"], columns=["Ticker", "Menge", "Betrag USD"])
             t_ = _treas_df(pd.DataFrame(e["treas"]))
+            if isinstance(e.get("pct"), dict):
+                ss.update(an_p_ak=float(e["pct"].get("aktien", ss["an_p_ak"])), an_p_tr=float(e["pct"].get("treas", ss["an_p_tr"])),
+                          an_p_ca=float(e["pct"].get("cash", ss["an_p_ca"])))
             ss.update(an_aktien=_aktien_neu_rechnen(a_),
                       an_treas=t_ if len(t_) else _leer_treas(),
                       an_cash=float(e.get("cash", 0)), an_kapital=float(e.get("kapital", kapital_std)))
         ss["an_ver"] += 1
         ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
         ss["an_tr_ver"] = ss.get("an_tr_ver", 0) + 1
-        ss.update(an_kap_txt=ui.de(float(ss["an_kapital"]), 0), an_cash_txt=ui.de(float(ss["an_cash"]), 0))
+        ss.update(an_kap_txt=ui.de(float(ss["an_kapital"]), 0))
         ss.pop("an_eingabe", None)
         st.rerun()
 
@@ -691,6 +770,40 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
     v = ss["an_ver"]
     with st.container(border=True):
+        st.markdown("**Aufteilung & Budget** · jeder Kauf verringert das verfügbare Budget seiner Anlageklasse")
+        a1, a2, a3, a4 = st.columns([1.3, 1, 1, 1])
+        a1.text_input("Kapital (USD)", key="an_kap_txt", on_change=_feld_format, args=("an_kap_txt",))
+        lo_a, hi_a = ctx.alloc["baender"]["aktien"]
+        lo_t, hi_t = ctx.alloc["baender"]["treasuries"]
+        lo_c, hi_c = ctx.alloc["baender"]["cash"]
+        a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", key="an_p_ak",
+                        help=f"IPS-Band {lo_a:g}–{hi_a:g} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} %")
+        a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", key="an_p_tr",
+                        help=f"IPS-Band {lo_t:g}–{hi_t:g} % · Taktik {ui.de(ctx.alloc['anleihen'], 1)} %")
+        a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", key="an_p_ca",
+                        help=f"IPS-Band {lo_c:g}–{hi_c:g} % · Taktik {ui.de(ctx.alloc['cash'], 1)} %")
+        b = budget(ss)
+
+        def _rest(x):
+            return f"<span style='color:{'#B93A32' if x < -0.5 else '#2F855A'}'>{ui.de(x, 0)} USD</span>"
+        ui.kopf_kpis([
+            ("Aktien verfügbar", _rest(b["rest_a"]), f"Budget {ui.de(b['budget_a'], 0)} · investiert {ui.de(b['inv_a'], 0)} USD"),
+            ("Treasuries verfügbar", _rest(b["rest_t"]), f"Budget {ui.de(b['budget_t'], 0)} · investiert {ui.de(b['inv_t'], 0)} USD"),
+            ("Cash (Rest)", f"{ui.de(b['frei'], 0)} USD",
+             f"{ui.de(b['frei'] / b['kapital'] * 100 if b['kapital'] else 0, 1)} % · Ziel mind. {ui.de(b['cash_ziel'], 0)} USD"),
+            ("Verfügbares Kapital", f"{ui.de(max(b['frei'] - b['cash_ziel'], 0), 0)} USD",
+             f"von {ui.de(b['kapital'], 0)} USD · noch investierbar ohne Cash-Ziel zu unterschreiten"),
+        ])
+        if abs(b["summe_pct"] - 100) > 0.01:
+            st.warning(f"Die Prozentsätze ergeben {ui.de(b['summe_pct'], 1)} % statt 100 %.", icon=":material/percent:")
+        aus = [n for n, w, (lo, hi) in (("Aktien", b["pct"]["aktien"], (lo_a, hi_a)), ("Treasuries", b["pct"]["treas"], (lo_t, hi_t)),
+                                        ("Cash", b["pct"]["cash"], (lo_c, hi_c))) if not lo <= w <= hi]
+        if aus:
+            st.warning("Ausserhalb der IPS-Bänder: " + ", ".join(aus), icon=":material/policy:")
+        if b["rest_a"] < -0.5 or b["rest_t"] < -0.5:
+            st.error("Budget überschritten (z. B. nach Senken eines Prozentsatzes) – Stück bzw. Beträge reduzieren.", icon=":material/block:")
+        for m_ in ss.pop("an_budget_meld", []):
+            st.info(m_, icon=":material/content_cut:")
         l, r = st.columns([1.35, 1])
         with l:
             st.markdown("**Aktien** · Ticker oder Firmenname eintippen, dann Stück *oder* Betrag – der Rest rechnet sich")
@@ -709,9 +822,10 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                 else:
                     c3.caption("Stück eingeben, dann hinzufügen")
             ak_key = f"an_ed_a{ss.get('an_ak_ver', 0)}"
-            st.data_editor(ss["an_aktien"], num_rows="dynamic", hide_index=True, width="stretch", key=ak_key,
+            st.data_editor(ss["an_aktien"].assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch", key=ak_key,
                            on_change=_ak_aenderung, args=(ak_key,), disabled=["Name", "Sektor", "Kurs USD"],
                            column_config={
+                               "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
                                "Ticker": st.column_config.TextColumn(help="Ticker (z. B. MSFT, BRK-B) oder Firmenname (z. B. Microsoft)"),
                                "Name": st.column_config.TextColumn(width="medium"),
                                "Kurs USD": st.column_config.TextColumn(help="letzter Schlusskurs (Yahoo Finance)"),
@@ -719,14 +833,15 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                "Betrag USD": st.column_config.TextColumn(help="Betrag → ganze Stücke (abgerundet), Betrag danach exakt")})
             n_ak = sum(1 for t in ss["an_aktien"]["Ticker"] if _txt(t).strip())
             summe = sum(_num(b_) or 0 for b_ in ss["an_aktien"]["Betrag USD"])
-            st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD · Kurse = letzter Schlusskurs; gekauft wird am 01.12. zum "
-                       "Eröffnungskurs (Analyse → «Vorauswahl ins Portfolio übernehmen»).")
+            st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD · Zeile entfernen: Häkchen in der Spalte ✕ (oder Ticker "
+                       "leeren) · Kurse = letzter Schlusskurs; gekauft wird am 01.12. zum Eröffnungskurs.")
         with r:
             st.markdown("**Treasuries** · Betrag je Laufzeitband – für die Übernahme ins Portfolio Kupon und Fälligkeit ergänzen")
             tr_key = f"an_ed_t{ss.get('an_tr_ver', 0)}"
-            st.data_editor(_treas_df(ss["an_treas"]), num_rows="dynamic", hide_index=True, width="stretch", key=tr_key,
-                           on_change=_tr_aenderung, args=(tr_key,),
+            st.data_editor(_treas_df(ss["an_treas"]).assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch",
+                           key=tr_key, on_change=_tr_aenderung, args=(tr_key,),
                            column_config={
+                               "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
                                "Laufzeit": st.column_config.SelectboxColumn(options=list(PROXY),
                                                                             help="Mit Fälligkeit: automatisch aus der Restlaufzeit"),
                                "Betrag USD": st.column_config.TextColumn(help="z. B. 3000000 – wird als 3'000'000 angezeigt"),
@@ -736,10 +851,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                                                        help="leer = Preis aus der Zinskurve am Handelstag"),
                                "Bezeichnung": st.column_config.TextColumn(help="z. B. CUSIP oder «UST 4,25 % 15.11.2029»; "
                                                                                "leer = automatisch")})
-            k1, k2 = st.columns(2)
-            k1.text_input("Kapital (USD)", key="an_kap_txt", on_change=_feld_format, args=("an_kap_txt",))
-            k2.text_input("Cash (USD)", key="an_cash_txt", on_change=_feld_format, args=("an_cash_txt",))
-            rest = st.checkbox("Nicht investierten Rest als Cash rechnen", value=True, key=f"an_rest{v}")
+            st.caption("Treasuries höchstens Kapital × Treasury-%. Zeile entfernen: Häkchen in der Spalte ✕.")
         o1, o2, o3 = st.columns([1.3, 1.2, 1])
         jahre = o1.segmented_control("Zeitraum der Kursdaten", [1, 2, 3, 5], default=1, format_func=lambda j: f"{j} J.",
                                      key=f"an_j{v}") or 1
@@ -747,10 +859,10 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                          help="Holt pro Titel Kennzahlen von Yahoo Finance – dauert einige Sekunden.")
         los = o3.button("Kennzahlen berechnen", type="primary", icon=":material/calculate:", width="stretch")
     if los:
-        kap, ca = _num(ss.get("an_kap_txt")), _num(ss.get("an_cash_txt"))
-        ss.update(an_kapital=float(kap or 0), an_cash=float(ca or 0))
-        ss["an_eingabe"] = dict(jahre=jahre, fund=fund, rest=rest, aktien=ss["an_aktien"].copy(), treas=_treas_df(ss["an_treas"]),
-                                cash=float(ca or 0), kapital=float(kap or 0))
+        kap = _num(ss.get("an_kap_txt"))
+        ss.update(an_kapital=float(kap or 0), an_cash=0.0)
+        ss["an_eingabe"] = dict(jahre=jahre, fund=fund, rest=True, aktien=ss["an_aktien"].copy(), treas=_treas_df(ss["an_treas"]),
+                                cash=0.0, kapital=float(kap or 0), pct=dict(b["pct"]))
     if "an_eingabe" not in ss:
         st.info("Titel eintragen und auf «Kennzahlen berechnen» klicken. Tipp: Mit «Aktuelles Portfolio übernehmen» siehst du "
                 "sofort, wie sich ein geplanter Kauf auf Sharpe Ratio, Risiko und Regeln auswirkt.")
@@ -990,7 +1102,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                            if z.get("Fälligkeit") is not None and pd.notna(z.get("Fälligkeit")) else "",
                                            "Bezeichnung": _txt(z.get("Bezeichnung"))}
                                           for z in t_.to_dict("records")],
-                                   cash=float(e["cash"]), kapital=float(e["kapital"]), jahre=int(e["jahre"]))
+                                   cash=float(e["cash"]), kapital=float(e["kapital"]), jahre=int(e["jahre"]),
+                                   pct=e.get("pct") or dict(budget(ss)["pct"]))
                     kz = {k_: (round(v_, 4) if isinstance(v_, float) else v_) for k_, v_ in kv.items()
                           if k_ not in ("von", "bis")}
                     kz.update(aktien=round(ak_w / total * 100, 1), treasuries=round(tr_w / total * 100, 1),
