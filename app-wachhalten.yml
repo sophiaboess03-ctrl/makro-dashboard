@@ -1,0 +1,68 @@
+# Hält die Streamlit-App wach: Streamlit Community Cloud legt Apps nach rund 12 Stunden ohne Besuch schlafen.
+# Ein einfacher HTTP-Aufruf reicht nicht – die App muss in einem echten Browser geöffnet werden.
+# Dieser Ablauf öffnet die App alle 4 Stunden in einem Headless-Browser und klickt, falls nötig,
+# auf «Yes, get this app back up!».
+#
+# Einmalig einrichten: GitHub → Repo → Settings → Secrets and variables → Actions → Tab «Variables»
+#   → New repository variable: Name APP_URL, Wert = Adresse der App (z. B. https://makro-dashboard.streamlit.app)
+name: App wach halten
+
+on:
+  schedule:
+    - cron: "23 */4 * * *"   # alle 4 Stunden (UTC)
+  workflow_dispatch:          # zusätzlich von Hand startbar (Actions → App wach halten → Run workflow)
+
+permissions:
+  contents: read
+
+jobs:
+  wecken:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Playwright installieren
+        run: |
+          pip install playwright==1.49.1
+          python -m playwright install --with-deps chromium
+      - name: App öffnen und bei Bedarf aufwecken
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        shell: python
+        run: |
+          import os, sys, time
+          from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
+          URL = os.environ.get("APP_URL", "").strip()
+          WECK = "get this app back up"
+          if not URL.startswith("http"):
+              print("APP_URL fehlt: unter Settings → Secrets and variables → Actions → Variables eintragen.")
+              sys.exit(1)
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              page.goto(URL, wait_until="domcontentloaded", timeout=90_000)
+              time.sleep(10)
+              schlaeft = lambda: page.get_by_text(WECK, exact=False).count() > 0
+              if schlaeft():
+                  print("App schläft – wecke sie auf …")
+                  page.get_by_text(WECK, exact=False).first.click()
+                  for _ in range(36):  # bis 6 Minuten warten
+                      time.sleep(10)
+                      if not schlaeft():
+                          break
+                  if schlaeft():
+                      print("App ist nicht aufgewacht.")
+                      sys.exit(1)
+                  print("App wurde aufgeweckt.")
+              else:
+                  print("App ist wach.")
+              try:
+                  page.wait_for_load_state("networkidle", timeout=60_000)
+              except PWTimeout:
+                  pass
+              time.sleep(30)  # kurz auf der Seite bleiben, damit es als Besuch zählt
+              browser.close()
