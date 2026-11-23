@@ -39,6 +39,19 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: makro-dashboard/makro-dashboard/requirements.txt
+      - name: Voraussetzungen prüfen
+        run: |
+          fehlt=""
+          [ -z "$S_URL" ] && fehlt="$fehlt SCRIPT_URL"
+          [ -z "$S_TOKEN" ] && fehlt="$fehlt SCRIPT_TOKEN"
+          if [ -n "$fehlt" ]; then
+            echo "::error::Es fehlen die Repository-Secrets:$fehlt – eintragen unter https://github.com/${{ github.repository }}/settings/secrets/actions (Werte wie script_url / script_token in den Streamlit-Secrets)."
+            exit 1
+          fi
+          echo "Secrets vorhanden."
+        env:
+          S_URL: ${{ secrets.SCRIPT_URL }}
+          S_TOKEN: ${{ secrets.SCRIPT_TOKEN }}
       - run: pip install -r requirements.txt
       - name: Lauf bestimmen
         run: |
