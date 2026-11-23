@@ -44,8 +44,14 @@ def _lage(ctx, lade_kurse) -> dict:
         kurse = {**(ctx.kurse or {}), **kurse_t}
         tx = P.transaktionen(ctx.tabellen.get("transaktionen"))
         aktien = tuple(sorted(set(tx.loc[tx["klasse"] == "Aktie", "ticker"].str.upper()))) if len(tx) else ()
+        try:
+            import sektor_news_seite as SNS
+
+            analysten = SNS.lade("unternehmen.json")[0] or {}
+        except Exception:  # noqa: BLE001
+            analysten = {}
         lage = M.lage_bauen(ctx.tabellen, ctx.fred, kurse, ctx.hist, _r_aus_ctx(ctx), sp500=P.sp500_liste(),
-                            earnings=_quartalszahlen(aktien) if aktien else {}, perf_fn=P.performance_daten)
+                            earnings=_quartalszahlen(aktien) if aktien else {}, perf_fn=P.performance_daten, analysten=analysten)
         if fehlt:
             lage["fehler"].append("Keine Kurse für: " + ", ".join(fehlt))
     ss["mon_lage"] = (time.time(), stempel, lage)

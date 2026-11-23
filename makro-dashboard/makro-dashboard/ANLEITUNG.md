@@ -98,6 +98,15 @@ Farben und Schrift kommen aus der Datei `.streamlit/config.toml` **im obersten O
 - **Angemeldet bleiben**: Beim Login ankreuzen – gilt 7 Tage auf diesem Browser. Ändert sich ein Passwort, muss man sich neu anmelden.
 - **Signal-Warnung**: GitHub Actions prüft Mo–Fr alle 2 Stunden, ob ein neues rotes Signal dazugekommen ist, und schickt dann eine Mail (gleiche GitHub-Secrets wie die Morgenmail).
 
+## Sektor-News, Unternehmen, Übernahme ins Portfolio (Update 6)
+
+- **Sektor-News** (Täglich): wichtigste Meldungen je Sektor und Kalendermonat (erste Periode Dezember 2026), Monatsfazit, eigene Meldungen erfassen, Relevanz (1–5), Wirkung und Kommentar bewerten. Es zählt euer Durchschnitt, sobald jemand bewertet hat, sonst die KI, sonst die Regel. Relevanz 5 erscheint als Info im Tagesreport.
+- **Unternehmen** (Überblick, unter Portfolio): für jeden Titel aus Bestand, Watchlist und Probe-Portfolio ein Profil mit Kennzahlen, Analysten (Konsens, Kursziele, Up-/Downgrades), News, Kauf-These, offenen Fällen und Team-Rating – nach Sektoren. Mindestens 2 Herabstufungen in 30 Tagen oder Kurs über dem mittleren Kursziel → Monitoring «Prüfen».
+- **Sektorallokation**: je Sektor Monatsfazit und Top-3-Meldungen, mit «→ Warum?» / «→ Dagegen» übernehmen.
+- **Analyse → Vorauswahl ins Portfolio übernehmen**: gespeicherte Vorauswahl wählen, Eröffnungskurs des Handelstags, ganze Stücke, Treasuries mit Kupon und Fälligkeit (in der Analyse ergänzen), Begründung je Zeile oder gemeinsam, Prüfung, «Bestätigen». «Rückgängig» storniert die ganze Übernahme.
+- **Sammel-Lauf**: GitHub Actions «Sektor-News» (`.github/workflows/sektor-news.yml`) 3× täglich. Secrets unter https://github.com/sophiaboess03-ctrl/makro-dashboard/settings/secrets/actions: `SCRIPT_URL`, `SCRIPT_TOKEN` (wie Monitoring) und neu `ANTHROPIC_API_KEY` (optional – ohne Key nur die kostenlose Regel). Ergebnisse liegen verschlüsselt im Branch `daten`.
+- **KI**: nur gezielt (vorgefilterte Kandidaten, Fazit bei neuer wichtiger Meldung, Firmen-Kurzfassung bei neuen News, Profil einmal), Monatsdeckel 4 USD (Sektor-News → KI & Einstellungen). Der Deckel gilt auch für die KI auf «Tagesupdate & News».
+
 ---
 
 ## Wenn etwas nicht klappt

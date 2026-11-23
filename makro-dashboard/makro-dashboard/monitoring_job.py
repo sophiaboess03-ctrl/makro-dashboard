@@ -42,10 +42,38 @@ def lage_laden(store, api_key: str | None) -> dict:
     tx = P.transaktionen(tabellen.get("transaktionen"))
     aktien = tuple(sorted(set(tx.loc[tx["klasse"] == "Aktie", "ticker"].str.upper()))) if len(tx) else ()
     earnings = M.quartalszahlen_yahoo(aktien) if aktien else {}
-    lage = M.lage_bauen(tabellen, fred, kurse, hist, r, sp500=P.sp500_liste(), earnings=earnings, perf_fn=P.performance_daten)
+    analysten, _ = _daten("unternehmen.json")
+    lage = M.lage_bauen(tabellen, fred, kurse, hist, r, sp500=P.sp500_liste(), earnings=earnings, perf_fn=P.performance_daten,
+                        analysten=analysten or {})
     if fehlt:
         lage["fehler"].append("Keine Kurse für: " + ", ".join(fehlt))
     return lage
+
+
+def N_seit_default() -> str:
+    return (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=26)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _daten(name: str):
+    """Gesammelte Daten (Sektor-News, Unternehmen) aus dem Branch «daten» – verschlüsselt mit dem SCRIPT_TOKEN."""
+    import newsdaten as N
+
+    return N.lade_datei(name, os.environ.get("SCRIPT_TOKEN", ""), repo=os.environ.get("GITHUB_REPOSITORY") or None)
+
+
+def wichtige_news(tab: dict, seit: str) -> list[dict]:
+    """Sektor-News mit Relevanz 5 (Team-Ø ab 4,5, sonst KI/Regel 5), seit dem letzten Tagesreport neu gefunden."""
+    import newsdaten as N
+
+    heute = N.monat_von(N.iso(None))
+    gestern = N.monat_von(N.iso(N.jetzt_utc() - pd.Timedelta(days=3)))
+    bew, eigen, out = N.bewertungen(tab.get("news_bewertung")), N.eigene_meldungen(tab.get("news_eigen")), []
+    for mon in sorted({heute, gestern}):
+        d, _ = _daten(f"news/{mon}.json")
+        for m in N.monatsliste(d, eigen, bew, mon):
+            if not m["eff"]["ausgeblendet"] and m["eff"]["rel"] >= 4.5 and str(m.get("gefunden") or m["zeit"]) > seit:
+                out.append(m)
+    return sorted(out, key=lambda m: m["zeit"], reverse=True)
 
 
 def _kontakte(tab: dict) -> dict:
@@ -100,6 +128,11 @@ def lauf(store, modus: str, api_key: str | None, app_url: str | None, trocken: b
     elif modus == "tag":
         im_report = M.gemeldet(log, ("tag", "start"))
         letzter = max((e["zeit"] for e in log if e["lauf"] in ("tag", "start")), default="")
+        try:
+            news = wichtige_news(tab, letzter or N_seit_default())
+        except Exception as e:  # noqa: BLE001
+            news = []
+            info.append(f"Sektor-News nicht geladen: {type(e).__name__}")
         for p in kont:
             mo = meine(p, offen)
             teile = dict(neu=[], handeln=[], erinnerung=[], erloschen=[])
@@ -117,7 +150,8 @@ def lauf(store, modus: str, api_key: str | None, app_url: str | None, trocken: b
             teile["erloschen"] = [f for f in meine(p, alle) if f["status"] == "Erloschen" and str(f["zeit"]) > letzter
                                   and (f["id"], p) in M.gemeldet(log, ("tag", "start", "sofort"))]
             teile["weitere"] = len(offen) - len(mo)
-            if teile["neu"] or teile["handeln"] or teile["erinnerung"]:
+            teile["news"] = [m for m in news if any(p in M.empfaenger(dict(bereich=s_), kont, zust) for s_ in (m.get("sektoren") or ["Makro"]))]
+            if teile["neu"] or teile["handeln"] or teile["erinnerung"] or teile["news"]:
                 b, h = M.mail_tag(p, teile, zust, app_url, datum)
                 ids = teile["neu"] + teile["handeln"] + teile["erinnerung"]
                 meldungen.append(("tag", [p], b, h, [(f["id"], f["stufe"]) for f in ids]))

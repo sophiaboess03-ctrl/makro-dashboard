@@ -68,6 +68,8 @@ SCHWELLEN = {
     "sigma_min": ("Tagesbewegung mindestens", 2.0, "%", "Titel"),
     "earnings_tage": ("Quartalszahlen ankündigen", 5.0, "Handelstage vorher", "Titel"),
     "drift": ("Position seit Kauf relativ gewachsen: Info ab", 50.0, "%", "Titel"),
+    "analyst_down": ("Herabstufungen durch Analysten: Prüfen ab", 2.0, "Häuser in 30 Tagen", "Titel"),
+    "kursziel_ueber": ("Kurs über dem mittleren Analysten-Kursziel: Prüfen ab", 0.0, "% über dem Kursziel", "Titel"),
     "band_nah": ("Frühwarnung: Abstand zur IPS-Grenze höchstens", 1.0, "Pp.", "Einhaltung"),
     "titel_nah": ("Frühwarnung Titel-Maximum: Abstand höchstens", 0.5, "Pp.", "Einhaltung"),
     "taktik_tol": ("Abweichung von der Taktik: Prüfen ab", 2.0, "Pp.", "Einhaltung"),
@@ -91,6 +93,8 @@ HINWEIS = {
     "sprung": "Grund der Bewegung klären (News, Zahlen, Herabstufung) und entscheiden, ob die These betroffen ist.",
     "earnings": "Vor den Zahlen: Erwartungen, Optionen-implizite Bewegung und Positionsgrösse prüfen.",
     "drift": "Position ist durch Kursgewinne gewachsen – Gewicht gegenüber Sektor-Ziel und Titel-Maximum prüfen.",
+    "analyst_down": "Mehrere Herabstufungen – Begründungen lesen (Seite «Unternehmen»), Kauf-These und Gewicht prüfen.",
+    "analyst_ziel": "Kurs liegt über dem mittleren Kursziel der Analysten – Gewinnmitnahme prüfen oder ein höheres eigenes Kursziel begründen.",
     "kursziel": "Kursziel erreicht – Gewinne mitnehmen oder neues Kursziel begründen.",
     "stop": "Stop erreicht – verkaufen oder das Halten ausdrücklich begründen.",
     "review": "Termin für die Überprüfung der These erreicht.",
@@ -422,6 +426,39 @@ def signale_titel(aktien: list[dict], kurse: dict, s: dict, bekannt: set, these:
     return out
 
 
+def signale_analysten(aktien: list[dict], analysten: dict | None, kurse: dict, s: dict, bekannt: set) -> list[dict]:
+    """Bestand: Herabstufungen in 30 Tagen und Kurs über dem mittleren Kursziel (Daten: Seite «Unternehmen», Yahoo)."""
+    import newsdaten as N
+
+    out = []
+    for a in aktien:
+        t, sek = a["ticker"], a.get("sektor") or ""
+        f = (analysten or {}).get(t)
+        if not f:
+            continue
+        px = _bis(kurse.get(t), None)
+        k = N.analysten_kennzahlen(f, kurs=float(px.iloc[-1]) if px is not None and len(px) else None)
+        bereich = sek if sek in C.SEKTOREN else "Allokation"
+        name = f"{t}" + (f" ({a['name']})" if a.get("name") else "")
+        n = len(k["down"])
+        key = f"titel:{t}:analyst_down"
+        if _aktiv(float(n), s["analyst_down"], "oben", key, bekannt, 1.0):
+            haeuser = ", ".join(f"{r['firma']} ({r['von'] or '?'} → {r['zu'] or '?'}, {r['datum'][8:10]}.{r['datum'][5:7]}.)"
+                                for r in k["down"][:4])
+            out.append(_sig(key, "Titel", bereich, f"{name}: {n} Herabstufungen in 30 Tagen",
+                            f"{haeuser}. Konsens jetzt: {N.KONSENS_DE.get(str(k['konsens']), k['konsens'] or '–')} "
+                            f"(Prüfen ab {de(s['analyst_down'], 0)} Häusern).", "Prüfen", "analyst_down", n, "Häuser", "oben",
+                            ticker=t))
+        if k["kurs"] and k["ziel"]:
+            ueber = (k["kurs"] / k["ziel"] - 1) * 100
+            key = f"titel:{t}:kursziel_analysten"
+            if _aktiv(ueber, s["kursziel_ueber"], "oben", key, bekannt, s["puffer_kurs"]):
+                out.append(_sig(key, "Titel", bereich, f"{name}: Kurs {de(ueber, 1, True)} % über dem Analysten-Kursziel",
+                                f"Kurs {de(k['kurs'], 2)} USD, mittleres Kursziel {de(k['ziel'], 2)} USD ({k['n'] or '?'} Analysten).",
+                                "Prüfen", "analyst_ziel", ueber, "%", "oben", ticker=t))
+    return out
+
+
 def signale_watchlist(wl: list[dict], kurse: dict, s: dict, bekannt: set, datum=None) -> list[dict]:
     out = []
     for w in wl:
@@ -660,13 +697,14 @@ def ticker_benoetigt(tabellen: dict) -> tuple[str, ...]:
 
 
 def lage_bauen(tabellen: dict, fred: dict, kurse: dict, hist: dict, r: dict, sp500: dict | None = None,
-               earnings: dict | None = None, mit_risiko: bool = True, perf_fn=None) -> dict:
+               earnings: dict | None = None, mit_risiko: bool = True, perf_fn=None, analysten: dict | None = None) -> dict:
     """r: Ergebnis von pipeline.berechne (oder gleichwertig aus dem App-Kontext). kurse: Titel, ETFs und Marktkurse."""
     import ips as IPS
     import portfolio as P
 
     lage = dict(tabellen=tabellen, fred=fred, kurse=kurse, hist=hist or {}, r=r, ips=r["ips"], alloc=r["alloc"],
-                sek_index=r["sek_index"], sp500=sp500 or {}, earnings=earnings or {}, hat_tx=False, fehler=[])
+                sek_index=r["sek_index"], sp500=sp500 or {}, earnings=earnings or {}, hat_tx=False, fehler=[],
+                analysten=analysten or {})
     tx = P.transaktionen(tabellen.get("transaktionen"))
     kapital, _ = P._einstellungen(tabellen.get("einstellungen"))
     heute = pd.Timestamp.today().normalize()
@@ -738,6 +776,7 @@ def alle_signale(lage: dict, s: dict, bekannt: set) -> list[dict]:
     out = []
     out += signale_titel(lage.get("aktien_liste") or [], lage["kurse"], s, bekannt, thesen(lage["tabellen"].get("thesen")),
                          lage.get("earnings"), lage.get("pf_faktor"))
+    out += signale_analysten(lage.get("aktien_liste") or [], lage.get("analysten"), lage["kurse"], s, bekannt)
     out += signale_watchlist(watchlist(lage["tabellen"].get("watchlist")), lage["kurse"], s, bekannt)
     out += signale_einhaltung(lage, s, bekannt)
     out += signale_sektor_trigger(lage, bekannt)
@@ -967,13 +1006,30 @@ def mail_tag(person: str, teile: dict, zust: dict, app_url: str | None, datum: s
               + _abschnitt("Neu seit dem letzten Report", _sortiert(teile["neu"]), zust)
               + _abschnitt("Offen – Stufe Handeln (täglich, bis erledigt)", _sortiert(teile["handeln"]), zust, mit_status=True)
               + _abschnitt("Offen – Stufe Prüfen (Erinnerung)", _sortiert(teile["erinnerung"]), zust, mit_status=True)
-              + _abschnitt("Von selbst erloschen", _sortiert(teile["erloschen"]), zust))
+              + _abschnitt("Von selbst erloschen", _sortiert(teile["erloschen"]), zust)
+              + _news_abschnitt(teile.get("news") or []))
     if teile.get("weitere"):
         inhalt += f"<p style='color:#556070'>Weitere offene Fälle im Team (andere Sektoren): {teile['weitere']}.</p>"
-    betreff = f"Exception Report {datum}: {n_neu} neu, {len(teile['handeln'])} offen Handeln"
+    betreff = f"Exception Report {datum}: {n_neu} neu, {len(teile['handeln'])} offen Handeln" + (
+        f" · {len(teile['news'])} wichtige Sektor-News" if teile.get("news") else "")
     return betreff, _rahmen(f"Exception Report – {datum}", "#14325C", inhalt, app_url,
                             "Täglicher Exception Report aus dem Monitoring (Mo–Fr ca. 7:00). Info-Fälle werden nur beim ersten "
                             "Auftreten und im Wochenreport gemeldet.")
+
+
+def _news_abschnitt(news: list[dict]) -> str:
+    """Info im Tagesreport: neue Sektor-News mit Relevanz 5 (Team-Durchschnitt, sonst KI bzw. Regel) – kein Fall."""
+    if not news:
+        return ""
+    zeilen = "".join(
+        f"<li style='margin-bottom:6px'><b>{_e(', '.join(m.get('sektoren') or []))}</b> · "
+        + (f"<a href='{_e(m['link'])}'>{_e(m['titel'])}</a>" if m.get("link") else _e(m["titel"]))
+        + f" <span style='color:#556070'>({_e(m.get('quelle'))}, {_e(m['zeit'][:10])}, Bewertung {_e(m['eff']['quelle'])}"
+        + (f", Wirkung {'positiv' if m['eff']['wirkung'] == '+' else 'negativ' if m['eff']['wirkung'] == '-' else 'neutral'}")
+        + ")</span>" + (f"<br><span style='color:#3B4555'>{_e(m['ki_grund'])}</span>" if m.get("ki_grund") else "") + "</li>"
+        for m in news[:10])
+    return (f"<h3 style='color:{STUFE_FARBE['Info']}'>Info: wichtige Sektor-News (Relevanz 5)</h3><ul style='padding-left:18px'>"
+            f"{zeilen}</ul><p style='color:#556070;font-size:12px'>Kein Fall – zur Einordnung. Bewerten und Fazit: Seite «Sektor-News».</p>")
 
 
 def mail_woche(person: str, offen: list[dict], erledigt: list[dict], neu_n: int, zust: dict, app_url: str | None,

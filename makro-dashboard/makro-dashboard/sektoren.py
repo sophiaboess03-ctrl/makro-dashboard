@@ -554,6 +554,37 @@ def _bearbeiten_ende(s: str, uebernehmen: bool):
     ss[f"sa_bearb_{s}"] = False
 
 
+def _news_uebernehmen(s: str, feld: str, zeile: str):
+    """Hängt eine Meldung an «Warum?» bzw. «Was spricht dagegen?» an (Entwurf – gilt erst nach «Speichern»)."""
+    ss = st.session_state
+    k = f"sa_{feld}_{s}"
+    alt = (ss.get(k) or "").rstrip()
+    if zeile not in alt:
+        ss[k] = (alt + "\n" if alt else "") + zeile
+    ss["sa_news_meldung"] = f"{s}: Meldung bei «{'Warum?' if feld == 'begruendung' else 'Was spricht dagegen?'}» ergänzt – " \
+                            "unten «Sektorallokation speichern»."
+
+
+def _news_block(s: str, n: dict | None, nur_lesen: bool):
+    if not n:
+        return
+    import sektor_news_seite as SNS
+
+    st.markdown(f"**Sektor-News {SNS.monat_name(n['monat'])}** <span class='klein' style='color:#6B7685'>· Fazit: "
+                f"{html.escape(n['quelle'])} · {n['n']} Meldungen</span>", unsafe_allow_html=True)
+    st.markdown(f"<div class='klein' style='margin-bottom:6px'>{html.escape(n['fazit'])}</div>", unsafe_allow_html=True)
+    for i, m in enumerate(n["top"]):
+        c1, c2, c3 = st.columns([5, 1, 1])
+        c1.markdown(SNS.meldung_html(m, sektoren=False), unsafe_allow_html=True)
+        zeile = f"• {m['titel']} ({m.get('quelle') or 'Quelle'}, {m['zeit'][8:10]}.{m['zeit'][5:7]}.{m['zeit'][:4]})"
+        c2.button("→ Warum?", key=f"sa_nw_{s}_{i}", on_click=_news_uebernehmen, args=(s, "begruendung", zeile),
+                  disabled=nur_lesen, help="Als Argument für die Gewichtung übernehmen", width="stretch")
+        c3.button("→ Dagegen", key=f"sa_ng_{s}_{i}", on_click=_news_uebernehmen, args=(s, "gegenargument", zeile),
+                  disabled=nur_lesen, help="Als Gegenargument übernehmen", width="stretch")
+    if not n["top"]:
+        st.caption("Noch keine Meldungen mit Relevanz ab 3 in diesem Monat.")
+
+
 def seite_sektoren(ctx, kurse: dict):
     R = SP.Sammler("Sektorallokation", "Über- und Untergewichte im Aktienteil gegenüber dem S&P 500, mit Begründung", kurz="Sektoren")
     ui.seitenkopf("Sektorallokation (Aktienteil)",
@@ -594,6 +625,8 @@ def seite_sektoren(ctx, kurse: dict):
     elif info["fehlt"]:
         st.caption("Fortschreibung nicht möglich (Kurse fehlen für " + ", ".join(info["fehlt"]) + ") – es gilt der Stand am Stichtag.")
 
+    if m_ := ss.pop("sa_news_meldung", None):
+        st.info(m_, icon=":material/newspaper:")
     t1, t3, t4, t5, t6 = st.tabs(["Allokation & Begründung", "Indexgewichte", "Trigger", "Szenarien bis Kauftag", "Regeln"])
 
     # --- Allokation & Begründung (direkt bearbeiten) -------------------------
@@ -669,7 +702,14 @@ def seite_sektoren(ctx, kurse: dict):
 
         st.markdown("#### Begründungen")
         st.caption("Zum Ändern beim Sektor auf «Bearbeiten» klicken, anpassen und «Übernehmen». Gespeichert wird danach mit "
-                   "«Sektorallokation speichern» unten.")
+                   "«Sektorallokation speichern» unten. Unter «Sektor-News» stehen je Sektor das Monatsfazit und die drei "
+                   "wichtigsten Meldungen – mit einem Klick als Argument oder Gegenargument übernehmen.")
+        try:
+            import sektor_news_seite as SNS
+
+            news = SNS.sektor_block_daten(ctx)
+        except Exception:  # noqa: BLE001 – News dürfen die Sektorallokation nie blockieren
+            news = {}
         for s in sorted(C.SEKTOREN, key=lambda x: -(entwurf[x].get("abweichung") or 0)):
             e = entwurf[s]
             a, sc = e.get("abweichung"), score(e)
@@ -687,6 +727,7 @@ def seite_sektoren(ctx, kurse: dict):
                     if tr["stufe"] != L.KONTEXT:
                         st.markdown(f"{ui.badge(tr['stufe'], tr['text'])} &nbsp; <span class='klein'>Automatisch überwacht: "
                                     f"{html.escape(tr['regel'])} · aktuell {html.escape(tr['wert'])}</span>", unsafe_allow_html=True)
+                    _news_block(s, news.get(s), ctx.nur_lesen)
                     st.button("Bearbeiten", key=f"sa_btn_b_{s}", icon=":material/edit:", on_click=_bearbeiten_start, args=(s,),
                               disabled=ctx.nur_lesen)
                 else:

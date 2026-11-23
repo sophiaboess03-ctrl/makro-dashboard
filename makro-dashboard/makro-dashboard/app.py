@@ -40,6 +40,9 @@ import taktik
 import risiko
 import sektoren
 import monitoring_seite
+import ki
+import sektor_news_seite
+import unternehmen_seite
 from makro import szenarien as SZ
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
@@ -304,6 +307,8 @@ if _fw is not None:
 # Seitenleiste: angemeldete Person, Status, Sicherung
 # ---------------------------------------------------------------------------
 TEAM = list(BENUTZER) if BENUTZER else list(secret("team", []) or [])
+ki.app_konfigurieren(store, tabellen, st.session_state.get("person") or "App")
+sektor_news_seite.konfigurieren(str(secret("script_token", "") or ""), secret("daten_repo"))
 ui.logo()
 with st.sidebar:
     if PERSOENLICH:
@@ -445,12 +450,16 @@ seiten = {
     "Überblick": [st.Page(_doks(_seite_gesamtbild, "gesamtbild"), title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild", default=True),
                   st.Page(_doks(lambda: ic.seite_ic(ctx, markt_tab, TEAM), "ic"), title="Investment Committee", icon=M("gavel"), url_path="ic"),
                   st.Page(_doks(_seite_portfolio, "portfolio"), title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio"),
+                  st.Page(_doks(lambda: unternehmen_seite.seite_unternehmen(ctx, fred, markt.lade_yahoo), "unternehmen"),
+                          title="Unternehmen", icon=M("domain"), url_path="unternehmen"),
                   st.Page(_doks(lambda: analyse.seite_analyse(ctx, fred, markt.lade_yahoo), "analyse"), title="Analyse",
                           icon=M("analytics"), url_path="analyse")],
     "Täglich": [
         st.Page(_doks(partial(markt.seite_maerkte, markt_tab, yahoo, fred, markt_info, alloc), "maerkte"), title="Märkte heute",
                 icon=M("candlestick_chart"), url_path="maerkte"),
         st.Page(_doks(_seite_news, "news"), title="Tagesupdate & News", icon=M("newspaper"), url_path="news"),
+        st.Page(_doks(lambda: sektor_news_seite.seite_sektor_news(ctx, TEAM), "sektor_news"), title="Sektor-News",
+                icon=M("feed"), url_path="sektor-news"),
     ],
     "Kapitel": [st.Page(partial(views.seite_kapitel, ctx, k["id"]), title=k["name"], icon=k["icon"], url_path=k["id"])
                 for k in C.KAPITEL],

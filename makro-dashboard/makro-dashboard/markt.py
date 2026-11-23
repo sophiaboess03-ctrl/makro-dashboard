@@ -185,18 +185,18 @@ SYSTEM_KI = ("Du schreibst auf Deutsch (Schweizer Rechtschreibung, ss statt ß) 
              "Nur Fakten aus dem gelieferten Material verwenden, nichts erfinden.")
 
 
-def _claude(prompt: str, api_key: str, modell: str, max_tokens: int = 900):
-    try:
-        r = requests.post("https://api.anthropic.com/v1/messages", timeout=90,
-                          headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
-                                   "content-type": "application/json"},
-                          json={"model": modell, "max_tokens": max_tokens, "system": SYSTEM_KI,
-                                "messages": [{"role": "user", "content": prompt}]})
-        if r.status_code != 200:
-            return None, f"KI nicht verfügbar (HTTP {r.status_code})."
-        return "".join(b.get("text", "") for b in r.json().get("content", [])), None
-    except Exception as e:  # noqa: BLE001
-        return None, f"KI nicht verfügbar ({type(e).__name__})."
+def _claude(prompt: str, api_key: str, modell: str, max_tokens: int = 900, zweck: str = "Tagesupdate"):
+    """Über ki.Budget: gleicher Monatsdeckel wie der automatische Lauf, Verbrauch wird protokolliert."""
+    import ki
+
+    b = ki.app_budget(api_key, modell)
+    if not b.aktiv:
+        return None, f"KI pausiert ({b.grund_inaktiv()}) – Übersicht ohne KI."
+    text = b.anfrage(prompt, zweck, max_tokens, system=SYSTEM_KI)
+    ki.app_protokoll(b)
+    if text is None:
+        return None, "KI nicht verfügbar (" + ("; ".join(b.fehler) or "unbekannt") + ")."
+    return text, None
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="KI fasst den Tag zusammen …")
@@ -212,7 +212,7 @@ def ki_newsletter(mail_id: str, text: str, api_key: str, modell: str):
               "Kapitel ist eines von: Wachstum & Zyklus, Arbeitsmarkt, Inflation & Fed, Zinsen & Anleihen, "
               "Kredit & Finanzbedingungen, Konsum & Stimmung, Gewinne & Bewertung, Geopolitik & Extremrisiken, Märkte.\n\n"
               f"Newsletter:\n{text[:14000]}")
-    return _claude(prompt, api_key, modell, 700)
+    return _claude(prompt, api_key, modell, 700, zweck="Newsletter (Tagesupdate)")
 
 
 # ---------------------------------------------------------------------------

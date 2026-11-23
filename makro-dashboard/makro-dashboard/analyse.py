@@ -245,6 +245,9 @@ def zusammenstellen(aktien: pd.DataFrame, treas: pd.DataFrame, cash: float, kapi
         zeilen.append(dict(ticker=t, klasse="Aktie", menge=menge, kurs=kurs, wert=wert, band=None))
     for _, z in treas.iterrows():
         band, betrag = _txt(z.get("Laufzeit")), _num(z.get("Betrag USD"))
+        faellig = pd.to_datetime(z.get("Fälligkeit"), errors="coerce") if "Fälligkeit" in z else None
+        if faellig is not None and pd.notna(faellig):   # konkrete Anleihe: Band aus der Restlaufzeit
+            band = baender(max(0.0, (faellig - pd.Timestamp.today()).days / 365.25), _txt(z.get("Bezeichnung")))
         if band in PROXY and betrag:
             zeilen.append(dict(ticker=PROXY[band][0], klasse="Treasury", menge=None, kurs=None, wert=betrag, band=band))
     pos = pd.DataFrame(zeilen, columns=["ticker", "klasse", "menge", "kurs", "wert", "band"])
@@ -401,9 +404,22 @@ def _leer_aktien(n=6):
         {"Ticker": "string", "Menge": "float64", "Betrag USD": "float64"})
 
 
+TREAS_TYPEN = {"Laufzeit": "string", "Betrag USD": "float64", "Kupon %": "float64", "Fälligkeit": "datetime64[ns]",
+               "Kurs %": "float64", "Bezeichnung": "string"}
+
+
+def _treas_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Treasury-Eingabe mit allen Spalten (ältere gespeicherte Vorauswahlen haben nur Laufzeit und Betrag)."""
+    df = df.copy()
+    for c in TREAS_TYPEN:
+        if c not in df.columns:
+            df[c] = None
+    df["Fälligkeit"] = pd.to_datetime(df["Fälligkeit"], errors="coerce")
+    return df[list(TREAS_TYPEN)].astype(TREAS_TYPEN)
+
+
 def _leer_treas():
-    return pd.DataFrame({"Laufzeit": ["1–3 J.", "3–7 J.", "7–10 J."], "Betrag USD": [None, None, None]}).astype(
-        {"Laufzeit": "string", "Betrag USD": "float64"})
+    return _treas_df(pd.DataFrame({"Laufzeit": ["1–3 J.", "3–7 J.", "7–10 J."], "Betrag USD": [None, None, None]}))
 
 
 def portfolio_vorlage(tabellen: dict, fred: dict, lade_kurse) -> tuple[pd.DataFrame, pd.DataFrame, float, float] | None:
@@ -467,15 +483,15 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             if v is None:
                 ss["an_meldung"] = "Im Portfolio sind noch keine Transaktionen erfasst."
             else:
-                ss.update(an_aktien=v[0], an_treas=v[1], an_cash=max(0.0, v[2]), an_kapital=v[3])
+                ss.update(an_aktien=v[0], an_treas=_treas_df(v[1]), an_cash=max(0.0, v[2]), an_kapital=v[3])
         else:
             z = gespeichert.set_index("id").loc[wahl]
             e = json.loads(z["eingabe"])
             a_ = pd.DataFrame(e["aktien"], columns=["Ticker", "Menge", "Betrag USD"])
-            t_ = pd.DataFrame(e["treas"], columns=["Laufzeit", "Betrag USD"])
+            t_ = _treas_df(pd.DataFrame(e["treas"]))
             ss.update(an_aktien=pd.concat([a_, _leer_aktien(2)], ignore_index=True).astype(
                           {"Ticker": "string", "Menge": "float64", "Betrag USD": "float64"}),
-                      an_treas=(t_ if len(t_) else _leer_treas()).astype({"Laufzeit": "string", "Betrag USD": "float64"}),
+                      an_treas=t_ if len(t_) else _leer_treas(),
                       an_cash=float(e.get("cash", 0)), an_kapital=float(e.get("kapital", kapital_std)))
         ss["an_ver"] += 1
         ss.pop("an_eingabe", None)
@@ -483,6 +499,12 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
     if m := ss.pop("an_meldung", None):
         st.warning(m)
+
+    with st.expander(f"Vorauswahl ins Portfolio übernehmen (Kauf per {pd.Timestamp(C.SIMULATION_START):%d.%m.%Y})",
+                     icon=":material/shopping_cart_checkout:", expanded=bool(ss.get("ue_vor"))):
+        import uebernahme
+
+        uebernahme.bereich(ctx, fred, gespeichert)
 
     # --- Eingabe -------------------------------------------------------------
     v = ss["an_ver"]
@@ -496,11 +518,18 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                         "Menge": st.column_config.NumberColumn("Menge (Stück)", min_value=0, step=1, format="%.0f"),
                                         "Betrag USD": st.column_config.NumberColumn(min_value=0, step=1000, format="%.0f")})
         with r:
-            st.markdown("**Treasuries** · Betrag je Laufzeitband")
-            treas = st.data_editor(ss["an_treas"], num_rows="dynamic", hide_index=True, width="stretch", key=f"an_ed_t{v}",
+            st.markdown("**Treasuries** · Betrag je Laufzeitband – für die Übernahme ins Portfolio Kupon und Fälligkeit ergänzen")
+            treas = st.data_editor(_treas_df(ss["an_treas"]), num_rows="dynamic", hide_index=True, width="stretch", key=f"an_ed_t{v}",
                                    column_config={
-                                       "Laufzeit": st.column_config.SelectboxColumn(options=list(PROXY), required=True),
-                                       "Betrag USD": st.column_config.NumberColumn(min_value=0, step=100000, format="%.0f")})
+                                       "Laufzeit": st.column_config.SelectboxColumn(options=list(PROXY),
+                                                                                    help="Mit Fälligkeit: automatisch aus der Restlaufzeit"),
+                                       "Betrag USD": st.column_config.NumberColumn(min_value=0, step=100000, format="%.0f"),
+                                       "Kupon %": st.column_config.NumberColumn(min_value=0.0, max_value=15.0, step=0.125, format="%.3f"),
+                                       "Fälligkeit": st.column_config.DateColumn(format="DD.MM.YYYY"),
+                                       "Kurs %": st.column_config.NumberColumn(min_value=0.0, format="%.3f",
+                                                                               help="leer = Preis aus der Zinskurve am Handelstag"),
+                                       "Bezeichnung": st.column_config.TextColumn(help="z. B. CUSIP oder «UST 4,25 % 15.11.2029»; "
+                                                                                       "leer = automatisch")})
             k1, k2 = st.columns(2)
             kapital = k1.number_input("Kapital (USD)", min_value=0.0, value=float(ss["an_kapital"]), step=100000.0,
                                       format="%.0f", key=f"an_kap{v}")
@@ -525,7 +554,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
     # --- Daten & Rechnung -------------------------------------------------------
     ticker = sorted({_txt(t).strip().upper().replace(".", "-") for t in aktien["Ticker"] if _txt(t).strip()})
-    proxies = sorted({PROXY[_txt(b)][0] for b in treas["Laufzeit"] if _txt(b) in PROXY})
+    pos0 = zusammenstellen(aktien.iloc[0:0], treas, 0, 0, False, {})[0]
+    proxies = sorted({PROXY[_txt(b)][0] for b in pos0["band"] if _txt(b) in PROXY})
     hist, fehlt, zeit = lade_historie(tuple(ticker + proxies + [SPX, NEUTRAL_PROXY, RF_TICKER]), int(e["jahre"]))
     if SPX not in hist:
         st.error("Kursdaten von Yahoo Finance sind gerade nicht erreichbar. Bitte in einer Minute nochmals versuchen.")
@@ -744,7 +774,11 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                     t_ = treas[[_num(x) is not None for x in treas["Betrag USD"]]]
                     eingabe = dict(aktien=[{k_: (_num(v_) if k_ != "Ticker" else _txt(v_)) for k_, v_ in z.items()}
                                            for z in a_.to_dict("records")],
-                                   treas=[{"Laufzeit": _txt(z["Laufzeit"]), "Betrag USD": _num(z["Betrag USD"])}
+                                   treas=[{"Laufzeit": _txt(z["Laufzeit"]), "Betrag USD": _num(z["Betrag USD"]),
+                                           "Kupon %": _num(z.get("Kupon %")), "Kurs %": _num(z.get("Kurs %")),
+                                           "Fälligkeit": pd.Timestamp(z["Fälligkeit"]).date().isoformat()
+                                           if z.get("Fälligkeit") is not None and pd.notna(z.get("Fälligkeit")) else "",
+                                           "Bezeichnung": _txt(z.get("Bezeichnung"))}
                                           for z in t_.to_dict("records")],
                                    cash=float(ss["an_cash"]), kapital=float(ss["an_kapital"]), jahre=int(e["jahre"]))
                     kz = {k_: (round(v_, 4) if isinstance(v_, float) else v_) for k_, v_ in kv.items()

@@ -56,6 +56,12 @@ TABELLEN = {
     "zustaendigkeit": ["zeit", "person", "bereich", "haupt", "backup"],
     "watchlist": ["zeit", "person", "id", "ticker", "name", "sektor", "op", "marke", "these", "geloescht"],
     "thesen": ["zeit", "person", "ticker", "these", "kursziel", "stop", "ueberpruefung", "quartalszahlen"],
+    # Sektor-News & Unternehmen (die gesammelten Meldungen selbst liegen verschlüsselt im Branch «daten», siehe newsdaten.py)
+    "news_eigen": ["zeit", "person", "id", "datum", "titel", "link", "quelle", "sektoren", "ticker", "text", "geloescht"],
+    "news_bewertung": ["zeit", "person", "news_id", "relevanz", "wirkung", "kommentar", "ausblenden"],
+    "news_fazit": ["zeit", "person", "monat", "sektor", "text"],
+    "team_rating": ["zeit", "person", "ticker", "rating", "begruendung"],
+    "ki_verbrauch": ["zeit", "person", "monat", "zweck", "aufrufe", "input", "output", "usd", "modell"],
 }
 
 
