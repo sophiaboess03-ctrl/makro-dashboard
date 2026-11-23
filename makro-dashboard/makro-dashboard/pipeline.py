@@ -69,7 +69,7 @@ def berechne(fred: dict, labels: dict, tabellen: dict, hist: dict | None = None,
         t, monat = T.lese(tabellen.get("taktik"), m_gueltig["id"]), m_gueltig
     if t is None:
         t, monat = T.lese(tabellen.get("taktik"), m_arbeit["id"]), m_arbeit
-    alloc = T.alloc_dict(t, monat, neutral, ips, regeln, gew)
+    alloc = T.alloc_dict(t, monat, neutral, ips, regeln, gew, tabellen)
     bond = AN.bond_basis(fred, einst["bond_benchmark"])
     sig = SZ.sigmas(fred, hist)
     return dict(daten=daten, status=status, kombis=kombis, szen=szen, risiken=risiken, alloc=alloc, szdef=sdefs, gew=gew,

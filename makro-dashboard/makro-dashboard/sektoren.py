@@ -551,8 +551,8 @@ def seite_sektoren(ctx, kurse: dict):
                                                   f"{sum(1 for t in trig if t['stufe'] != L.KONTEXT)} automatisch überwacht"),
     ])
     if sa["quelle"] == "Georg":
-        st.info("Noch nichts gespeichert. Angezeigt sind die Startwerte aus Georgs Dokument vom 21.11.2026 – unten im Tab "
-                "«Bearbeiten» prüfen, anpassen und speichern.", icon=":material/info:")
+        st.info("Noch nichts gespeichert. Angezeigt sind die Startwerte aus Georgs Dokument vom 21.11.2026 – unten direkt "
+                "prüfen, anpassen und speichern.", icon=":material/info:")
     else:
         st.caption(f"Zuletzt gespeichert von {sa['person']} am {sa['zeit'][:16].replace('T', ' ')}.")
     for t in trig:
@@ -564,69 +564,10 @@ def seite_sektoren(ctx, kurse: dict):
     elif info["fehlt"]:
         st.caption("Fortschreibung nicht möglich (Kurse fehlen für " + ", ".join(info["fehlt"]) + ") – es gilt der Stand am Stichtag.")
 
-    t1, t2, t3, t4, t5, t6 = st.tabs(["Übersicht", "Bearbeiten", "Indexgewichte", "Trigger", "Szenarien bis Kauftag", "Regeln"])
+    t1, t3, t4, t5, t6 = st.tabs(["Allokation & Begründung", "Indexgewichte", "Trigger", "Szenarien bis Kauftag", "Regeln"])
 
-    # --- Übersicht -----------------------------------------------------------
+    # --- Allokation & Begründung (direkt bearbeiten) -------------------------
     with t1:
-        reg = regel_abweichungen(sek, idx)
-        zeilen = []
-        for s in sorted(C.SEKTOREN, key=lambda x: -(sek[x].get("abweichung") or 0)):
-            e, a, sc = sek[s], sek[s].get("abweichung"), score(sek[s])
-            tr = next(t for t in trig if t["sektor"] == s)
-            zeilen.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 1, True)} Pp.",
-                           "Index heute": f"{ui.de(idx[s], 2)} %", "Ziel % Aktien": "–" if ziel[s] is None else f"{ui.de(ziel[s], 2)} %",
-                           "Ziel % Gesamt": "–" if ziel[s] is None else f"{ui.de(ziel[s] * aktien_soll / 100, 2)} %",
-                           "Relativ": "–" if a is None or not idx[s] else f"{ui.de(a / idx[s] * 100, 0, True)} %",
-                           "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel (Scorecard)": f"{ui.de(reg[s], 1, True)} Pp.",
-                           "Trigger": f"● {tr['stufe']}" if tr["stufe"] != L.KONTEXT else "Text"})
-        df = pd.DataFrame(zeilen)
-        st.dataframe(ui.ampel_stil(df, ["Trigger"]), hide_index=True, width="stretch", height=40 + 35 * 11)
-        c1, c2 = st.columns([1.3, 1])
-        with c1:
-            werte = [(s, sek[s].get("abweichung")) for s in C.SEKTOREN]
-            werte = sorted([(s, a if a is not None else (0.25 if sek[s]["richtung"] == "Übergewicht" else -0.25 if sek[s]["richtung"] == "Untergewicht" else 0))
-                            for s, a in werte], key=lambda x: x[1])
-            fig = go.Figure(go.Bar(x=[a for _, a in werte], y=[s for s, _ in werte], orientation="h",
-                                   marker_color=["#2F855A" if a > 0 else "#DD6B20" if a < 0 else "#A0A8B4" for _, a in werte],
-                                   text=[ui.de(a, 1, True) if sek[s].get("abweichung") is not None else "Richtung" for s, a in werte],
-                                   textposition="outside"))
-            lo, hi = min(a for _, a in werte), max(a for _, a in werte)
-            fig.update_layout(height=360, margin=dict(l=8, r=30, t=10, b=8), plot_bgcolor="white", showlegend=False)
-            fig.update_xaxes(ticksuffix=" Pp.", gridcolor="#EEF0F3", zeroline=True, zerolinecolor="#667085",
-                             range=[min(lo, 0) - 0.45, max(hi, 0) + 0.45])
-            ui.zeige(fig)
-            st.caption("Abweichung zum Index in Pp. des Aktienteils (grün = Übergewicht, orange = Untergewicht).")
-        with c2:
-            st.markdown("**Prüfung der Allokation**")
-            pm = plan_meldungen(sek, idx, ctx.ips)
-            if not pm:
-                st.caption("Keine Hinweise.")
-            st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {L.ROT: "Verstoss", L.GELB: "Hinweis", L.GRUEN: "ok"}[s_])}'
-                                f'&nbsp; {html.escape(txt)}</span><span></span></div>' for s_, txt in pm), unsafe_allow_html=True)
-        st.markdown("#### Begründungen")
-        for s in sorted(C.SEKTOREN, key=lambda x: -(sek[x].get("abweichung") or 0)):
-            e = sek[s]
-            a = e.get("abweichung")
-            kopf = f"{s} · {e['richtung']}" + ("" if a is None else f" {ui.de(a, 1, True)} Pp.")
-            with st.expander(kopf):
-                sc = score(e)
-                if sc is not None:
-                    st.markdown(" · ".join(f"{SCORE_NAMEN[k]} {ui.de(e.get(k) or 0, 0, True)}" for k in SCORE_GEWICHTE)
-                                + f" → **Score {ui.de(sc, 2, True)}**")
-                st.markdown(f"**Warum?** {html.escape(e.get('begruendung') or '–')}")
-                st.markdown(f"**Was spricht dagegen?** {html.escape(e.get('gegenargument') or '–')}")
-                st.markdown(f"**Wann ändern wir?** {html.escape(e.get('trigger') or '–')}")
-        R.h("Sektorallokation")
-        R.text(f"Index: Stichtag {info['stichtag']} ({info['quelle']})" + (f", fortgeschrieben bis {info['bis']:%d.%m.%Y}" if info["fortgeschrieben"] else "")
-               + f" · Aktienquote {ui.de(aktien_soll, 1)} %")
-        R.tabelle(df.assign(Trigger=df["Trigger"].str.replace("● ", "")), [26, 20, 18, 18, 18, 18, 14, 12, 20, 16])
-        for s in C.SEKTOREN:
-            e = sek[s]
-            R.text(f"{s} ({e['richtung']}): {e.get('begruendung') or '-'} | Dagegen: {e.get('gegenargument') or '-'} | "
-                   f"Trigger: {e.get('trigger') or '-'}", klein=True)
-
-    # --- Bearbeiten ----------------------------------------------------------
-    with t2:
         if "sa_df" not in ss or ss.get("sa_stand") != sa["zeit"]:
             _lade_in_editor(sek)
             ss["sa_stand"] = sa["zeit"]
@@ -637,54 +578,108 @@ def seite_sektoren(ctx, kurse: dict):
         c[1].button("Georgs Startwerte laden", on_click=_lade_in_editor, args=({s: dict(GEORG[s]) for s in C.SEKTOREN},),
                     width="stretch")
         if sa["quelle"] == "Team":
-            c[2].button("Gespeicherte Werte laden", on_click=_lade_in_editor, args=(sek,), width="stretch")
-        st.caption("Richtung ist Pflicht. Die Abweichung in Pp. des Aktienteils kann leer bleiben, bis die Zahlen kurz vor der "
-                   "Abgabe feststehen – dann prüft die App nur die Richtung. Punkte −2 bis +2 sind optional (Orientierung).")
-        with st.form("sa_form"):
-            ed = st.data_editor(
-                ss["sa_df"], hide_index=True, width="stretch", key=f"sa_ed_{ss.get('sa_ver', 0)}", disabled=["Sektor"],
-                column_config={"Richtung": st.column_config.SelectboxColumn(options=RICHTUNGEN, required=True),
-                               "Abweichung (Pp.)": st.column_config.NumberColumn(min_value=-10.0, max_value=10.0, step=0.1, format="%.1f"),
-                               **{SCORE_NAMEN[k]: st.column_config.NumberColumn(min_value=-2.0, max_value=2.0, step=1.0, format="%.0f")
-                                  for k in SCORE_GEWICHTE}})
-            st.markdown("**Begründung, Gegenargumente und Trigger je Sektor**")
-            optionen = [""] + list(GROESSEN)
-            for s in C.SEKTOREN:
-                with st.expander(s):
-                    st.text_area("Warum? (Begründung mit Belegen)", key=f"sa_begruendung_{s}", height=90)
-                    st.text_area("Was spricht dagegen?", key=f"sa_gegenargument_{s}", height=70)
-                    st.text_area("Wann ändern wir die Gewichtung? (Trigger als Text)", key=f"sa_trigger_{s}", height=60)
-                    k1, k2, k3 = st.columns([1.6, 0.6, 1])
-                    if ss.get(f"sa_regel_groesse_{s}") not in optionen:
-                        ss[f"sa_regel_groesse_{s}"] = ""
-                    k1.selectbox("Automatisch überwachen", optionen, key=f"sa_regel_groesse_{s}",
-                                 format_func=lambda g: "– nicht automatisch –" if not g else GROESSEN[g][0])
-                    if ss.get(f"sa_regel_op_{s}") not in ("", "<", ">", "<=", ">="):
-                        ss[f"sa_regel_op_{s}"] = ""
-                    k2.selectbox("Bedingung", ["", "<", ">", "<=", ">="], key=f"sa_regel_op_{s}")
-                    k3.text_input("Schwelle (Zahl oder Datum JJJJ-MM-TT)", key=f"sa_regel_wert_{s}")
-            los = st.form_submit_button("Sektorallokation speichern", type="primary", icon=":material/save:", disabled=ctx.nur_lesen)
-        if los:
-            neu, fehler = {}, []
-            for _, r in ed.iterrows():
-                s = r["Sektor"]
-                a = _z(r["Abweichung (Pp.)"])
-                neu[s] = dict(richtung=r["Richtung"] or "Neutral", abweichung=a,
+            c[2].button("Gespeicherte Werte laden (Änderungen verwerfen)", on_click=_lade_in_editor, args=(sek,), width="stretch")
+        st.caption("Direkt in der Tabelle bearbeiten. Richtung ist Pflicht; die Abweichung in Pp. des Aktienteils kann leer bleiben, "
+                   "bis die Zahlen kurz vor der Abgabe feststehen – dann prüft die App nur die Richtung. Punkte −2 bis +2 sind "
+                   "optional. Ziel, Prüfung und Grafik rechnen sofort mit; gespeichert wird erst mit «Speichern».")
+        ed = st.data_editor(
+            ss["sa_df"], hide_index=True, width="stretch", key=f"sa_ed_{ss.get('sa_ver', 0)}", disabled=["Sektor"],
+            height=40 + 35 * 11,
+            column_config={"Richtung": st.column_config.SelectboxColumn(options=RICHTUNGEN, required=True),
+                           "Abweichung (Pp.)": st.column_config.NumberColumn(min_value=-10.0, max_value=10.0, step=0.1, format="%.1f"),
+                           **{SCORE_NAMEN[k]: st.column_config.NumberColumn(min_value=-2.0, max_value=2.0, step=1.0, format="%.0f")
+                              for k in SCORE_GEWICHTE}})
+
+        # Entwurf = aktuelle Eingaben (Tabelle + Texte)
+        entwurf = {}
+        for _, r in ed.iterrows():
+            s = r["Sektor"]
+            entwurf[s] = dict(richtung=r["Richtung"] or "Neutral", abweichung=_z(r["Abweichung (Pp.)"]),
                               **{k: _z(r[SCORE_NAMEN[k]]) for k in SCORE_GEWICHTE},
                               **{k: (ss.get(f"sa_{k}_{s}") or "").strip() for k in ("begruendung", "gegenargument", "trigger",
                                                                                      "regel_groesse", "regel_op", "regel_wert")})
-                if neu[s]["richtung"] != "Neutral" and len(neu[s]["begruendung"]) < 20:
-                    fehler.append(f"{s}: Begründung fehlt (mind. 20 Zeichen bei Über-/Untergewicht)")
-            rot = [t for s_, t in plan_meldungen(neu, idx, ctx.ips) if s_ == L.ROT]
+        z_e, reg_e = ziele(entwurf, idx), regel_abweichungen(entwurf, idx)
+        trig_e = {t["sektor"]: t for t in trigger_liste(entwurf, ctx.fred, kurse)}
+        zeilen = []
+        for s in sorted(C.SEKTOREN, key=lambda x: -(entwurf[x].get("abweichung") or 0)):
+            e, a, sc = entwurf[s], entwurf[s].get("abweichung"), score(entwurf[s])
+            tr = trig_e[s]
+            zeilen.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 1, True)} Pp.",
+                           "Index heute": f"{ui.de(idx[s], 2)} %", "Ziel % Aktien": "–" if z_e[s] is None else f"{ui.de(z_e[s], 2)} %",
+                           "Ziel % Gesamt": "–" if z_e[s] is None else f"{ui.de(z_e[s] * aktien_soll / 100, 2)} %",
+                           "Relativ": "–" if a is None or not idx[s] else f"{ui.de(a / idx[s] * 100, 0, True)} %",
+                           "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel (Scorecard)": f"{ui.de(reg_e[s], 1, True)} Pp.",
+                           "Trigger": f"● {tr['stufe']}" if tr["stufe"] != L.KONTEXT else "Text"})
+        df = pd.DataFrame(zeilen)
+        st.markdown("**Ergebnis: Zielgewichte** (Ziel % Gesamt = Ziel % Aktien × Aktienquote der Taktik; geht automatisch in die Taktik)")
+        st.dataframe(ui.ampel_stil(df.drop(columns=["Richtung", "Abweichung"]), ["Trigger"]), hide_index=True, width="stretch",
+                     height=40 + 35 * 11)
+        c1, c2 = st.columns([1.3, 1])
+        with c1:
+            werte = sorted([(s, entwurf[s]["abweichung"] if entwurf[s]["abweichung"] is not None else
+                             (0.25 if entwurf[s]["richtung"] == "Übergewicht" else -0.25 if entwurf[s]["richtung"] == "Untergewicht" else 0))
+                            for s in C.SEKTOREN], key=lambda x: x[1])
+            fig = go.Figure(go.Bar(x=[a for _, a in werte], y=[s for s, _ in werte], orientation="h",
+                                   marker_color=["#2F855A" if a > 0 else "#DD6B20" if a < 0 else "#A0A8B4" for _, a in werte],
+                                   text=[ui.de(a, 1, True) if entwurf[s]["abweichung"] is not None else "Richtung" for s, a in werte],
+                                   textposition="outside"))
+            lo, hi = min(a for _, a in werte), max(a for _, a in werte)
+            fig.update_layout(height=360, margin=dict(l=8, r=30, t=10, b=8), plot_bgcolor="white", showlegend=False)
+            fig.update_xaxes(ticksuffix=" Pp.", gridcolor="#EEF0F3", zeroline=True, zerolinecolor="#667085",
+                             range=[min(lo, 0) - 0.45, max(hi, 0) + 0.45])
+            ui.zeige(fig)
+            st.caption("Abweichung zum Index in Pp. des Aktienteils (grün = Übergewicht, orange = Untergewicht).")
+        with c2:
+            st.markdown("**Prüfung der Allokation**")
+            pm = plan_meldungen(entwurf, idx, ctx.ips)
+            if not pm:
+                st.caption("Keine Hinweise.")
+            st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {L.ROT: "Verstoss", L.GELB: "Hinweis", L.GRUEN: "ok"}[s_])}'
+                                f'&nbsp; {html.escape(txt)}</span><span></span></div>' for s_, txt in pm), unsafe_allow_html=True)
+
+        st.markdown("#### Begründungen")
+        optionen = [""] + list(GROESSEN)
+        for s in sorted(C.SEKTOREN, key=lambda x: -(entwurf[x].get("abweichung") or 0)):
+            e = entwurf[s]
+            a, sc = e.get("abweichung"), score(e)
+            kopf = (f"{s} · {e['richtung']}" + ("" if a is None else f" {ui.de(a, 1, True)} Pp.")
+                    + ("" if sc is None else f" · Score {ui.de(sc, 2, True)}")
+                    + (" · Begründung fehlt" if e["richtung"] != "Neutral" and len(e["begruendung"]) < 20 else ""))
+            with st.expander(kopf):
+                st.text_area("Warum? (Begründung mit Belegen)", key=f"sa_begruendung_{s}", height=100)
+                st.text_area("Was spricht dagegen?", key=f"sa_gegenargument_{s}", height=80)
+                st.text_area("Wann ändern wir die Gewichtung? (Trigger als Text)", key=f"sa_trigger_{s}", height=68)
+                k1, k2, k3 = st.columns([1.6, 0.6, 1])
+                if ss.get(f"sa_regel_groesse_{s}") not in optionen:
+                    ss[f"sa_regel_groesse_{s}"] = ""
+                k1.selectbox("Automatisch überwachen", optionen, key=f"sa_regel_groesse_{s}",
+                             format_func=lambda g: "– nicht automatisch –" if not g else GROESSEN[g][0])
+                if ss.get(f"sa_regel_op_{s}") not in ("", "<", ">", "<=", ">="):
+                    ss[f"sa_regel_op_{s}"] = ""
+                k2.selectbox("Bedingung", ["", "<", ">", "<=", ">="], key=f"sa_regel_op_{s}")
+                k3.text_input("Schwelle (Zahl oder Datum JJJJ-MM-TT)", key=f"sa_regel_wert_{s}")
+                tr = trig_e[s]
+                if tr["stufe"] != L.KONTEXT:
+                    st.caption(f"Aktuell: {tr['regel']} · Wert {tr['wert']} · {tr['text']}")
+
+        def _gleich(x, y):
+            return (x is None and y is None) or (x is not None and y is not None and abs(float(x) - float(y)) < 1e-9) \
+                if not isinstance(x, str) and not isinstance(y, str) else (x or "") == (y or "")
+        geaendert = [s for s in C.SEKTOREN if any(not _gleich(entwurf[s].get(k), sek[s].get(k) if k not in SCORE_GEWICHTE and k != "abweichung"
+                                                                   else _z(sek[s].get(k))) for k in FELDER)]
+        if geaendert or sa["quelle"] == "Georg":
+            st.warning("Ungespeicherte Änderungen" + (f": {', '.join(geaendert)}" if geaendert else " (Startwerte)") +
+                       " – erst nach «Speichern» gelten sie für Taktik, Portfolio und Analyse.", icon=":material/edit_note:")
+        if st.button("Sektorallokation speichern", type="primary", icon=":material/save:", disabled=ctx.nur_lesen):
+            fehler = [f"{s}: Begründung fehlt (mind. 20 Zeichen bei Über-/Untergewicht)" for s in C.SEKTOREN
+                      if entwurf[s]["richtung"] != "Neutral" and len(entwurf[s]["begruendung"]) < 20]
             if fehler:
                 for f in fehler:
                     st.error(f)
             else:
-                for t in rot:
-                    st.warning(f"Gespeichert trotz Hinweis: {t}")
                 z = jetzt()
                 ctx.speichern("sektor_allokation", [dict(zeit=z, person=ctx.person, sektor=s,
-                                                         **{k: ("" if v is None else v) for k, v in neu[s].items()})
+                                                         **{k: ("" if v is None else v) for k, v in entwurf[s].items()})
                                                     for s in C.SEKTOREN], "Sektorallokation gespeichert.")
         # Verlauf
         tab = ctx.tabellen.get("sektor_allokation")
@@ -694,6 +689,27 @@ def seite_sektoren(ctx, kurse: dict):
                 st.dataframe(pd.DataFrame({"Gespeichert": v["zeit"].str[:16].str.replace("T", " "), "Person": v["person"],
                                            "Sektor": v["sektor"], "Richtung": v["richtung"], "Abweichung": v["abweichung"],
                                            "Begründung": v["begruendung"].str[:100]}), hide_index=True, width="stretch")
+
+        # PDF: gespeicherter Stand
+        reg = regel_abweichungen(sek, idx)
+        zp = []
+        for s in sorted(C.SEKTOREN, key=lambda x: -(sek[x].get("abweichung") or 0)):
+            e, a, sc = sek[s], sek[s].get("abweichung"), score(sek[s])
+            tr = next(t for t in trig if t["sektor"] == s)
+            zp.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 1, True)} Pp.",
+                       "Index heute": f"{ui.de(idx[s], 2)} %", "Ziel % Aktien": "–" if ziel[s] is None else f"{ui.de(ziel[s], 2)} %",
+                       "Ziel % Gesamt": "–" if ziel[s] is None else f"{ui.de(ziel[s] * aktien_soll / 100, 2)} %",
+                       "Relativ": "–" if a is None or not idx[s] else f"{ui.de(a / idx[s] * 100, 0, True)} %",
+                       "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel": f"{ui.de(reg[s], 1, True)} Pp.",
+                       "Trigger": tr["stufe"] if tr["stufe"] != L.KONTEXT else "Text"})
+        R.h("Sektorallokation" + (" (Startwerte, noch nicht gespeichert)" if sa["quelle"] == "Georg" else ""))
+        R.text(f"Index: Stichtag {info['stichtag']} ({info['quelle']})" + (f", fortgeschrieben bis {info['bis']:%d.%m.%Y}" if info["fortgeschrieben"] else "")
+               + f" · Aktienquote {ui.de(aktien_soll, 1)} %")
+        R.tabelle(pd.DataFrame(zp), [26, 20, 18, 18, 18, 18, 14, 12, 20, 16])
+        for s in C.SEKTOREN:
+            e = sek[s]
+            R.text(f"{s} ({e['richtung']}): {e.get('begruendung') or '-'} | Dagegen: {e.get('gegenargument') or '-'} | "
+                   f"Trigger: {e.get('trigger') or '-'}", klein=True)
 
     # --- Indexgewichte -------------------------------------------------------
     with t3:
@@ -749,7 +765,7 @@ def seite_sektoren(ctx, kurse: dict):
                      column_config={"Trigger (Text)": st.column_config.TextColumn(width="large")})
         st.caption("Rot = Bedingung erfüllt → Gewichtung im Team überprüfen (nicht automatisch ändern). Gelb = weniger als 3 % "
                    "von der Schwelle entfernt. Daten: FRED (Brent, WTI, 10-J.-Rendite, Hochzins-Spread, VIX; mit Yahoo-Tageskursen "
-                   "ergänzt) und Yahoo Finance (Dollar-Index). Regeln im Tab «Bearbeiten» je Sektor einstellen.")
+                   "ergänzt) und Yahoo Finance (Dollar-Index). Regeln im Tab «Allokation & Begründung» je Sektor einstellen.")
         R.h("Ausstiegs-Trigger")
         R.tabelle(df_t.drop(columns=["Hinweis"]).assign(Status=lambda d: d["Status"].str.replace("● ", "")), [22, 20, 34, 22, 14, 68])
 

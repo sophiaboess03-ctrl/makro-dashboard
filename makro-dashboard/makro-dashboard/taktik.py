@@ -78,17 +78,38 @@ def sektor_standard(aktien: float) -> dict:
     return out
 
 
-def alloc_dict(t: dict | None, monat: dict, neutral: dict, ips: dict, regeln: list, gew: dict) -> dict:
-    """Allokation fürs ganze Dashboard: die Taktik des Teams (oder neutral, solange nichts erfasst ist)."""
+def sektor_aus_allokation(aktien: float, tabellen: dict) -> tuple[dict, list[str]]:
+    """Sektor-Zielgewichte in % des Vermögens = Ziel der Sektorallokation (% der Aktien) × Aktiengewicht.
+    Sektoren mit Über-/Untergewicht ohne Zahl bekommen vorerst das Indexgewicht. Rundung auf 2 Stellen, Rest beim grössten Sektor."""
+    import sektoren as SK
+
+    sa = SK.lade_allokation(tabellen.get("sektor_allokation"))["sektoren"]
+    ziel = SK.ziele(sa, C.SP500_GEWICHT)
+    ohne = [s for s in C.SEKTOREN if ziel[s] is None]
+    z = {s: (ziel[s] if ziel[s] is not None else C.SP500_GEWICHT[s]) for s in C.SEKTOREN}
+    tot = sum(z.values()) or 1.0
+    out = {s: round(aktien * z[s] / tot, 2) for s in C.SEKTOREN}
+    gross = max(out, key=out.get)
+    out[gross] = round(out[gross] + aktien - sum(out.values()), 2)
+    return out, ohne
+
+
+def alloc_dict(t: dict | None, monat: dict, neutral: dict, ips: dict, regeln: list, gew: dict,
+               tabellen: dict | None = None) -> dict:
+    """Allokation fürs ganze Dashboard: die Taktik des Teams (oder neutral, solange nichts erfasst ist).
+    Ohne gespeicherte Sektorgewichte gelten die Ziele der Seite «Sektorallokation»."""
+    def _sek_start(a):
+        return sektor_aus_allokation(a, tabellen)[0] if tabellen is not None else sektor_standard(a)
+
     if t:
         aktien, anleihen, cash = t["aktien"], t["anleihen"], t["cash"]
-        sek = t["sektoren"] or sektor_standard(aktien)
+        sek = t["sektoren"] or _sek_start(aktien)
         duration = t["duration"] if t["duration"] is not None else neutral["duration"]
         tips = t["tips"] if t["tips"] is not None else neutral["tips"]
         quelle, quelle_txt = "Team", f"Taktik {monat['name']} ({t['person']}, {t['zeit'][:10]})"
     else:
         aktien, anleihen, cash = neutral["aktien"], neutral["anleihen"], neutral["cash"]
-        sek, duration, tips = sektor_standard(aktien), neutral["duration"], neutral["tips"]
+        sek, duration, tips = _sek_start(aktien), neutral["duration"], neutral["tips"]
         quelle, quelle_txt = "neutral", "noch keine Taktik – strategische Allokation (IPS)"
     zeilen = []
     for s in C.SEKTOREN:
@@ -273,14 +294,28 @@ def seite_taktik(ctx, bond: dict):
     pdf_sek = []
     regel_sek = {sek: sum(r["sektoren"].get(sek, 0) for r in aktive) for sek in C.SEKTOREN}
     import sektoren as SK
-    sa = SK.lade_allokation(ctx.tabellen.get("sektor_allokation"))["sektoren"]
+    sa_info = SK.lade_allokation(ctx.tabellen.get("sektor_allokation"))
+    sa = sa_info["sektoren"]
     sa_ziel = SK.ziele(sa, C.SP500_GEWICHT)
+    auto, ohne_zahl = sektor_aus_allokation(werte["aktien"], ctx.tabellen)
+    hand = st.toggle("Sektoren von Hand anpassen (sonst automatisch aus der Seite «Sektorallokation»)", key=f"{prefix}hand",
+                     value=False)
+    if not hand:
+        for sek_, v_ in auto.items():  # Startwerte, falls später auf «von Hand» umgeschaltet wird
+            st.session_state[f"{prefix}s_{sek_}"] = float(v_)
+        st.caption("Automatisch: Zielgewicht = (Indexgewicht + Abweichung laut Sektorallokation) × Aktiengewicht. "
+                   + ("Noch nicht gespeichert – es gelten Georgs Startwerte. " if sa_info["quelle"] == "Georg" else "")
+                   + (f"Ohne Zahl, daher vorerst Indexgewicht: {', '.join(ohne_zahl)}." if ohne_zahl else ""))
     for sek in C.SEKTOREN:
         cols = st.columns([1.7, 0.8, 1.1, 0.9, 0.9, 2.4])
         cols[0].markdown(f"{C.SEKTOR_DOZENT[sek]} ({C.GICS_CODE[sek]})")
         cols[1].markdown(ui.de(C.SP500_GEWICHT[sek], 2))
-        sektoren[sek] = cols[2].number_input(sek, 0.0, 100.0, step=0.05, format="%.2f", key=f"{prefix}s_{sek}",
-                                             label_visibility="collapsed")
+        if hand:
+            sektoren[sek] = cols[2].number_input(sek, 0.0, 100.0, step=0.05, format="%.2f", key=f"{prefix}s_{sek}",
+                                                 label_visibility="collapsed")
+        else:
+            sektoren[sek] = auto[sek]
+            cols[2].markdown(f"**{ui.de(auto[sek], 2)}**")
         anteil = sektoren[sek] / werte["aktien"] * 100 if werte["aktien"] else 0
         aktiv = anteil - C.SP500_GEWICHT[sek]
         zu_viel = abs(aktiv) > ips["sektor_abw_max"]
@@ -304,6 +339,9 @@ def seite_taktik(ctx, bond: dict):
         cols[5].markdown(f"<span class='klein'>{html.escape(o)}</span>", unsafe_allow_html=True)
         pdf_sek.append((f"{C.SEKTOR_DOZENT[sek]} ({C.GICS_CODE[sek]})", ui.de(C.SP500_GEWICHT[sek], 2), ui.de(sektoren[sek], 2),
                         ui.de(anteil, 2), f"{ui.de(aktiv, 2, True)} PP", o))
+    if t and not hand and t["sektoren"] and any(abs(t["sektoren"].get(x, 0) - sektoren[x]) > 0.005 for x in C.SEKTOREN):
+        st.info("Die gespeicherte Taktik hat andere Sektorgewichte als die aktuelle Sektorallokation – «Taktik speichern», "
+                "damit sie übernommen werden.", icon=":material/sync:")
     ssum = sum(sektoren.values())
     st.markdown(f"Summe: <span style='color:{ui.FARBE['Grün'] if abs(ssum - werte['aktien']) < 0.015 else ui.FARBE['Rot']}; "
                 f"font-weight:700'>{ui.de(ssum, 2)} %</span> (muss dem Aktiengewicht {ui.de(werte['aktien'], 2)} % entsprechen)",
