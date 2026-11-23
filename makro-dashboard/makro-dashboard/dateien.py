@@ -35,6 +35,7 @@ SEITEN_BEREICHE = {
     "risiko": "Risiko & Risikobudget",
     "anleihen": "Anleihen & Duration",
     "entscheide": "Entscheide",
+    "monitoring": "Monitoring",
     "bericht": "Berichte",
     "eintragen": "Daten eintragen",
     "termine": "Termine",

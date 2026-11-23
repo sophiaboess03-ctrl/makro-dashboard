@@ -47,6 +47,15 @@ TABELLEN = {
     "sektor_index": ["zeit", "person", "stichtag", "sektor", "gewicht", "quelle"],
     "sektor_allokation": ["zeit", "person", "sektor", "richtung", "abweichung", "makro", "gewinne", "bewertung", "momentum",
                           "begruendung", "gegenargument", "trigger", "regel_groesse", "regel_op", "regel_wert"],
+    # Monitoring: Fälle (Exceptions), Meldeprotokoll, Kontakte, Zuständigkeit, Watchlist, Kauf-Thesen
+    "faelle": ["zeit", "person", "id", "schluessel", "ebene", "bereich", "ticker", "titel", "text", "stufe", "wert", "einheit",
+               "richtung", "art", "regel", "status", "reaktion", "begruendung", "neue_schwelle", "entscheid_id", "bearbeiter",
+               "signal_aktiv", "erstmals", "vorgaenger", "snapshot", "hinweis"],
+    "monitor_log": ["zeit", "person", "lauf", "empfaenger", "faelle", "betreff"],
+    "kontakte": ["zeit", "person", "name", "email", "alles"],
+    "zustaendigkeit": ["zeit", "person", "bereich", "haupt", "backup"],
+    "watchlist": ["zeit", "person", "id", "ticker", "name", "sektor", "op", "marke", "these", "geloescht"],
+    "thesen": ["zeit", "person", "ticker", "these", "kursziel", "stop", "ueberpruefung", "quartalszahlen"],
 }
 
 

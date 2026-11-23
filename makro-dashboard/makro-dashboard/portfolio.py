@@ -672,6 +672,14 @@ def _formular(ctx, fred, lade_kurse):
             sektor, name = "", ""
         begruendung = st.text_area("Begründung (Pflicht) – z. B. Bezug zu Szenario, Signal oder Sektorvotum, mit Quelle",
                                    height=80)
+        th = {}
+        if klasse == "Aktie":
+            with st.expander("Kauf-These fürs Monitoring (freiwillig, nur bei Kauf)", icon=":material/flag:"):
+                th["these"] = st.text_input("These (was muss eintreten?)")
+                t1, t2, t3 = st.columns(3)
+                th["kursziel"] = t1.text_input("Kursziel USD")
+                th["stop"] = t2.text_input("Stop USD")
+                th["ueberpruefung"] = t3.date_input("These überprüfen am", value=None, format="DD.MM.YYYY")
         if st.form_submit_button("Transaktion speichern", type="primary"):
             if not str(ticker).strip() or not menge:
                 st.error("Bitte Ticker/Bezeichnung (oben) und Menge angeben.")
@@ -696,6 +704,15 @@ def _formular(ctx, fred, lade_kurse):
             if k is None:
                 st.error("Kein Kurs gefunden – bitte Kurs von Hand eingeben.")
                 return
+            kz_, sp_ = zahl(str(th.get("kursziel") or "").replace("'", "")), zahl(str(th.get("stop") or "").replace("'", ""))
+            if art == "Kauf" and (th.get("these", "").strip() or kz_ or sp_ or th.get("ueberpruefung")) and not ctx.nur_lesen:
+                try:  # These zuerst speichern (ctx.speichern lädt die Seite danach neu)
+                    ctx.store.anhaengen("thesen", [dict(zeit=jetzt(), person=ctx.person, ticker=str(ticker).strip().upper(),
+                                                        these=th.get("these", "").strip(), kursziel=kz_ or "", stop=sp_ or "",
+                                                        ueberpruefung=th["ueberpruefung"].isoformat() if th.get("ueberpruefung") else "",
+                                                        quartalszahlen="")])
+                except Exception as e:  # noqa: BLE001
+                    st.warning(f"Kauf-These nicht gespeichert ({e}) – auf der Seite «Monitoring» nachtragen.")
             ctx.speichern("transaktionen", [dict(zeit=jetzt(), person=ctx.person, id=uuid.uuid4().hex[:10],
                                                  datum=d.date().isoformat(), art=art, klasse=klasse,
                                                  ticker=str(ticker).strip().upper() if klasse == "Aktie" else str(ticker).strip(),

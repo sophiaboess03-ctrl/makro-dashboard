@@ -39,6 +39,7 @@ import szenarien_seite
 import taktik
 import risiko
 import sektoren
+import monitoring_seite
 from makro import szenarien as SZ
 from makro.fred import FredFehler, lade_serie
 from storage import GoogleTabelleStore, LocalStore, SpeicherFehler
@@ -468,6 +469,8 @@ seiten = {
         st.Page(_doks(lambda: anleihen.seite_anleihen(ctx, fred), "anleihen"), title="Anleihen & Duration", icon=M("stacked_line_chart"),
                 url_path="anleihen"),
         st.Page(_doks(lambda: entscheide.seite_entscheide(ctx, TEAM), "entscheide"), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
+        st.Page(_doks(lambda: monitoring_seite.seite_monitoring(ctx, TEAM, markt.lade_yahoo), "monitoring"), title="Monitoring",
+                icon=M("notifications_active"), url_path="monitoring"),
         st.Page(_doks(_seite_bericht, "bericht"), title="Berichte", icon=M("description"), url_path="bericht"),
     ],
     "Team": [
