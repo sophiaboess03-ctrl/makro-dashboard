@@ -1,16 +1,11 @@
 # Hält die Streamlit-App wach: Streamlit Community Cloud legt Apps nach rund 12 Stunden ohne Besuch schlafen.
-# Ein einfacher HTTP-Aufruf reicht nicht – die App muss in einem echten Browser geöffnet werden.
-# Dieser Ablauf öffnet die App alle 4 Stunden in einem Headless-Browser und klickt, falls nötig,
-# auf «Yes, get this app back up!».
-#
 # Adresse der App: https://makro-dashboard-portfolio-sim.streamlit.app (wie in signalwarnung.yml).
-# Ändert sie sich, unter Settings → Secrets and variables → Actions → Variables eine Variable APP_URL anlegen.
 name: App wach halten
 
 on:
   schedule:
     - cron: "23 */4 * * *"   # alle 4 Stunden (UTC)
-  workflow_dispatch:          # zusätzlich von Hand startbar (Actions → App wach halten → Run workflow)
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,10 +32,6 @@ jobs:
 
           URL = os.environ.get("APP_URL", "").strip()
           WECK = "get this app back up"
-          if not URL.startswith("http"):
-              print("APP_URL fehlt: unter Settings → Secrets and variables → Actions → Variables eintragen.")
-              sys.exit(1)
-
           with sync_playwright() as p:
               browser = p.chromium.launch()
               page = browser.new_page()
@@ -50,7 +41,7 @@ jobs:
               if schlaeft():
                   print("App schläft – wecke sie auf …")
                   page.get_by_text(WECK, exact=False).first.click()
-                  for _ in range(36):  # bis 6 Minuten warten
+                  for _ in range(36):
                       time.sleep(10)
                       if not schlaeft():
                           break
@@ -59,4 +50,10 @@ jobs:
                       sys.exit(1)
                   print("App wurde aufgeweckt.")
               else:
-            %
+                  print("App ist wach.")
+              try:
+                  page.wait_for_load_state("networkidle", timeout=60_000)
+              except PWTimeout:
+                  pass
+              time.sleep(30)
+              browser.close()
