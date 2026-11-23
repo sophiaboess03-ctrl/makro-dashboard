@@ -1,0 +1,81 @@
+# Sektor-News & Unternehmen: sammelt Meldungen je Sektor und je Titel, bewertet sie (Regel, gezielt KI) und aktualisiert
+# die Unternehmensdaten. Ergebnisse liegen verschlüsselt im Branch «daten» (löst keinen Neustart der App aus).
+# Zeiten in UTC = Schweizer Winterzeit minus 1 Stunde: 06:05 (vor dem Tagesreport), 14:05 (vor US-Eröffnung), 22:35 (nach US-Schluss).
+name: Sektor-News
+
+on:
+  schedule:
+    - cron: "5 5 * * *"
+    - cron: "5 13 * * *"
+    - cron: "35 21 * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Nur testen (nichts in die Google-Tabelle schreiben, Daten nicht committen)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write            # schreibt in den Branch «daten»
+
+concurrency:
+  group: sektor-news
+  cancel-in-progress: false
+
+jobs:
+  sammeln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: makro-dashboard/makro-dashboard/requirements.txt
+      - name: Voraussetzungen prüfen
+        run: |
+          if [ -z "$S_URL" ] || [ -z "$S_TOKEN" ]; then
+            echo "::error::Es fehlen die Repository-Secrets SCRIPT_URL / SCRIPT_TOKEN – eintragen unter https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          [ -z "$KI_KEY" ] && echo "::notice::Kein ANTHROPIC_API_KEY – es läuft nur die kostenlose Regel-Bewertung."
+          echo "ok"
+        env:
+          S_URL: ${{ secrets.SCRIPT_URL }}
+          S_TOKEN: ${{ secrets.SCRIPT_TOKEN }}
+          KI_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Daten-Branch holen (wird beim ersten Lauf angelegt)
+        run: |
+          git config user.name "makro-dashboard-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if git fetch --depth 1 origin daten:daten 2>/dev/null; then
+            git worktree add _daten daten
+          else
+            git worktree add --detach _daten
+            cd _daten
+            git checkout --orphan daten
+            git rm -rf --quiet . || true
+            echo "Verschlüsselte Daten des Makro-Dashboards (Sektor-News, Unternehmen). Nicht von Hand ändern." > README.md
+          fi
+      - run: pip install -r requirements.txt
+        working-directory: makro-dashboard/makro-dashboard
+      - name: Sammeln und bewerten
+        working-directory: makro-dashboard/makro-dashboard
+        run: |
+          if [ "${{ inputs.test }}" = "true" ]; then export DRY_RUN=1; fi
+          python news_job.py --daten "$GITHUB_WORKSPACE/_daten"
+        env:
+          SCRIPT_URL: ${{ secrets.SCRIPT_URL }}
+          SCRIPT_TOKEN: ${{ secrets.SCRIPT_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-haiku-5-5' }}
+      - name: Daten speichern
+        if: inputs.test != true
+        working-directory: _daten
+        run: |
+          git add -A
+          if git diff --cached --quiet; then echo "Keine Änderungen."; exit 0; fi
+          # immer nur ein einziger Commit im Branch (ältere Stände werden ersetzt) – sonst wächst das Repo mit jedem Lauf
+          git commit --quiet --amend -m "Daten $(date -u +%Y-%m-%dT%H:%MZ)" 2>/dev/null || git commit --quiet -m "Daten $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push --quiet --force origin daten
