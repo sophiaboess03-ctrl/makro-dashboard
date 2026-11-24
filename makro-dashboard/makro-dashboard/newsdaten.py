@@ -489,17 +489,42 @@ def firma_yahoo(ticker: str) -> dict:
     """Profil, Kennzahlen, Analysten (Konsens, Verlauf, Kursziele, Up-/Downgrades), nächster Quartalstermin."""
     import yfinance as yf
 
+    import time
+
     tk = yf.Ticker(ticker)
     d: dict = dict(ticker=ticker, stand=iso(None), fehler=[])
-    try:
-        info = tk.info or {}
-        d["info"] = {k: _sauber(info.get(k)) for k in INFO_FELDER if info.get(k) is not None}
-        dy = d["info"].get("dividendYield")
-        if dy is not None and dy > 1:           # neuere yfinance-Versionen liefern Prozent
-            d["info"]["dividendYield"] = dy / 100
-    except Exception as e:  # noqa: BLE001
-        d["info"] = {}
-        d["fehler"].append(f"info: {type(e).__name__}")
+    d["info"] = {}
+    for versuch in range(3):                    # Yahoo drosselt .info oft («Too Many Requests») → kurz warten, nochmals
+        try:
+            info = tk.info or {}
+            d["info"] = {k: _sauber(info.get(k)) for k in INFO_FELDER if info.get(k) is not None}
+            dy = d["info"].get("dividendYield")
+            if dy is not None and dy > 1:           # neuere yfinance-Versionen liefern Prozent
+                d["info"]["dividendYield"] = dy / 100
+            if len(d["info"]) > 3:
+                break
+        except Exception as e:  # noqa: BLE001
+            fehl = f"info: {type(e).__name__}"
+            if fehl not in d["fehler"]:
+                d["fehler"].append(fehl)
+        time.sleep(1.5 * (versuch + 1))
+    if len(d["info"]) <= 3:                     # Rückfall: Kursdaten-Schnittstelle (wird kaum gedrosselt)
+        try:
+            fi = tk.fast_info
+            for ziel, quelle in (("currentPrice", "last_price"), ("previousClose", "previous_close"), ("marketCap", "market_cap"),
+                                 ("fiftyTwoWeekLow", "year_low"), ("fiftyTwoWeekHigh", "year_high"),
+                                 ("fiftyDayAverage", "fifty_day_average"), ("twoHundredDayAverage", "two_hundred_day_average"),
+                                 ("currency", "currency")):
+                try:
+                    v = _sauber(fi[quelle])
+                except Exception:  # noqa: BLE001
+                    v = None
+                if v is not None and ziel not in d["info"]:
+                    d["info"][ziel] = v
+            if d["info"]:
+                d["teilweise"] = True
+        except Exception as e:  # noqa: BLE001
+            d["fehler"].append(f"fast_info: {type(e).__name__}")
     try:
         rec = tk.recommendations
         if rec is not None and len(rec):
@@ -533,9 +558,9 @@ def firma_yahoo(ticker: str) -> dict:
     return d
 
 
-def firmen_yahoo(ticker: list[str], timeout: int = 90) -> dict:
+def firmen_yahoo(ticker: list[str], timeout: int = 90, parallel: int = 4) -> dict:
     out = {}
-    ex = ThreadPoolExecutor(max_workers=4)
+    ex = ThreadPoolExecutor(max_workers=parallel)
     futs = {t: ex.submit(firma_yahoo, t) for t in ticker}
     for t, f in futs.items():
         try:

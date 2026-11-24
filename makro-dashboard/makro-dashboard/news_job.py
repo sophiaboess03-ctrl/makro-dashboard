@@ -369,12 +369,13 @@ def unternehmen(ablage: Ablage, titel: dict, tabellen: dict, budget: ki.Budget, 
     import monitoring as M
 
     U = ablage.unternehmen()
-    alt = [t for t in titel if _alter_h((U.get(t) or {}).get("stand")) >= YAHOO_ABSTAND_H]
+    alt = [t for t in titel if _alter_h((U.get(t) or {}).get("stand")) >= YAHOO_ABSTAND_H or (U.get(t) or {}).get("teilweise")]
     if alt:
-        frisch = N.firmen_yahoo(alt)
+        frisch = N.firmen_yahoo(alt, parallel=2)
         for t, f in frisch.items():
             vorher = U.get(t) or {}
-            if not f.get("info") and vorher.get("info"):     # Yahoo-Ausfall: alte Daten behalten
+            if (not f.get("info") or f.get("teilweise")) and vorher.get("info") and not vorher.get("teilweise"):
+                vorher["fehler"] = f.get("fehler", [])     # Yahoo-Ausfall: alte (vollständige) Daten behalten
                 vorher["fehler"] = f.get("fehler", [])
                 continue
             for k in ("profil_de", "profil_hash", "news"):

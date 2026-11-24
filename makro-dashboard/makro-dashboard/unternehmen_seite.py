@@ -26,9 +26,30 @@ RATING_FARBE = {"Kaufen": "#2F855A", "Halten": "#B7791F", "Verkaufen": "#B93A32"
 HERKUNFT_FARBE = {"Bestand": "#14325C", "Watchlist": "#5B7DB1", "Probe-Portfolio": "#8E5572", "Analyse": "#B7791F"}
 
 
-@st.cache_data(ttl=12 * 3600, show_spinner="Lade Unternehmensdaten von Yahoo …")
-def _yahoo_direkt(ticker: tuple[str, ...]) -> dict:
-    return N.firmen_yahoo(list(ticker))
+@st.cache_resource
+def _yahoo_speicher() -> dict:
+    """Direkt geladene Firmendaten je Titel: {ticker: (zeitpunkt, daten)}. Vollständige Daten gelten 12 Std., unvollständige
+    nur 10 Min. – so bleibt ein Titel nicht einen halben Tag leer, wenn Yahoo kurz drosselt."""
+    return {}
+
+
+def _yahoo_direkt(ticker: tuple[str, ...], neu: bool = False) -> dict:
+    import time
+
+    sp = _yahoo_speicher()
+    jetzt_s = time.time()
+
+    def _gueltig(t):
+        z, f = sp.get(t, (0, {}))
+        voll = len(f.get("info") or {}) > 3 and not f.get("teilweise")
+        return not neu and jetzt_s - z < (12 * 3600 if voll else 600)
+
+    holen = [t for t in ticker if not _gueltig(t)]
+    if holen:
+        with st.spinner(f"Lade Unternehmensdaten von Yahoo ({len(holen)} Titel) …"):
+            for t, f in N.firmen_yahoo(holen, parallel=2).items():
+                sp[t] = (jetzt_s, f)
+    return {t: sp[t][1] for t in ticker if t in sp}
 
 
 def team_ratings(tab: pd.DataFrame | None) -> dict:
@@ -157,7 +178,39 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
     U = dict(U or {})
     fehlt = tuple(sorted(t for t in titel if t not in U or not (U[t].get("info"))))
     if fehlt:
-        U.update({t: f for t, f in _yahoo_direkt(fehlt).items() if f.get("info")})
+        neu = bool(ss.pop("un_yahoo_neu", False))
+        for t, f in _yahoo_direkt(fehlt, neu=neu).items():
+            if f.get("info") or t not in U:
+                U[t] = {**(U.get(t) or {}), **f}
+        # Kurs und 52-Wochen-Spanne notfalls aus den Tageskursen (gleicher Abruf wie im Rest der App)
+        ohne = tuple(t for t in fehlt if not ((U.get(t) or {}).get("info") or {}).get("currentPrice"))
+        if ohne:
+            try:
+                kurse = lade_kurse(ohne)[0] or {}
+            except Exception:  # noqa: BLE001
+                kurse = {}
+            for t in ohne:
+                s = kurse.get(t)
+                if s is None or not len(s.dropna()):
+                    continue
+                s = s.dropna()
+                f = dict(U.get(t) or {"ticker": t, "stand": N.iso(None), "fehler": []})
+                i = dict(f.get("info") or {})
+                j = s[s.index >= s.index[-1] - pd.Timedelta(days=365)]
+                i.setdefault("currentPrice", float(s.iloc[-1]))
+                i.setdefault("fiftyTwoWeekLow", float(j.min()))
+                i.setdefault("fiftyTwoWeekHigh", float(j.max()))
+                f["info"], f["teilweise"] = i, True
+                U[t] = f
+        leer = [t for t in fehlt if len(((U.get(t) or {}).get("info") or {})) <= 3 or (U.get(t) or {}).get("teilweise")]
+        if leer:
+            c1, c2 = st.columns([4, 1], vertical_alignment="center")
+            c1.warning(f"Yahoo Finance hat für {len(leer)} Titel keine vollständigen Kennzahlen geliefert "
+                       f"({', '.join(leer[:12])}{' …' if len(leer) > 12 else ''}). Meist drosselt Yahoo kurz – in ein paar Minuten "
+                       "nochmals laden. Kurs und 52-Wochen-Spanne kommen notfalls aus den Tageskursen.", icon=":material/cloud_off:")
+            if c2.button("Neu laden", icon=":material/refresh:", key="un_yahoo_btn", width="stretch"):
+                ss["un_yahoo_neu"] = True
+                st.rerun()
     for t, d in titel.items():
         i = (U.get(t) or {}).get("info") or {}
         d["name"] = d["name"] or i.get("shortName") or i.get("longName") or ""
@@ -270,7 +323,10 @@ def _titel_karte(ctx, t: str, d: dict, f: dict, p: dict | None, tr: dict, these:
                     ("Relativ zum Sektor", f"{ui.de(p['rendite'] - p['r_etf'], 1, True)} Pp."
                      if p.get("rendite") is not None and p.get("r_etf") is not None else "–", ""),
                 ])
-            st.caption(f"Nächste Quartalszahlen: {f.get('quartalszahlen') or '–'} · Stand {SNS._datum(f.get('stand'))} · Quelle Yahoo Finance"
+            st.caption(f"Nächste Quartalszahlen: {f.get('quartalszahlen') or '–'} · Stand {SNS._datum(f.get('stand')) or '–'} · "
+                       "Quelle Yahoo Finance"
+                       + (" · nur Kursdaten (Yahoo hat die übrigen Kennzahlen gerade nicht geliefert – oben «Neu laden»)"
+                          if f.get("teilweise") else "")
                        + (f" · Hinweise: {', '.join(f.get('fehler') or [])}" if f.get("fehler") else ""))
             R.kpis([("Kurs", f"{_z(kurs, 2)} USD", ""), ("KGV erw.", _z(i.get("forwardPE")), ""),
                     ("Umsatzwachstum", _pct(i.get("revenueGrowth"), 1, True), ""), ("Div.-Rendite", _pct(i.get("dividendYield"), 2), "")])
