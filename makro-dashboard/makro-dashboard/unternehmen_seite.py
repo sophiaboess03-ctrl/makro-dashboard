@@ -8,6 +8,7 @@ dort noch (z. B. gerade erst auf die Watchlist gesetzt), lädt die Seite ihn dir
 from __future__ import annotations
 
 import html
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -50,6 +51,42 @@ def _yahoo_direkt(ticker: tuple[str, ...], neu: bool = False) -> dict:
             for t, f in N.firmen_yahoo(holen, parallel=2).items():
                 sp[t] = (jetzt_s, f)
     return {t: sp[t][1] for t in ticker if t in sp}
+
+
+@st.cache_resource
+def _bilanz_speicher() -> dict:
+    """Direkt geladene Bilanz-/Schätzungsdaten je Titel (für Titel, die der Sammel-Lauf nicht abdeckt):
+    {ticker: (zeitpunkt, daten)}. Mit Daten 12 Std. gültig, ohne nur 10 Min."""
+    return {}
+
+
+def _bilanz_direkt(ticker: list[str], neu: bool = False) -> dict:
+    import time
+
+    sp = _bilanz_speicher()
+    jetzt_s = time.time()
+
+    def _gueltig(t):
+        z, f = sp.get(t, (0, {}))
+        return not neu and jetzt_s - z < (12 * 3600 if (f.get("fin") or f.get("eps_trend")) else 600)
+
+    holen = [t for t in ticker if not _gueltig(t)]
+    if holen:
+        with st.spinner(f"Lade Bilanz, Cashflow und Gewinnschätzungen von Yahoo ({len(holen)} Titel) …"):
+            ex = ThreadPoolExecutor(max_workers=2)
+            futs = {t: ex.submit(N.firma_bilanz, t) for t in holen}
+            for t, fu in futs.items():
+                try:
+                    sp[t] = (jetzt_s, fu.result(timeout=90))
+                except Exception as e:  # noqa: BLE001
+                    sp[t] = (jetzt_s, dict(bilanz_fehler=[type(e).__name__]))
+            ex.shutdown(wait=False)
+    return {t: sp[t][1] for t in ticker if t in sp}
+
+
+def _bilanz_aus_speicher(t: str) -> dict:
+    z = _bilanz_speicher().get(t)
+    return z[1] if z else {}
 
 
 def team_ratings(tab: pd.DataFrame | None) -> dict:
@@ -215,6 +252,15 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
         i = (U.get(t) or {}).get("info") or {}
         d["name"] = d["name"] or i.get("shortName") or i.get("longName") or ""
         d["sektor"] = d["sektor"] or P.YAHOO_DE.get(str(i.get("sector") or ""), "")
+    # Bilanz & Gewinnschätzungen: Sammel-Lauf liefert sie für mitverfolgte Titel, sonst auf Knopfdruck direkt
+    if ss.pop("un_bil_alle", False):
+        _bilanz_direkt([t for t in titel if not (U.get(t) or {}).get("fin")], neu=True)
+    if (t_einzel := ss.pop("un_bil_einzel", None)):
+        _bilanz_direkt([t_einzel], neu=True)
+    for t in titel:
+        b = _bilanz_aus_speicher(t)
+        if b and not (U.get(t) or {}).get("fin"):
+            U[t] = {**(U.get(t) or {}), **{k: v for k, v in b.items() if v}}
     pos = _position(tab, fred, lade_kurse)
     tr = team_ratings(tab.get("team_rating"))
     th = M.thesen(tab.get("thesen"))
@@ -247,15 +293,23 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
     for t, d in sorted(titel.items(), key=lambda x: (x[1]["sektor"] or "zz", x[0])):
         f = U.get(t) or {}
         k = N.analysten_kennzahlen(f, kurs=(pos.get(t) or {}).get("kurs"))
+        bk = N.bilanz_kennzahlen(f, d["sektor"])
+        fs = bk["f_score"]
         zeilen.append({"Sektor": d["sektor"] or "?", "Ticker": t, "Name": d["name"], "Herkunft": ", ".join(d["herkunft"]),
+                       "Nettoversch./EBITDA": None if bk["nd_ebitda"] is None else round(bk["nd_ebitda"], 1),
+                       "FCF-Rendite %": None if bk["fcf_rendite"] is None else round(bk["fcf_rendite"] * 100, 1),
+                       "F-Score": f"{fs['score']}/{fs['n']}" if fs and fs["n"] else "",
+                       "EPS-Rev. 30 T. %": None if bk["rev30_jahr"] is None else round(bk["rev30_jahr"], 1),
                        "Kurs": k["kurs"], "Konsens": N.KONSENS_DE.get(str(k["konsens"]), "–"), "Analysten": k["n"],
                        "Kursziel Ø": k["ziel"], "Potenzial %": round(k["upside"], 1) if k["upside"] is not None else None,
                        "Herabst. 30 T.": len(k["down"]), "Team": team_konsens(tr.get(t)),
                        "News 30 T.": sum(1 for m in ms if t in (m.get("ticker") or []) and m["eff"]["rel"] >= 3),
                        "Quartalszahlen": f.get("quartalszahlen", "")})
     df = pd.DataFrame(zeilen)
+    BIL_SP = ["Nettoversch./EBITDA", "FCF-Rendite %", "F-Score", "EPS-Rev. 30 T. %"]
+    df = df[[c for c in df.columns if c not in BIL_SP and c != "Quartalszahlen"] + BIL_SP + ["Quartalszahlen"]]
     R.h("Übersicht")
-    R.tabelle(df.drop(columns=["Name"]).assign(**{c: df[c].map(lambda x: "" if x is None or (isinstance(x, float) and pd.isna(x))
+    R.tabelle(df.drop(columns=["Name"] + BIL_SP).assign(**{c: df[c].map(lambda x: "" if x is None or (isinstance(x, float) and pd.isna(x))
                                                                    else ui.de(x, 1)) for c in ("Kurs", "Kursziel Ø", "Potenzial %")}))
     sektoren = [s for s in C.SEKTOREN if any(d["sektor"] == s for d in titel.values())]
     if any(not d["sektor"] for d in titel.values()):
@@ -265,9 +319,29 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
         st.dataframe(df, hide_index=True, width="stretch",
                      column_config={"Kurs": st.column_config.NumberColumn(format="%.2f"),
                                     "Kursziel Ø": st.column_config.NumberColumn(format="%.2f"),
-                                    "Potenzial %": st.column_config.NumberColumn(format="%+.1f")})
+                                    "Potenzial %": st.column_config.NumberColumn(format="%+.1f"),
+                                    "Nettoversch./EBITDA": st.column_config.NumberColumn(format="%.1f"),
+                                    "FCF-Rendite %": st.column_config.NumberColumn(format="%.1f"),
+                                    "EPS-Rev. 30 T. %": st.column_config.NumberColumn(format="%+.1f")})
         st.caption("Potenzial = mittleres Analysten-Kursziel gegenüber dem Kurs. Konsens und Kursziele: Yahoo Finance (Durchschnitt der "
                    "erfassten Analysten), ohne Gewähr. Team = Mehrheit eurer Ratings.")
+        st.caption("Nettoverschuldung/EBITDA: unter 2 solide, über 4 hoch (bei Finanzen nicht aussagekräftig, leer) · "
+                   "FCF-Rendite = Free Cashflow / Marktkapitalisierung · F-Score = Piotroski (Punkte / prüfbare Kriterien, "
+                   "7–9 stark, 0–3 schwach) · EPS-Rev. 30 T. = Änderung der Gewinnschätzung fürs laufende Jahr in 30 Tagen.")
+        ohne = [t for t in titel if not (U.get(t) or {}).get("fin")]
+        if ohne:
+            c1, c2 = st.columns([3.2, 1.3], vertical_alignment="center")
+            c1.caption(f"Ohne Bilanzdaten: {', '.join(sorted(ohne)[:15])}{' …' if len(ohne) > 15 else ''} – Bestand, Watchlist und "
+                       "mitverfolgte Titel kommen mit dem nächsten Sammel-Lauf, die übrigen auf Knopfdruck (ca. 2–3 Sek. pro Titel).")
+            if c2.button(f"Bilanzdaten laden ({len(ohne)})", icon=":material/account_balance:", key="un_bil_alle_btn", width="stretch"):
+                ss["un_bil_alle"] = True
+                st.rerun()
+    df_b = df[["Ticker"] + BIL_SP]
+    df_b = df_b[df_b[BIL_SP].apply(lambda r: any(x not in (None, "") and not (isinstance(x, float) and pd.isna(x)) for x in r), axis=1)]
+    if len(df_b):
+        R.h2("Bilanz & Qualität")
+        R.tabelle(df_b.assign(**{c: df_b[c].map(lambda x: "" if x is None or (isinstance(x, float) and pd.isna(x)) else ui.de(x, 1))
+                                 for c in ("Nettoversch./EBITDA", "FCF-Rendite %", "EPS-Rev. 30 T. %")}))
     for s, tb in zip(sektoren, tabs[1:]):
         with tb:
             for t, d in sorted(((t, d) for t, d in titel.items() if (d["sektor"] or "?") == s), key=lambda x: x[0]):
@@ -295,7 +369,10 @@ def _titel_karte(ctx, t: str, d: dict, f: dict, p: dict | None, tr: dict, these:
             st.caption("Profil: KI-Zusammenfassung der Yahoo-Beschreibung (einmalig erstellt)" if f.get("profil_de")
                        else "Profil: Yahoo-Beschreibung (englisch, gekürzt)")
             R.text(prof, klein=True)
-        t1, t2, t3, t4 = st.tabs(["Kennzahlen", "Analysten", "News", "Team"])
+        bk = N.bilanz_kennzahlen(f, d["sektor"])
+        t1, t1b, t2, t3, t4 = st.tabs(["Kennzahlen", "Bilanz & Qualität", "Analysten", "News", "Team"])
+        with t1b:
+            _bilanz(t, d, f, bk, R)
         with t1:
             kurs = k["kurs"]
             ui.kopf_kpis([
@@ -332,6 +409,7 @@ def _titel_karte(ctx, t: str, d: dict, f: dict, p: dict | None, tr: dict, these:
                     ("Umsatzwachstum", _pct(i.get("revenueGrowth"), 1, True), ""), ("Div.-Rendite", _pct(i.get("dividendYield"), 2), "")])
         with t2:
             _analysten(t, f, k, R)
+            _schaetzungen(t, f, bk, R)
         with t3:
             relevant = N.top(ms, ticker=t, n=15, min_rel=2)
             if (f.get("news") or {}).get("text"):
@@ -406,6 +484,157 @@ def _analysten(t: str, f: dict, k: dict, R):
     if len(k["down"]) >= 2:
         st.warning(f"{len(k['down'])} Herabstufungen in den letzten 30 Tagen – im Monitoring als «Prüfen» gemeldet (für Titel im Bestand).",
                    icon=":material/trending_down:")
+
+
+def _x(x, d=1, suffix="", vz=False):
+    return "–" if x is None or (isinstance(x, float) and pd.isna(x)) else f"{ui.de(x, d, vz)}{suffix}"
+
+
+def _div(a, b):
+    return a / b if a is not None and b not in (None, 0) else None
+
+
+def _pz(x, d=1, vz=False):
+    """Anteil (0,05) → «5,0 %»."""
+    return _x(x * 100 if x is not None else None, d, " %", vz)
+
+
+def _laden_knopf(t: str, text: str, key: str):
+    if st.button(text, key=key, icon=":material/account_balance:"):
+        st.session_state["un_bil_einzel"] = t
+        st.rerun()
+
+
+def _bilanz(t: str, d: dict, f: dict, bk: dict, R):
+    """Reiter «Bilanz & Qualität»: Verschuldung, Cashflow, F-Score, 4-Jahres-Verlauf."""
+    if bk["hinweis"]:
+        st.info(bk["hinweis"], icon=":material/info:")
+    if not bk["hat_abschluss"]:
+        st.caption("Noch keine Jahresabschlüsse geladen – die Werte unten stammen, soweit vorhanden, aus den Yahoo-Kennzahlen.")
+        _laden_knopf(t, "Bilanzdaten laden", f"un_bil_{t}")
+    if bk["finanz"]:
+        ui.kopf_kpis([
+            ("Kurs-Buchwert (KBV)", _x(bk["kbv"], 2), "unter 1 = Börse bewertet unter Buchwert"),
+            ("Eigenkapitalrendite", _pz(bk["roe"]), "Gewinn / Eigenkapital"),
+            ("Eigenkapitalquote", _pz(bk["ek_quote"]), "Eigenkapital / Bilanzsumme (Banken typisch 8–12 %)"),
+            ("Cash & kurzfr. Anlagen", f"{_mrd(bk['cash'])} USD", ""),
+        ])
+    else:
+        nd, netto = bk["nd_ebitda"], bk["netto"]
+        ui.kopf_kpis([
+            ("Nettoverschuldung / EBITDA", "Nettocash" if netto is not None and netto < 0 else _x(nd, 1, "×"),
+             f"Nettoverschuldung {_mrd(netto)} USD · unter 2× solide, über 4× hoch"),
+            ("Zinsdeckung", _x(bk["zinsdeckung"], 1, "×"), "EBIT / Zinsaufwand · über 5× komfortabel, unter 2× knapp"),
+            ("Current Ratio", _x(bk["current_ratio"], 2), "Umlaufvermögen / kurzfr. Schulden · über 1 = gedeckt"),
+            ("Eigenkapitalquote", _pz(bk["ek_quote"]), f"Cash & kurzfr. Anlagen {_mrd(bk['cash'])} USD"),
+        ])
+    fs = bk["f_score"]
+    ui.kopf_kpis([
+        ("Free Cashflow", f"{_mrd(bk['fcf'])} USD", "operativer Cashflow − Investitionen, letztes Geschäftsjahr"),
+        ("FCF-Rendite", _pz(bk["fcf_rendite"]), "Free Cashflow / Marktkapitalisierung · Vergleich: Gewinnrendite = 1 / KGV"),
+        ("Cash Conversion", _pz(bk["cash_conversion"], 0), "operativer Cashflow / Gewinn · über 100 % = Gewinn kommt als Cash an"),
+        ("Piotroski F-Score", f"{fs['score']} / {fs['n']}" if fs and fs["n"] else "–",
+         ("7–9 stark · 4–6 mittel · 0–3 schwach" + (f" · nur {fs['n']} von 9 prüfbar" if fs["n"] < 9 else ""))
+         if fs and fs["n"] else "braucht zwei Jahresabschlüsse"),
+    ])
+    R.kpis([("Nettoversch./EBITDA", "n. a." if bk["finanz"] else _x(bk["nd_ebitda"], 1, "×"), ""),
+            ("FCF-Rendite", _pz(bk["fcf_rendite"]), ""),
+            ("F-Score", f"{fs['score']}/{fs['n']}" if fs and fs["n"] else "–", ""),
+            ("EPS-Rev. 30 T.", _x(bk["rev30_jahr"], 1, " %", True), "")])
+    if bk["hinweis"]:
+        R.text("Hinweis: " + bk["hinweis"], klein=True)
+    if fs and fs["n"]:
+        with st.popover("F-Score im Detail", icon=":material/checklist:"):
+            j = fs["jahre"]
+            if len(j) > 1:
+                st.caption(f"Geschäftsjahr {j[0][:4]} gegenüber {j[1][:4]}")
+            st.dataframe(pd.DataFrame([{"Bereich": b, "Kriterium": n, "Erfüllt": "✓" if x else ("✗" if x is False else "– nicht prüfbar")}
+                                       for b, n, x in fs["kriterien"]]), hide_index=True, width="stretch")
+            st.caption("Piotroski (2000): 9 einfache Kriterien zu Rentabilität, Finanzierung und Effizienz, je 1 Punkt. ROA hier "
+                       "mit der Bilanzsumme am Jahresende gerechnet (vereinfacht).")
+    j, v = bk["jahre"], bk["verlauf"]
+    if len(j) >= 2 and (v.get("umsatz") or v.get("eps")):
+        jl = [x[:4] for x in j][::-1]
+        leer = [None] * len(j)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Umsatz und operative Marge**")
+            fig = go.Figure()
+            ums = (v.get("umsatz") or leer)[::-1]
+            fig.add_trace(go.Bar(x=jl, y=[x / 1e9 if x is not None else None for x in ums], name="Umsatz (Mrd. USD)",
+                                 marker_color=ui.STAHL))
+            marge = [_div(e, u) * 100 if _div(e, u) is not None else None for e, u in zip((v.get("ebit") or leer)[::-1], ums)]
+            if any(m is not None for m in marge) and not bk["finanz"]:
+                fig.add_trace(go.Scatter(x=jl, y=marge, name="Operative Marge %", yaxis="y2", mode="lines+markers",
+                                         line=dict(color=ui.BLAU, width=2)))
+            fig.update_layout(height=240, margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", y=-0.25), plot_bgcolor="white",
+                              yaxis2=dict(overlaying="y", side="right", ticksuffix=" %", showgrid=False))
+            ui.zeige(fig, key=f"un_ums_{t}")
+        with c2:
+            st.markdown("**Gewinn je Aktie und Free Cashflow**")
+            fig = go.Figure()
+            if v.get("fcf"):
+                fig.add_trace(go.Bar(x=jl, y=[x / 1e9 if x is not None else None for x in v["fcf"][::-1]], name="Free Cashflow (Mrd. USD)",
+                                     marker_color=ui.PETROL, opacity=0.55, yaxis="y2"))
+            if v.get("eps"):
+                fig.add_trace(go.Scatter(x=jl, y=v["eps"][::-1], name="Gewinn je Aktie (USD)", mode="lines+markers",
+                                         line=dict(color=ui.BLAU, width=2)))
+            fig.update_layout(height=240, margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", y=-0.25), plot_bgcolor="white",
+                              yaxis2=dict(overlaying="y", side="right", showgrid=False))
+            ui.zeige(fig, key=f"un_eps_{t}")
+    stand = f.get("abschluss_stand") or f.get("bilanz_stand")
+    st.caption("Quelle: Yahoo Finance" + (f", Geschäftsjahre {', '.join(x[:4] for x in j)}" if j else "")
+               + (f" · Stand {SNS._datum(stand)}" if stand else "")
+               + (f" · Hinweise: {', '.join(f.get('bilanz_fehler') or [])}" if f.get("bilanz_fehler") else ""))
+
+
+PERIODEN = {"0q": "Laufendes Quartal", "+1q": "Nächstes Quartal", "0y": "Laufendes Jahr", "+1y": "Nächstes Jahr"}
+
+
+def _schaetzungen(t: str, f: dict, bk: dict, R):
+    """Im Reiter «Analysten»: Gewinnschätzungen (Revisionen) und Überraschungen der letzten Quartale."""
+    st.markdown("**Gewinnschätzungen** · wie haben die Analysten ihre Schätzung für den Gewinn je Aktie angepasst?")
+    sc = bk["schaetzungen"]
+    if not sc:
+        st.caption("Keine Schätzungsdaten geladen.")
+        _laden_knopf(t, "Schätzungen und Bilanzdaten laden", f"un_sch_{t}")
+    else:
+        zeilen = []
+        for p in ("0q", "+1q", "0y", "+1y"):
+            z = sc.get(p)
+            if not z:
+                continue
+            zeilen.append({"Periode": PERIODEN[p], "EPS-Schätzung heute": _x(z.get("heute"), 2),
+                           "vor 30 T.": _x(z.get("d30"), 2), "vor 90 T.": _x(z.get("d90"), 2),
+                           "Änderung 30 T.": _x(z.get("p30"), 1, " %", True), "Änderung 90 T.": _x(z.get("p90"), 1, " %", True),
+                           "Analysten ↑ / ↓ (30 T.)": f"{_x(z.get('hoch30'), 0)} / {_x(z.get('runter30'), 0)}"})
+        st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+        r = bk["rev30_jahr"]
+        if r is not None and abs(r) >= 2:
+            (st.success if r > 0 else st.warning)(
+                f"Die Gewinnschätzung fürs laufende Jahr wurde in 30 Tagen um {ui.de(r, 1, True)} % "
+                f"{'angehoben' if r > 0 else 'gesenkt'} – {'positives' if r > 0 else 'negatives'} Momentum-Signal.",
+                icon=":material/trending_up:" if r > 0 else ":material/trending_down:")
+    ue = bk["ueberraschungen"]
+    if ue:
+        st.markdown(f"**Gewinnüberraschungen** · {bk['beats']} von {len(ue)} Quartalen auf oder über der Erwartung")
+        st.dataframe(pd.DataFrame([{"Quartal": f"{u['quartal'][5:7]}.{u['quartal'][:4]}", "Erwartet (EPS)": _x(u["schaetzung"], 2),
+                                    "Ist (EPS)": _x(u["ist"], 2),
+                                    "Überraschung": _x(_ueb_prozent(u), 1, " %", True)} for u in ue]),
+                     hide_index=True, width="stretch")
+    if sc or ue:
+        st.caption("Quelle: Yahoo Finance (Konsens der erfassten Analysten). Steigende Schätzungen und wiederholte positive "
+                   "Überraschungen gehen oft mit überdurchschnittlicher Kursentwicklung in den Folgemonaten einher – kein Automatismus.")
+        R.text(f"Gewinnschätzungen: laufendes Jahr {_x(bk['rev30_jahr'], 1, ' %', True)} in 30 Tagen"
+               + (f", {bk['beats']} von {len(ue)} Quartalen auf/über Erwartung" if ue else ""), klein=True)
+
+
+def _ueb_prozent(u: dict):
+    """Überraschung in %: Yahoo liefert surprisePercent je nach Version als Anteil (0,05) oder in Prozent (5,0)."""
+    if u.get("schaetzung") not in (None, 0) and u.get("ist") is not None:
+        return (u["ist"] - u["schaetzung"]) / abs(u["schaetzung"]) * 100
+    p = u.get("prozent")
+    return None if p is None else (p * 100 if abs(p) < 2 else p)
 
 
 def _team(ctx, t: str, tr: dict, these: dict | None, offen: pd.DataFrame):

@@ -471,7 +471,10 @@ INFO_FELDER = ["shortName", "longName", "sector", "industry", "longBusinessSumma
                "grossMargins", "operatingMargins", "profitMargins", "returnOnEquity", "debtToEquity", "freeCashflow", "totalRevenue",
                "dividendYield", "payoutRatio", "beta", "fiftyTwoWeekLow", "fiftyTwoWeekHigh", "fiftyDayAverage", "twoHundredDayAverage",
                "targetMeanPrice", "targetMedianPrice", "targetHighPrice", "targetLowPrice", "numberOfAnalystOpinions",
-               "recommendationMean", "recommendationKey", "currency"]
+               "recommendationMean", "recommendationKey", "currency",
+               # Bilanz & Cashflow (Update 8)
+               "totalCash", "totalDebt", "ebitda", "operatingCashflow", "currentRatio", "quickRatio", "enterpriseValue",
+               "enterpriseToEbitda", "returnOnAssets", "bookValue", "sharesOutstanding", "netIncomeToCommon"]
 
 
 def _sauber(v):
@@ -485,8 +488,9 @@ def _sauber(v):
     return v
 
 
-def firma_yahoo(ticker: str) -> dict:
-    """Profil, Kennzahlen, Analysten (Konsens, Verlauf, Kursziele, Up-/Downgrades), nächster Quartalstermin."""
+def firma_yahoo(ticker: str, bilanz: bool = False, abschluss: bool = False) -> dict:
+    """Profil, Kennzahlen, Analysten (Konsens, Verlauf, Kursziele, Up-/Downgrades), nächster Quartalstermin.
+    bilanz=True: + Gewinnschätzungen und Überraschungen, abschluss=True: + Jahresabschlüsse (firma_bilanz)."""
     import yfinance as yf
 
     import time
@@ -555,13 +559,229 @@ def firma_yahoo(ticker: str) -> dict:
             d["quartalszahlen"] = pd.Timestamp(e).strftime("%Y-%m-%d")
     except Exception:  # noqa: BLE001
         pass
+    if bilanz:
+        d.update(firma_bilanz(tk, abschluss=abschluss))
     return d
 
 
-def firmen_yahoo(ticker: list[str], timeout: int = 90, parallel: int = 4) -> dict:
+# ---------------------------------------------------------------------------
+# Bilanz, Cashflow, Gewinnschätzungen (Update 8)
+# ---------------------------------------------------------------------------
+FIN_ZEILEN = {  # Schlüssel → mögliche Yahoo-Zeilen (die erste vorhandene zählt)
+    "umsatz": ("Total Revenue", "Operating Revenue"),
+    "bruttogewinn": ("Gross Profit",),
+    "ebit": ("EBIT", "Operating Income"),
+    "ebitda": ("EBITDA", "Normalized EBITDA"),
+    "zinsaufwand": ("Interest Expense", "Interest Expense Non Operating"),
+    "gewinn": ("Net Income Common Stockholders", "Net Income"),
+    "eps": ("Diluted EPS", "Basic EPS"),
+    "bilanzsumme": ("Total Assets",),
+    "uv": ("Current Assets",),
+    "kv": ("Current Liabilities",),
+    "lt_schulden": ("Long Term Debt", "Long Term Debt And Capital Lease Obligation"),
+    "schulden": ("Total Debt",),
+    "cash": ("Cash Cash Equivalents And Short Term Investments", "Cash And Cash Equivalents"),
+    "ek": ("Stockholders Equity", "Common Stock Equity"),
+    "aktien": ("Ordinary Shares Number", "Share Issued"),
+    "ocf": ("Operating Cash Flow",),
+    "capex": ("Capital Expenditure",),
+    "fcf": ("Free Cash Flow",),
+}
+
+
+def _fin_tabelle(frames: list) -> dict:
+    """Jahresabschlüsse (Zeilen = Positionen, Spalten = Geschäftsjahresende) → {jahre: [neu → alt], werte: {schlüssel: [...]}}."""
+    spalten = {}
+    for df in frames:
+        if df is None or not len(df):
+            continue
+        for c in df.columns:
+            try:
+                spalten.setdefault(pd.Timestamp(c).strftime("%Y-%m-%d"), []).append((df, c))
+            except Exception:  # noqa: BLE001
+                continue
+    jahre = sorted(spalten, reverse=True)[:4]
+    werte = {}
+    for key, namen in FIN_ZEILEN.items():
+        reihe = []
+        for j in jahre:
+            v = None
+            for df, c in spalten[j]:
+                for n in namen:
+                    if n in df.index:
+                        x = _sauber(df.at[n, c])
+                        if x is not None:
+                            v = float(x)
+                            break
+                if v is not None:
+                    break
+            reihe.append(v)
+        if any(x is not None for x in reihe):
+            werte[key] = reihe
+    return dict(jahre=jahre, werte=werte)
+
+
+def firma_bilanz(tk, abschluss: bool = True) -> dict:
+    """Jahresabschlüsse (4 Jahre), Gewinnschätzungen (heute vs. vor 7/30/60/90 Tagen), Revisionen und Überraschungen.
+    tk = yfinance.Ticker oder Ticker-Symbol."""
+    if isinstance(tk, str):
+        import yfinance as yf
+
+        tk = yf.Ticker(tk)
+    d: dict = dict(bilanz_stand=iso(None), bilanz_fehler=[])
+    if abschluss:
+        frames = []
+        for name in ("income_stmt", "balance_sheet", "cashflow"):
+            try:
+                frames.append(getattr(tk, name))
+            except Exception as e:  # noqa: BLE001
+                d["bilanz_fehler"].append(f"{name}: {type(e).__name__}")
+        fin = _fin_tabelle(frames)
+        if fin["werte"]:
+            d["fin"], d["abschluss_stand"] = fin, iso(None)
+    try:
+        tr = tk.eps_trend
+        if tr is not None and len(tr):
+            d["eps_trend"] = {str(p): {k: _sauber(v) for k, v in z.items() if k not in ("currency", "methodology")}
+                              for p, z in tr.iterrows()}
+    except Exception as e:  # noqa: BLE001
+        d["bilanz_fehler"].append(f"Schätzungen: {type(e).__name__}")
+    try:
+        rv = tk.eps_revisions
+        if rv is not None and len(rv):
+            d["eps_revisionen"] = {str(p): {k: _sauber(v) for k, v in z.items() if k not in ("currency", "methodology")}
+                                   for p, z in rv.iterrows()}
+    except Exception as e:  # noqa: BLE001
+        d["bilanz_fehler"].append(f"Revisionen: {type(e).__name__}")
+    try:
+        eh = tk.earnings_history
+        if eh is not None and len(eh):
+            eh = eh.sort_index(ascending=False).head(4)
+            d["ueberraschungen"] = [dict(quartal=pd.Timestamp(q).strftime("%Y-%m-%d"), schaetzung=_sauber(z.get("epsEstimate")),
+                                         ist=_sauber(z.get("epsActual")), diff=_sauber(z.get("epsDifference")),
+                                         prozent=_sauber(z.get("surprisePercent"))) for q, z in eh.iterrows()]
+    except Exception as e:  # noqa: BLE001
+        d["bilanz_fehler"].append(f"Überraschungen: {type(e).__name__}")
+    return d
+
+
+HINWEIS_SEKTOR = {
+    "Finanzen": "Banken und Versicherungen: Schulden (Einlagen, Refinanzierung) sind Teil des Geschäfts. Nettoverschuldung/EBITDA, "
+                "Zinsdeckung, Current Ratio und Bruttomarge sind darum nicht aussagekräftig und werden nicht gezeigt – stattdessen "
+                "Kurs-Buchwert, Eigenkapitalrendite und Eigenkapitalquote. Free Cashflow schwankt mit dem Kredit- und Einlagengeschäft, "
+                "der F-Score ist nur eingeschränkt vergleichbar.",
+    "Immobilien": "REITs: Hohe Abschreibungen verzerren Gewinn je Aktie und Cash Conversion; üblich wäre FFO (bei Yahoo nicht "
+                  "verfügbar). Eine Current Ratio wird oft nicht ausgewiesen, Nettoverschuldung/EBITDA von 5–7 ist für REITs normal – "
+                  "mit dem Sektor vergleichen.",
+    "Versorger": "Regulierte Versorger finanzieren ihr Netz stark mit Fremdkapital: Nettoverschuldung/EBITDA von 4–6 ist üblich, "
+                 "der Free Cashflow wegen hoher Investitionen oft negativ. Mit dem Sektor vergleichen, nicht mit dem Gesamtmarkt.",
+}
+FINANZ_SEKTOREN = {"Finanzen"}
+
+
+def _q(a, b):
+    try:
+        return a / b if a is not None and b not in (None, 0) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def piotroski(fin: dict | None, finanz: bool = False) -> dict:
+    """Piotroski F-Score aus den zwei letzten Geschäftsjahren. Nicht prüfbare Kriterien zählen nicht (n = prüfbar).
+    ROA mit Bilanzsumme am Jahresende (vereinfacht)."""
+    w = (fin or {}).get("werte") or {}
+
+    def v(k, j):
+        r = w.get(k) or []
+        return r[j] if len(r) > j else None
+
+    def ja(x):
+        return None if x is None else bool(x)
+
+    roa0, roa1 = _q(v("gewinn", 0), v("bilanzsumme", 0)), _q(v("gewinn", 1), v("bilanzsumme", 1))
+    lev0, lev1 = _q(v("lt_schulden", 0), v("bilanzsumme", 0)), _q(v("lt_schulden", 1), v("bilanzsumme", 1))
+    cr0, cr1 = _q(v("uv", 0), v("kv", 0)), _q(v("uv", 1), v("kv", 1))
+    gm0, gm1 = _q(v("bruttogewinn", 0), v("umsatz", 0)), _q(v("bruttogewinn", 1), v("umsatz", 1))
+    at0, at1 = _q(v("umsatz", 0), v("bilanzsumme", 0)), _q(v("umsatz", 1), v("bilanzsumme", 1))
+    k = [
+        ("Rentabilität", "Gewinn positiv (ROA > 0)", ja(roa0 > 0) if roa0 is not None else None),
+        ("Rentabilität", "Operativer Cashflow positiv", ja(v("ocf", 0) > 0) if v("ocf", 0) is not None else None),
+        ("Rentabilität", "ROA gestiegen", ja(roa0 > roa1) if None not in (roa0, roa1) else None),
+        ("Rentabilität", "Cashflow > Gewinn (Qualität)", ja(v("ocf", 0) > v("gewinn", 0)) if None not in (v("ocf", 0), v("gewinn", 0)) else None),
+        ("Finanzierung", "Langfristige Verschuldung gesunken", ja(lev0 <= lev1) if None not in (lev0, lev1) else None),
+        ("Finanzierung", "Current Ratio gestiegen", None if finanz else (ja(cr0 > cr1) if None not in (cr0, cr1) else None)),
+        ("Finanzierung", "Keine neuen Aktien ausgegeben",
+         ja(v("aktien", 0) <= v("aktien", 1) * 1.005) if None not in (v("aktien", 0), v("aktien", 1)) else None),
+        ("Effizienz", "Bruttomarge gestiegen", None if finanz else (ja(gm0 > gm1) if None not in (gm0, gm1) else None)),
+        ("Effizienz", "Kapitalumschlag gestiegen", ja(at0 > at1) if None not in (at0, at1) else None),
+    ]
+    n = sum(1 for *_, x in k if x is not None)
+    return dict(score=sum(1 for *_, x in k if x), n=n, kriterien=k,
+                jahre=((fin or {}).get("jahre") or [])[:2])
+
+
+def bilanz_kennzahlen(f: dict | None, sektor: str = "") -> dict:
+    """Verschuldung, Cashflow, Qualität, Verlauf und Gewinnschätzungen für Karte und Übersicht."""
+    f = f or {}
+    i = f.get("info") or {}
+    fin = f.get("fin") or {}
+    w = fin.get("werte") or {}
+    finanz = sektor in FINANZ_SEKTOREN
+
+    def v(k, j=0):
+        r = w.get(k) or []
+        return r[j] if len(r) > j else None
+
+    mcap = i.get("marketCap")
+    schulden = v("schulden") if v("schulden") is not None else i.get("totalDebt")
+    cash = v("cash") if v("cash") is not None else i.get("totalCash")
+    ebitda = v("ebitda") if v("ebitda") is not None else i.get("ebitda")
+    netto = schulden - cash if schulden is not None and cash is not None else None
+    zins = v("zinsaufwand")
+    fcf = v("fcf") if v("fcf") is not None else i.get("freeCashflow")
+    ocf = v("ocf") if v("ocf") is not None else i.get("operatingCashflow")
+    gewinn = v("gewinn") if v("gewinn") is not None else i.get("netIncomeToCommon")
+    out = dict(
+        finanz=finanz, hinweis=HINWEIS_SEKTOR.get(sektor, ""),
+        netto=netto, cash=cash, schulden=schulden,
+        nd_ebitda=None if finanz else (_q(netto, ebitda) if ebitda and ebitda > 0 else None),
+        zinsdeckung=None if finanz else (_q(v("ebit"), abs(zins)) if zins else None),
+        current_ratio=None if finanz else (_q(v("uv"), v("kv")) or i.get("currentRatio")),
+        ek_quote=_q(v("ek"), v("bilanzsumme")),
+        roe=_q(gewinn, v("ek")) if v("ek") and v("ek") > 0 else i.get("returnOnEquity"),
+        kbv=i.get("priceToBook"),
+        fcf=fcf, fcf_rendite=_q(fcf, mcap), ocf=ocf,
+        cash_conversion=_q(ocf, gewinn) if gewinn and gewinn > 0 else None,
+        f_score=piotroski(fin, finanz) if w else None,
+        jahre=fin.get("jahre") or [], verlauf={k: w.get(k) for k in ("umsatz", "eps", "ebit", "gewinn", "fcf")},
+        hat_abschluss=bool(w),
+    )
+    # Gewinnschätzungen: Änderung der Konsens-EPS in % gegenüber vor 30 / 90 Tagen
+    rev = {}
+    for p, z in (f.get("eps_trend") or {}).items():
+        heute = z.get("current")
+        rev[p] = dict(heute=heute, d7=z.get("7daysAgo"), d30=z.get("30daysAgo"), d90=z.get("90daysAgo"),
+                      p30=(_q(heute, z.get("30daysAgo")) - 1) * 100 if _q(heute, z.get("30daysAgo")) is not None and z.get("30daysAgo") > 0 else None,
+                      p90=(_q(heute, z.get("90daysAgo")) - 1) * 100 if _q(heute, z.get("90daysAgo")) is not None and z.get("90daysAgo") > 0 else None)
+    for p, z in (f.get("eps_revisionen") or {}).items():
+        r = rev.setdefault(p, {})
+        r["hoch30"] = z.get("upLast30days")
+        r["runter30"] = z.get("downLast30days") if z.get("downLast30days") is not None else z.get("downLast30Days")
+    out["schaetzungen"] = rev
+    out["rev30_jahr"] = (rev.get("0y") or {}).get("p30")
+    ue = [u for u in f.get("ueberraschungen") or [] if u.get("ist") is not None and u.get("schaetzung") is not None]
+    out["ueberraschungen"] = ue
+    out["beats"] = sum(1 for u in ue if u["ist"] >= u["schaetzung"])
+    return out
+
+
+def firmen_yahoo(ticker: list[str], timeout: int = 90, parallel: int = 4, bilanz: bool = False,
+                 abschluss: set | None = None) -> dict:
+    """bilanz=True: zusätzlich Gewinnschätzungen/Überraschungen; Jahresabschlüsse nur für Titel in «abschluss»
+    (None = alle). Die Abschlüsse ändern sich nur quartalsweise, darum seltener holen (weniger Yahoo-Abrufe)."""
     out = {}
     ex = ThreadPoolExecutor(max_workers=parallel)
-    futs = {t: ex.submit(firma_yahoo, t) for t in ticker}
+    futs = {t: ex.submit(firma_yahoo, t, bilanz, bilanz and (abschluss is None or t in abschluss)) for t in ticker}
     for t, f in futs.items():
         try:
             out[t] = f.result(timeout=timeout)

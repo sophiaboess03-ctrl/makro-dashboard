@@ -35,6 +35,7 @@ KI_PRO_SEKTOR, KI_PRO_TITEL, KI_TITEL_MAX, KI_NEWSLETTER_MAX = 4, 2, 30, 10
 REGEL_EXTRA_PRO_SEKTOR = 2           # zusätzlich ohne KI gespeichert (nur Regel-Relevanz ab 4)
 KI_BLOCK = 40
 FAZIT_ABSTAND_H, FIRMA_ABSTAND_H, YAHOO_ABSTAND_H = 20, 20, 20
+ABSCHLUSS_ABSTAND_H = 24 * 7          # Jahresabschlüsse (Bilanz, Erfolgsrechnung, Cashflow) wöchentlich
 PROFILE_PRO_LAUF = 15
 
 
@@ -371,15 +372,20 @@ def unternehmen(ablage: Ablage, titel: dict, tabellen: dict, budget: ki.Budget, 
     U = ablage.unternehmen()
     alt = [t for t in titel if _alter_h((U.get(t) or {}).get("stand")) >= YAHOO_ABSTAND_H or (U.get(t) or {}).get("teilweise")]
     if alt:
-        frisch = N.firmen_yahoo(alt, parallel=2)
+        # Jahresabschlüsse höchstens wöchentlich neu (ändern sich quartalsweise), Schätzungen täglich
+        abschluss = {t for t in alt if not (U.get(t) or {}).get("fin")
+                     or _alter_h((U.get(t) or {}).get("abschluss_stand")) >= ABSCHLUSS_ABSTAND_H}
+        frisch = N.firmen_yahoo(alt, parallel=2, bilanz=True, abschluss=abschluss)
         for t, f in frisch.items():
             vorher = U.get(t) or {}
             if (not f.get("info") or f.get("teilweise")) and vorher.get("info") and not vorher.get("teilweise"):
                 vorher["fehler"] = f.get("fehler", [])     # Yahoo-Ausfall: alte (vollständige) Daten behalten
-                vorher["fehler"] = f.get("fehler", [])
                 continue
             for k in ("profil_de", "profil_hash", "news"):
                 if k in vorher:
+                    f[k] = vorher[k]
+            for k in ("fin", "abschluss_stand", "eps_trend", "eps_revisionen", "ueberraschungen"):
+                if k not in f and k in vorher:           # nicht neu geholt oder Abruf gescheitert → alten Stand behalten
                     f[k] = vorher[k]
             U[t] = f
         ablage.geaendert.add("_u")
