@@ -108,8 +108,9 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
     import portfolio as P
 
     # Titel: Bestand + Watchlist (+ mitverfolgte Vorauswahl); Analyse-Titel nur auf Wunsch
-    an = tab.get("analysen")
-    an = an.sort_values("zeit", ascending=False).drop_duplicates("id") if an is not None and not an.empty else pd.DataFrame()
+    import analyse as A
+
+    an = A.portfolios(tab.get("analysen"))
     aid = N.probe_analyse_id(tab)
     titel = N.titel_liste(tab, P.sp500_liste())
     ss = st.session_state
@@ -121,12 +122,13 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
         quelle = None
         if zeigen:
             opt = (["eingabe"] if "an_aktien" in ss else []) + list(an["id"]) if len(an) else (["eingabe"] if "an_aktien" in ss else [])
-            namen = {"eingabe": "Aktuelle Eingabe auf der Seite «Analyse» (nicht gespeichert)",
-                     **({r["id"]: f"Vorauswahl «{r['name']}» ({r['person']}, {str(r['zeit'])[:10]})" for _, r in an.iterrows()} if len(an) else {})}
+            aktiv_name = ss.get("an_pf_name") or ss.get("_an_pf_name") or ""
+            namen = {"eingabe": f"Aktives Analyseportfolio{' «' + aktiv_name + '»' if aktiv_name else ''} – aktueller Stand, auch ungespeichert",
+                     **({r["id"]: f"Analyseportfolio «{r['name']}» ({r['person']}, {str(r['zeit'])[:10]})" for _, r in an.iterrows()} if len(an) else {})}
             if opt:
                 quelle = c2.selectbox("Welche Analyse?", opt, format_func=namen.get, key="un_an_quelle", label_visibility="collapsed")
             else:
-                c2.caption("Noch keine Analyse: auf der Seite «Analyse» Titel eintragen oder eine Vorauswahl speichern.")
+                c2.caption("Noch keine Analyse: auf der Seite «Analyse» Titel eintragen oder ein Analyseportfolio speichern.")
         if quelle == "eingabe":
             neu_t = [str(t).strip().upper() for t in ss["an_aktien"]["Ticker"] if str(t).strip() not in ("", "<NA>", "nan")]
         elif quelle:
@@ -140,16 +142,16 @@ def seite_unternehmen(ctx, fred: dict, lade_kurse):
                 d["herkunft"].append("Analyse")
         if quelle and quelle != "eingabe" and not ctx.nur_lesen:
             if aid == quelle:
-                st.caption("Diese Vorauswahl wird automatisch mitverfolgt (News, Analysten, KI-Profil im Sammel-Lauf).")
+                st.caption("Dieses Analyseportfolio wird automatisch mitverfolgt (News, Analysten, KI-Profil im Sammel-Lauf).")
                 if st.button("Nicht mehr mitverfolgen", key="un_folgen_aus"):
                     ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="unternehmen|analyse_id", wert="")],
-                                  "Vorauswahl wird nicht mehr mitverfolgt.")
-            elif st.button("Diese Vorauswahl automatisch mitverfolgen", key="un_folgen_an", icon=":material/track_changes:",
+                                  "Analyseportfolio wird nicht mehr mitverfolgt.")
+            elif st.button("Dieses Analyseportfolio automatisch mitverfolgen", key="un_folgen_an", icon=":material/track_changes:",
                            help="Der Sammel-Lauf holt dann auch für diese Titel News, Analystendaten und ein KI-Profil."):
                 ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="unternehmen|analyse_id", wert=quelle)],
-                              "Vorauswahl wird ab dem nächsten Sammel-Lauf mitverfolgt.")
+                              "Analyseportfolio wird ab dem nächsten Sammel-Lauf mitverfolgt.")
         elif neu_t:
-            st.caption("Daten direkt von Yahoo (ohne KI-Profil und Firmen-Kurzfassung) – zum Mitverfolgen die Vorauswahl speichern "
+            st.caption("Daten direkt von Yahoo (ohne KI-Profil und Firmen-Kurzfassung) – zum Mitverfolgen das Analyseportfolio speichern "
                        "und hier wählen.")
     U, fehler = SNS.lade("unternehmen.json")
     U = dict(U or {})

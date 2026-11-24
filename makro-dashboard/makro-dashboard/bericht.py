@@ -470,9 +470,9 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
     # 7 Analysen
     an = tab.get("analysen")
     if an is not None and not an.empty:
-        _titel(pdf, "7. Geprüfte Vorauswahlen (Analyse)")
+        _titel(pdf, "7. Analyseportfolios (Seite Analyse)")
         zeilen = []
-        for _, r in an.sort_values("zeit").drop_duplicates("id", keep="last").iterrows():
+        for _, r in A.portfolios(an).sort_values("zeit").iterrows():
             try:
                 kz = json.loads(r["kennzahlen"])
             except Exception:  # noqa: BLE001

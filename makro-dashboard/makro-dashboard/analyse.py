@@ -1,4 +1,4 @@
-"""Analyse einer Vorauswahl (oder des aktuellen Portfolios): Rendite-, Risiko- und Regelkennzahlen aus Kursdaten.
+"""Analyse mehrerer Analyseportfolios (oder des aktuellen Portfolios): Rendite-, Risiko- und Regelkennzahlen aus Kursdaten.
 
 Methodik (auch in der App erklärt):
 - Tagesschlusskurse von Yahoo Finance, dividendenbereinigt (Total Return).
@@ -9,6 +9,7 @@ Methodik (auch in der App erklärt):
 - «Aktienteil» = nur die eingegebenen Titel, auf 100 % hochgerechnet (Risiko der Titel für sich allein).
 - Aktien-Eingabe auch als «Gewicht %» (Bezug Gesamtportfolio oder Aktienteil); fixe % passen die Stückzahl an,
   wenn Kapital oder Aktien-% ändern.
+- Mehrere Analyseportfolios: gleichzeitig offen, je id überschreibbar, löschbar (Papierkorb), Vergleich im gleichen Zeitfenster.
 """
 from __future__ import annotations
 
@@ -813,73 +814,812 @@ def portfolio_vorlage(tabellen: dict, fred: dict, lade_kurse) -> tuple[pd.DataFr
             max(0.0, cash), wert)
 
 
+# ---------------------------------------------------------------------------
+# Mehrere Analyseportfolios
+# Gespeichert im Blatt «analysen» (je id gilt die neuste Zeile; Löschen = neue Zeile mit «geloescht» in der Eingabe).
+# In der Sitzung sind mehrere Portfolios gleichzeitig offen: das aktive liegt in den an_*-Schlüsseln, die übrigen
+# als Kopie in st.session_state["an_pf"][id]["state"] – Wechseln verliert also keine ungespeicherten Änderungen.
+# ---------------------------------------------------------------------------
+PF_KEYS = ("an_aktien", "an_treas", "an_cash", "an_kapital", "an_kap_txt", "an_p_ak", "an_p_tr", "an_p_ca", "an_bezug",
+           "an_fuellen", "an_eingabe", "an_kz")
+# Widget-Schlüssel löscht Streamlit, sobald die Seite verlassen wird → Spiegel «_<key>» hält den Wert
+WIDGET_KEYS = ("an_kap_txt", "an_p_ak", "an_p_tr", "an_p_ca", "an_bezug", "an_fuellen", "an_pf_name", "an_pf_notiz")
+BESTAND = "__bestand__"        # im Vergleich: aktuelles Portfolio (Transaktionen)
+PF_FARBEN = [ui.BLAU, ui.PETROL, "#8E5572", "#C05621", ui.NAVY, "#6B7A2F", "#5A6ACF", "#9C4221"]
+
+
+def _ist_geloescht(eingabe) -> bool:
+    try:
+        return bool(json.loads(eingabe).get("geloescht"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def portfolios(df: pd.DataFrame | None, mit_geloeschten: bool = False) -> pd.DataFrame:
+    """Gespeicherte Analyseportfolios: neuste Version je id (ohne gelöschte), mit Ersteller, Erstelldatum und Anzahl Versionen.
+    Sortiert nach letzter Änderung (neuste zuerst)."""
+    spalten = ["zeit", "person", "id", "name", "eingabe", "kennzahlen", "notiz", "erstellt_von", "erstellt", "versionen", "geloescht"]
+    if df is None or df.empty or "id" not in df.columns:
+        return pd.DataFrame(columns=spalten)
+    d = df[df["id"].astype(str).str.strip() != ""].copy()
+    if d.empty:
+        return pd.DataFrame(columns=spalten)
+    d["zeit"] = d["zeit"].astype(str)
+    d = d.sort_values("zeit", kind="stable")
+    erst = d.groupby("id").agg(erstellt_von=("person", "first"), erstellt=("zeit", "first"), versionen=("zeit", "size"))
+    neu = d.drop_duplicates("id", keep="last").merge(erst, left_on="id", right_index=True)
+    neu["geloescht"] = [_ist_geloescht(e) for e in neu["eingabe"]]
+    if not mit_geloeschten:
+        neu = neu[~neu["geloescht"]]
+    return neu.sort_values("zeit", ascending=False).reset_index(drop=True)[spalten]
+
+
+def _datum(z) -> str:
+    s = str(z or "")
+    return f"{s[8:10]}.{s[5:7]}.{s[:4]}" if len(s) >= 10 else s
+
+
+def _kern(aktien: pd.DataFrame, treas: pd.DataFrame, kapital: float, pct: dict, bezug: str) -> dict:
+    """Eingabe eines Portfolios in der Speicherform (Aktien, Treasuries, Kapital, Aufteilung, Bezug)."""
+    a_ = aktien[[bool(_txt(t).strip()) for t in aktien["Ticker"]]] if len(aktien) else aktien
+    t_ = _treas_df(treas)
+    t_ = t_[[_num(x) is not None for x in t_["Betrag USD"]]]
+    return dict(
+        aktien=[{"Ticker": _txt(z["Ticker"]).strip(), "Menge": _num(z.get("Menge")), "Betrag USD": _num(z.get("Betrag USD")),
+                 "Gewicht %": _num(z.get("Gewicht %")), "Fix": _txt(z.get("Fix"))} for z in a_.to_dict("records")],
+        treas=[{"Laufzeit": _txt(z["Laufzeit"]), "Betrag USD": _num(z["Betrag USD"]), "Kupon %": _num(z.get("Kupon %")),
+                "Kurs %": _num(z.get("Kurs %")),
+                "Fälligkeit": pd.Timestamp(z["Fälligkeit"]).date().isoformat()
+                if z.get("Fälligkeit") is not None and pd.notna(z.get("Fälligkeit")) else "",
+                "Bezeichnung": _txt(z.get("Bezeichnung"))} for z in t_.to_dict("records")],
+        cash=0.0, kapital=float(kapital or 0), pct={k: float(v) for k, v in (pct or {}).items()}, bezug=bezug or GESAMT)
+
+
+def _eingabe_aus_state(s) -> dict:
+    """Speicherform aus dem aktiven Portfolio (st.session_state) oder einer gespeicherten Sitzungskopie (dict)."""
+    s = {k: s[k] for k in PF_KEYS + WIDGET_KEYS if k in s}
+    b = budget(s)
+    e = _kern(s.get("an_aktien", _aktien_df(None, 0)), s.get("an_treas", _leer_treas()), b["kapital"], b["pct"],
+              s.get("an_bezug", GESAMT))
+    e["fuellen"] = s.get("an_fuellen") if s.get("an_fuellen") in FUELLEN else "Index"
+    return e
+
+
+def _hash(e: dict, name: str = "", notiz: str = "") -> str:
+    kern = {k: e.get(k) for k in ("aktien", "treas", "kapital", "pct", "bezug")}
+    return json.dumps(dict(e=kern, name=(name or "").strip(), notiz=(notiz or "").strip()), sort_keys=True, ensure_ascii=False,
+                      default=str)
+
+
+def _standard_state(kapital: float, alloc: dict) -> dict:
+    return dict(an_aktien=_aktien_df(None, 6), an_treas=_leer_treas(), an_cash=0.0, an_kapital=float(kapital),
+                an_kap_txt=ui.de(float(kapital), 0), an_p_ak=float(alloc["aktien"]), an_p_tr=float(alloc["anleihen"]),
+                an_p_ca=float(alloc["cash"]), an_bezug=GESAMT, an_fuellen="Index")
+
+
+def _versionen_hoch():
+    ss = st.session_state
+    ss["an_ver"] = ss.get("an_ver", 0) + 1
+    ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
+    ss["an_tr_ver"] = ss.get("an_tr_ver", 0) + 1
+
+
+def _aus_eingabe_laden(e: dict, kapital_std: float, alloc: dict):
+    """Gespeicherte Eingabe ins aktive Portfolio laden (zuerst Kapital, Prozent und Bezug, dann die Zeilen rechnen)."""
+    ss = st.session_state
+    pct = e.get("pct") if isinstance(e.get("pct"), dict) else {}
+    kap = float(e.get("kapital") or kapital_std)
+    ss.update(_standard_state(kap, alloc))
+    ss.update(an_p_ak=float(pct.get("aktien", alloc["aktien"])), an_p_tr=float(pct.get("treas", alloc["anleihen"])),
+              an_p_ca=float(pct.get("cash", alloc["cash"])),
+              an_bezug=e.get("bezug") if e.get("bezug") in (GESAMT, AKTIENTEIL) else GESAMT,
+              an_fuellen=e.get("fuellen") if e.get("fuellen") in FUELLEN else "Index")
+    a_ = pd.DataFrame(e.get("aktien") or [])
+    for c_ in ("Ticker", "Menge", "Betrag USD"):
+        if c_ not in a_.columns:
+            a_[c_] = None
+    t_ = _treas_df(pd.DataFrame(e.get("treas") or []))
+    ss.update(an_aktien=_aktien_neu_rechnen(a_), an_treas=t_ if len(t_) else _leer_treas())
+
+
+def _wert(key: str, default=None):
+    ss = st.session_state
+    return ss[key] if key in ss else ss.get("_" + key, default)
+
+
+def _stash():
+    """Aktives Portfolio als Kopie in an_pf ablegen (vor dem Wechsel)."""
+    ss = st.session_state
+    pf, alt = ss.setdefault("an_pf", {}), ss.get("an_aktiv")
+    if alt in pf:
+        pf[alt]["state"] = {k: _wert(k) for k in PF_KEYS if _wert(k) is not None}
+        pf[alt]["name"] = _wert("an_pf_name", pf[alt]["name"])
+        pf[alt]["notiz"] = _wert("an_pf_notiz", pf[alt].get("notiz", ""))
+
+
+def _aktiv_setzen(pid: str):
+    ss = st.session_state
+    ent = ss["an_pf"][pid]
+    ss["an_aktiv"] = pid
+    ss["an_pf_wahl"] = pid
+    for k, v in (("an_pf_name", ent["name"]), ("an_pf_notiz", ent.get("notiz", ""))):
+        ss[k] = v
+        ss["_" + k] = v
+    for k in WIDGET_KEYS:
+        if k in ss:
+            ss["_" + k] = ss[k]
+    _versionen_hoch()
+
+
+def _pf_oeffnen(pid: str, tab: dict, kapital_std: float, alloc: dict, verwerfen: bool = False):
+    """Portfolio aktiv machen: aus der Sitzungskopie oder (sonst bzw. bei verwerfen=True) aus dem Speicher laden."""
+    ss = st.session_state
+    pf = ss.setdefault("an_pf", {})
+    if not verwerfen and ss.get("an_aktiv") != pid:
+        _stash()
+    for k in PF_KEYS:
+        ss.pop(k, None)
+    ent = pf.get(pid)
+    if ent and ent.get("state") and not verwerfen:
+        ss.update(ent["state"])
+        ent["state"] = None
+    else:
+        gs = portfolios(tab.get("analysen"))
+        if pid not in set(gs["id"]):            # nicht (mehr) gespeichert
+            ss.update(_standard_state(kapital_std, alloc))
+            pf[pid] = dict(name=(ent or {}).get("name") or "Neues Portfolio", notiz="", gespeichert=False, zeit=None,
+                           basis=None, state=None)
+        else:
+            z = gs.set_index("id").loc[pid]
+            try:
+                e = json.loads(z["eingabe"])
+            except Exception:  # noqa: BLE001
+                e = {}
+            _aus_eingabe_laden(e, kapital_std, alloc)
+            pf[pid] = dict(name=str(z["name"]), notiz=str(z["notiz"] or ""), gespeichert=True, zeit=str(z["zeit"]),
+                           versionen=int(z["versionen"]), basis=None, state=None)
+            pf[pid]["basis"] = _hash(_eingabe_aus_state(ss), pf[pid]["name"], pf[pid]["notiz"])
+    _aktiv_setzen(pid)
+
+
+def _pf_neu(art: str, tab: dict, kapital_std: float, alloc: dict, fred: dict | None = None, lade_kurse=None):
+    """Neues Analyseportfolio in der Sitzung: leer, Kopie des aktiven oder aus dem aktuellen Bestand."""
+    ss = st.session_state
+    pf = ss.setdefault("an_pf", {})
+    alt = ss.get("an_aktiv")
+    kopie = {k: (v.copy() if hasattr(v, "copy") else v) for k in PF_KEYS if (v := _wert(k)) is not None} if art == "kopie" else None
+    alt_name = _wert("an_pf_name", "")
+    _stash()
+    pid = uuid.uuid4().hex[:8]
+    nummer = len(pf) + 1
+    name = {"kopie": f"Kopie von {alt_name}".strip(), "bestand": f"Bestand {datetime.now():%d.%m.%Y}"}.get(art, f"Neues Portfolio {nummer}")
+    pf[pid] = dict(name=name, notiz="", gespeichert=False, zeit=None, basis=None, state=None)
+    for k in PF_KEYS:
+        ss.pop(k, None)
+    if art == "kopie" and kopie:
+        ss.update(kopie)
+        ss.pop("an_eingabe", None)
+        ss.pop("an_kz", None)
+    else:
+        ss.update(_standard_state(kapital_std, alloc))
+    if art == "bestand":
+        v = portfolio_vorlage(tab, fred or {}, lade_kurse)
+        if v is None:
+            ss["an_meldung"] = "Im Portfolio sind noch keine Transaktionen erfasst – leeres Portfolio angelegt."
+        else:
+            ss.update(an_kapital=float(v[3]), an_kap_txt=ui.de(float(v[3]), 0))      # zuerst: Basis für «Gewicht %»
+            ss.update(an_aktien=_aktien_neu_rechnen(v[0]), an_treas=_treas_df(v[1]))
+            ss["an_meldung_info"] = ("Bestand übernommen. Hinweis: Aktien-, Treasury- und Cash-% stehen auf der Taktik – "
+                                     "anpassen, falls der Bestand anders aufgeteilt ist.")
+    _aktiv_setzen(pid)
+
+
+def _pf_wechsel(tab: dict, kapital_std: float, alloc: dict):
+    ss = st.session_state
+    neu = ss.get("an_pf_wahl")
+    if neu and neu != ss.get("an_aktiv"):
+        _pf_oeffnen(neu, tab, kapital_std, alloc)
+
+
+def _pf_verwerfen(tab: dict, kapital_std: float, alloc: dict):
+    """Gespeichertes Portfolio: letzte gespeicherte Version neu laden. Ungespeichertes: schliessen."""
+    ss = st.session_state
+    pid, pf = ss.get("an_aktiv"), ss.get("an_pf", {})
+    if pid not in pf:
+        return
+    if pf[pid].get("gespeichert"):
+        _pf_oeffnen(pid, tab, kapital_std, alloc, verwerfen=True)
+        return
+    pf.pop(pid)
+    ss["an_aktiv"] = None
+    gs = portfolios(tab.get("analysen"))
+    rest = list(pf) + [i for i in gs["id"] if i not in pf]
+    if rest:
+        _pf_oeffnen(rest[0], tab, kapital_std, alloc, verwerfen=False)
+    else:
+        _pf_neu("leer", tab, kapital_std, alloc)
+
+
+def _kz_zusammenfassen(kv: dict, ka: dict, ak_w: float, tr_w: float, cash: float, total: float, fuellen: str) -> dict:
+    kz = {k_: (round(v_, 4) if isinstance(v_, float) else v_) for k_, v_ in kv.items() if k_ not in ("von", "bis")}
+    kz.update(aktien=round(ak_w / total * 100, 1), treasuries=round(tr_w / total * 100, 1),
+              cash=round(cash / total * 100, 1), total=round(total, 0),
+              von=f"{kv['von']:%Y-%m-%d}", bis=f"{kv['bis']:%Y-%m-%d}", fuellen=fuellen,
+              vola_aktien=round(float(ka["vola"]), 4) if ka.get("vola") is not None else None,
+              sharpe_aktien=round(float(ka["sharpe"]), 4) if ka.get("sharpe") is not None else None)
+    return kz
+
+
+def _portfolio_leiste(ctx, tab: dict, kapital_std: float, alloc: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
+    """Auswahl, Neu/Kopie, Name, Notiz, Speichern, Verwerfen, Löschen – oben auf der Seite."""
+    ss = st.session_state
+    pf = ss["an_pf"]
+    pid = ss["an_aktiv"]
+    ent = pf[pid]
+    gs_ids = list(gs["id"])
+    gz = gs.set_index("id") if len(gs) else None
+    reihe = [i for i in pf if i not in gs_ids] + gs_ids          # ungespeicherte neue zuerst
+
+    def _dirty(i) -> bool:
+        e_ = pf.get(i)
+        if not e_:
+            return False
+        if not e_.get("gespeichert"):
+            return True
+        if i == pid:
+            return _hash(_eingabe_aus_state(ss), _wert("an_pf_name", ""), _wert("an_pf_notiz", "")) != e_.get("basis")
+        if e_.get("state"):
+            return _hash(_eingabe_aus_state(e_["state"]), e_["name"], e_.get("notiz", "")) != e_.get("basis")
+        return False
+
+    # Beschriftung bleibt stabil, solange man im Portfolio arbeitet (Streamlit merkt sich die Auswahl über den Text):
+    # Name = Stand beim Öffnen/Speichern, ungespeicherte Änderungen stehen in der Zeile darunter.
+    labels = {}
+    for i in reihe:
+        if i in pf and not pf[i].get("gespeichert"):
+            labels[i] = f"{pf[i]['name']} · neu, nicht gespeichert"
+        else:
+            z = gz.loc[i]
+            labels[i] = f"{pf[i]['name'] if i in pf else z['name']} · {z['erstellt_von']}" + \
+                        (" · ● geändert" if i != pid and _dirty(i) else "")
+    zaehler = {}
+    for i in reihe:                      # gleiche Beschriftung unterscheidbar machen
+        zaehler[labels[i]] = zaehler.get(labels[i], 0) + 1
+        if zaehler[labels[i]] > 1:
+            labels[i] += f" ({zaehler[labels[i]]})"
+
+    args = (tab, kapital_std, alloc)
+    with st.container(border=True):
+        c1, c2, c3, c4, c5 = st.columns([2.6, 0.8, 0.9, 0.9, 0.8], vertical_alignment="bottom")
+        ss["an_pf_wahl"] = pid
+        c1.selectbox(f"Analyseportfolio ({len(reihe)})", reihe, format_func=labels.get, key="an_pf_wahl", on_change=_pf_wechsel, args=args,
+                     help="Mehrere Portfolios parallel: Wechseln behält ungespeicherte Änderungen der anderen. Gespeicherte "
+                          "Portfolios sehen und bearbeiten alle im Team.")
+        with c2.popover("Neu", icon=":material/add:", width="stretch"):
+            st.button("Leeres Portfolio", key="an_neu_leer", on_click=_pf_neu, args=("leer",) + args, width="stretch",
+                      icon=":material/note_add:")
+            st.button("Kopie des aktiven Portfolios", key="an_neu_kopie", on_click=_pf_neu, args=("kopie",) + args,
+                      width="stretch", icon=":material/content_copy:", help="z. B. um eine Variante B zu rechnen")
+            st.button("Aus dem aktuellen Bestand", key="an_neu_bestand", on_click=_pf_neu, args=("bestand",) + args + (fred, lade_kurse),
+                      width="stretch", icon=":material/account_balance_wallet:",
+                      help="Übernimmt die gebuchten Positionen (Seite Portfolio) – um geplante Käufe darauf aufzubauen")
+        dirty = _dirty(pid)
+        speichern = c3.button("Speichern", type="primary" if dirty else "secondary", icon=":material/save:", width="stretch",
+                              disabled=ctx.nur_lesen or not dirty, key="an_pf_save",
+                              help="Überschreibt dieses Portfolio (frühere Versionen bleiben in der Google-Tabelle)" if ent.get("gespeichert")
+                              else "Legt das Portfolio im Team an")
+        c4.button("Verwerfen" if ent.get("gespeichert") else "Schliessen", icon=":material/undo:" if ent.get("gespeichert") else ":material/close:",
+                  width="stretch", key="an_pf_verwerfen", on_click=_pf_verwerfen, args=args,
+                  disabled=ent.get("gespeichert") and not dirty,
+                  help="Ungespeicherte Änderungen verwerfen und die gespeicherte Version laden" if ent.get("gespeichert")
+                  else "Dieses ungespeicherte Portfolio schliessen")
+        loeschen = False
+        with c5.popover("Löschen", icon=":material/delete:", width="stretch", disabled=ctx.nur_lesen or not ent.get("gespeichert")):
+            st.markdown(f"**«{_wert('an_pf_name', ent['name'])}»** für das ganze Team löschen?")
+            st.caption("Es verschwindet aus der Auswahl, dem Vergleich und der Übernahme. Wiederherstellen ist unter «Alle Analyseportfolios» "
+                       "möglich.")
+            try:
+                import newsdaten as N
+                if N.probe_analyse_id(tab) == pid:
+                    st.warning("Dieses Portfolio wird auf der Seite «Unternehmen» mitverfolgt – das Mitverfolgen endet damit.",
+                               icon=":material/track_changes:")
+            except Exception:  # noqa: BLE001
+                pass
+            loeschen = st.button("Endgültig löschen", type="primary", key="an_pf_del", icon=":material/delete_forever:")
+        n1, n2 = st.columns([1.2, 2])
+        ss.setdefault("an_pf_name", _wert("an_pf_name", ent["name"]))
+        ss.setdefault("an_pf_notiz", _wert("an_pf_notiz", ent.get("notiz", "")))
+        n1.text_input("Name", key="an_pf_name", placeholder="z. B. Variante A – Energie + Finanzen übergewichtet")
+        n2.text_input("Notiz / Idee dahinter", key="an_pf_notiz", placeholder="Was soll diese Variante zeigen?")
+        if ent.get("gespeichert") and gz is not None and pid in gz.index:
+            z = gz.loc[pid]
+            info = (f"Angelegt von {z['erstellt_von']} am {_datum(z['erstellt'])} · zuletzt gespeichert von {z['person']} am "
+                    f"{_datum(z['zeit'])} · Version {int(z['versionen'])}")
+        else:
+            info = "Noch nicht gespeichert – nur in deiner Sitzung sichtbar."
+        if dirty and ent.get("gespeichert"):
+            info += " · **● ungespeicherte Änderungen**"
+        andere = [n for i, n in zip(gs["id"], gs["name"]) if i != pid and str(n).strip().lower() == str(_wert("an_pf_name", "")).strip().lower()]
+        st.caption(info + (" · Achtung: Ein anderes Portfolio heisst gleich." if andere else ""))
+
+    if speichern:
+        name = str(_wert("an_pf_name", "")).strip()
+        if not name:
+            st.error("Bitte einen Namen angeben.")
+        else:
+            e = _eingabe_aus_state(ss)
+            e["jahre"] = int((ss.get("an_eingabe") or {}).get("jahre", 1))
+            kz = ss.get("an_kz") or {}
+            kz = kz.get("kz", {}) if kz.get("hash") == _hash(e) else {}
+            zeit = jetzt()
+            alt = dict(ent)
+            vers = int(gz.loc[pid, "versionen"]) if gz is not None and pid in gz.index else 0
+            ent.update(gespeichert=True, zeit=zeit, versionen=vers + 1, name=name, notiz=str(_wert("an_pf_notiz", "")).strip(),
+                       basis=_hash(e, name, str(_wert("an_pf_notiz", ""))))
+            ctx.speichern("analysen", [dict(zeit=zeit, person=ctx.person, id=pid, name=name,
+                                            eingabe=json.dumps(e, ensure_ascii=False, default=str),
+                                            kennzahlen=json.dumps(kz, ensure_ascii=False, default=str),
+                                            notiz=str(_wert("an_pf_notiz", "")).strip())],
+                          f"Analyseportfolio «{name}» gespeichert.")
+            ent.clear()          # nur erreicht, wenn das Speichern nicht geklappt hat
+            ent.update(alt)
+    if loeschen and pid in gs_ids:
+        z = gz.loc[pid]
+        try:
+            e = json.loads(z["eingabe"])
+        except Exception:  # noqa: BLE001
+            e = {}
+        e["geloescht"] = True
+        backup = (dict(pf), pid)
+        pf.pop(pid, None)
+        ss["an_aktiv"] = None
+        rest = [i for i in reihe if i != pid]
+        ss["an_pf_ziel"] = rest[0] if rest else "__neu__"
+        ctx.speichern("analysen", [dict(zeit=jetzt(), person=ctx.person, id=pid, name=z["name"],
+                                        eingabe=json.dumps(e, ensure_ascii=False), kennzahlen=z["kennzahlen"], notiz=z["notiz"])],
+                      f"Analyseportfolio «{z['name']}» gelöscht.")
+        pf.clear()               # Löschen hat nicht geklappt → zurück
+        pf.update(backup[0])
+        ss["an_aktiv"] = backup[1]
+        ss.pop("an_pf_ziel", None)
+
+
+def _alle_portfolios(ctx, tab: dict):
+    """Übersicht aller gespeicherten Analyseportfolios + Papierkorb."""
+    gs_alle = portfolios(tab.get("analysen"), mit_geloeschten=True)
+    gs = gs_alle[~gs_alle["geloescht"]] if len(gs_alle) else gs_alle
+    weg = gs_alle[gs_alle["geloescht"]] if len(gs_alle) else gs_alle
+    with st.expander(f"Alle Analyseportfolios ({len(gs)})" + (f" · Papierkorb ({len(weg)})" if len(weg) else ""),
+                     icon=":material/folder_open:"):
+        if not len(gs):
+            st.caption("Noch keine gespeicherten Analyseportfolios.")
+        else:
+            zeilen = []
+            for _, z in gs.iterrows():
+                try:
+                    kz = json.loads(z["kennzahlen"])
+                except Exception:  # noqa: BLE001
+                    kz = {}
+                try:
+                    n_t = len(json.loads(z["eingabe"]).get("aktien") or [])
+                except Exception:  # noqa: BLE001
+                    n_t = None
+                zeilen.append({"Name": z["name"], "Angelegt": f"{z['erstellt_von']}, {_datum(z['erstellt'])}",
+                               "Zuletzt": f"{z['person']}, {_datum(z['zeit'])}", "Vers.": int(z["versionen"]),
+                               "Titel": n_t, "Sharpe": _zahl(kz.get("sharpe")), "Rendite p.a.": _pct(kz.get("rendite"), 1, True),
+                               "Vola": _pct(kz.get("vola")), "Vola Aktienteil": _pct(kz.get("vola_aktien")),
+                               "A/T/C %": f"{kz.get('aktien', '–')} / {kz.get('treasuries', '–')} / {kz.get('cash', '–')}",
+                               "Notiz": z["notiz"]})
+            st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+            st.caption("Kennzahlen = Stand der letzten Berechnung vor dem Speichern («–», wenn danach noch geändert wurde). "
+                       "Aktuelle Werte nebeneinander: Ansicht «Portfolios vergleichen».")
+        if len(weg):
+            st.markdown("**Papierkorb**")
+            for _, z in weg.iterrows():
+                a, b = st.columns([3, 1])
+                a.caption(f"{z['name']} · gelöscht von {z['person']} am {_datum(z['zeit'])}")
+                if b.button("Wiederherstellen", key=f"an_wh_{z['id']}", disabled=ctx.nur_lesen, icon=":material/restore_from_trash:"):
+                    try:
+                        e = json.loads(z["eingabe"])
+                    except Exception:  # noqa: BLE001
+                        e = {}
+                    e.pop("geloescht", None)
+                    ctx.speichern("analysen", [dict(zeit=jetzt(), person=ctx.person, id=z["id"], name=z["name"],
+                                                    eingabe=json.dumps(e, ensure_ascii=False), kennzahlen=z["kennzahlen"],
+                                                    notiz=z["notiz"])], f"Analyseportfolio «{z['name']}» wiederhergestellt.")
+
+
+def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
+    """Mehrere Analyseportfolios (und auf Wunsch den Bestand) im gleichen Zeitfenster nebeneinander."""
+    import portfolio as P
+    import sektoren as SK
+
+    ss = st.session_state
+    pf = ss.get("an_pf", {})
+    pid = ss.get("an_aktiv")
+    gs_ids = list(gs["id"])
+    reihe = [i for i in pf if i not in gs_ids] + gs_ids
+    namen = {}
+    for i in reihe:
+        if i == pid:
+            namen[i] = str(_wert("an_pf_name", "")).strip() or pf[i]["name"]
+        elif i in pf:
+            namen[i] = pf[i]["name"]
+        else:
+            namen[i] = str(gs.set_index("id").loc[i, "name"])
+    # gleiche Namen unterscheidbar machen
+    zaehler = {}
+    for i in reihe:
+        n = namen[i]
+        zaehler[n] = zaehler.get(n, 0) + 1
+        if zaehler[n] > 1:
+            namen[i] = f"{n} ({zaehler[n]})"
+    optionen = reihe + [BESTAND]
+    namen[BESTAND] = "Aktueller Bestand (Seite Portfolio)"
+
+    labs = {i: namen[i] + (" · ungespeichert" if i in pf and not pf[i].get("gespeichert") else "") for i in optionen}
+
+    with st.container(border=True):
+        st.markdown("**Portfolios vergleichen** · alle im gleichen Zeitfenster, gegen das neutrale Portfolio (IPS) und den S&P 500")
+        default = [i for i in st.session_state.get("an_vgl_wahl", []) if i in optionen] or reihe[:4]
+        ss["an_vgl_wahl"] = default
+        wahl = st.multiselect("Portfolios", optionen, format_func=labs.get, key="an_vgl_wahl", max_selections=8,
+                              help="Offene Portfolios gehen mit ihrem aktuellen Stand in den Vergleich, auch ungespeichert.")
+        o1, o2, o3 = st.columns([1.2, 1.6, 1])
+        jahre = o1.segmented_control("Zeitraum der Kursdaten", [1, 2, 3, 5], default=1, format_func=lambda j: f"{j} J.",
+                                     key="an_vgl_j") or 1
+        fuellen = o2.segmented_control("Noch nicht verteiltes Budget rechnen als", list(FUELLEN), default="Index", key="an_vgl_f",
+                                       format_func=lambda x: "Index (S&P 500 / Treasuries)" if x == "Index" else "Cash",
+                                       help="Gilt für alle Portfolios gleich, damit der Vergleich fair ist.") or "Index"
+        los = o3.button("Vergleich berechnen", type="primary", icon=":material/compare_arrows:", width="stretch",
+                        disabled=len(wahl) < 1)
+
+    # Eingaben einsammeln (aktueller Stand, auch ungespeichert)
+    def _eingabe(i):
+        if i == pid:
+            return _eingabe_aus_state(ss)
+        if i in pf and pf[i].get("state"):
+            return _eingabe_aus_state(pf[i]["state"])
+        try:
+            return json.loads(gs.set_index("id").loc[i, "eingabe"])
+        except Exception:  # noqa: BLE001
+            return {}
+
+    if los:
+        stand = {}
+        for i in wahl:
+            if i == BESTAND:
+                v = portfolio_vorlage(tab, fred, lade_kurse)
+                if v is None:
+                    st.warning("Im Portfolio sind noch keine Transaktionen erfasst – Bestand weggelassen.")
+                    continue
+                stand[i] = dict(bestand=True, aktien=v[0], treas=v[1], cash=v[2], kapital=v[3], pct=None)
+            else:
+                e = _eingabe(i)
+                a_ = pd.DataFrame(e.get("aktien") or [])
+                for c_ in ("Ticker", "Menge", "Betrag USD"):
+                    if c_ not in a_.columns:
+                        a_[c_] = None
+                stand[i] = dict(bestand=False, aktien=a_, treas=_treas_df(pd.DataFrame(e.get("treas") or [])), cash=0.0,
+                                kapital=float(e.get("kapital") or 0), pct=e.get("pct"))
+        ss["an_vgl"] = dict(stand=stand, jahre=int(jahre), fuellen=fuellen, namen={i: namen[i] for i in stand},
+                            sig=_vgl_signatur(wahl, jahre, fuellen, _eingabe))
+    vg = ss.get("an_vgl")
+    if not vg or not vg["stand"]:
+        st.info("Portfolios wählen und auf «Vergleich berechnen» klicken. Tipp: Mit «Neu → Kopie des aktiven Portfolios» "
+                "legst du schnell eine Variante an, die du hier gegen das Original stellst.")
+        return
+    if vg.get("sig") != _vgl_signatur(wahl, jahre, fuellen, _eingabe):
+        st.caption("Auswahl, Einstellungen oder ein Portfolio wurden seit der Berechnung geändert – «Vergleich berechnen» klicken, "
+                   "um zu aktualisieren.")
+
+    # --- Kurse: ein Abruf für alle ------------------------------------------------
+    ticker = set()
+    for d in vg["stand"].values():
+        ticker |= {_txt(t).strip().upper().replace(".", "-") for t in d["aktien"]["Ticker"] if _txt(t).strip()}
+        bands = [baender(max(0.0, (pd.to_datetime(f, errors="coerce") - pd.Timestamp.today()).days / 365.25), _txt(n))
+                 if pd.notna(pd.to_datetime(f, errors="coerce")) else _txt(b)
+                 for b, f, n in zip(d["treas"]["Laufzeit"], d["treas"].get("Fälligkeit", [None] * len(d["treas"])),
+                                    d["treas"].get("Bezeichnung", [""] * len(d["treas"])))]
+        ticker |= {PROXY[b][0] for b in bands if b in PROXY}
+    hist, fehlt, zeit = lade_historie(tuple(sorted(ticker | {SPX, NEUTRAL_PROXY, RF_TICKER})), int(vg["jahre"]))
+    if SPX not in hist:
+        st.error("Kursdaten von Yahoo Finance sind gerade nicht erreichbar. Bitte in einer Minute nochmals versuchen.")
+        return
+    letzte = {t: float(s.iloc[-1]) for t, s in hist.items()}
+
+    # --- je Portfolio zusammenstellen ----------------------------------------------
+    roh, hinweise = {}, []
+    for i, d in vg["stand"].items():
+        if d["bestand"]:
+            pos, cash, total, h = zusammenstellen(d["aktien"], d["treas"], d["cash"], d["kapital"], False, letzte)
+            fuell = {}
+        else:
+            pos, cash, total, h = zusammenstellen(d["aktien"], d["treas"], 0, d["kapital"], True, letzte)
+            fuell = offenes_budget(pos, cash, d["kapital"], d["pct"]) if vg["fuellen"] == "Index" else {}
+        hinweise += [f"{vg['namen'][i]}: {x}" for x in h]
+        if total <= 0 or not len(pos):
+            hinweise.append(f"{vg['namen'][i]}: keine Positionen – weggelassen.")
+            continue
+        roh[i] = dict(pos=pos, cash=cash, total=total, fuell={t: w for t, w in fuell.items() if t in hist})
+    for h in hinweise:
+        st.warning(h)
+    if not roh:
+        return
+    # gemeinsames Zeitfenster: spätester Start aller verwendeten Titel
+    benutzt = {SPX, NEUTRAL_PROXY} | {t for r in roh.values() for t in list(r["pos"]["ticker"]) + list(r["fuell"])}
+    start = max(hist[t].index.min() for t in benutzt if t in hist)
+    hist_c = {t: (s[s.index >= start] if t != RF_TICKER else s) for t, s in hist.items()}
+    erg = {}
+    for i, r in roh.items():
+        e_ = rechne(r["pos"], r["cash"], r["total"], hist_c, ctx.alloc["neutral"], r["fuell"])
+        if e_ is not None:
+            erg[i] = e_
+    if not erg:
+        st.error("Zu wenige gemeinsame Kursdaten – Zeitraum vergrössern oder Ticker prüfen.")
+        return
+    erstes = next(iter(erg.values()))
+    k0 = erstes["k"]
+    st.caption(f"Gemeinsames Zeitfenster {k0['S&P 500']['von']:%d.%m.%Y} – {k0['S&P 500']['bis']:%d.%m.%Y} "
+               f"({k0['S&P 500']['tage']} Handelstage) · Kurse {zeit}"
+               + (f" · offenes Budget als Index gerechnet" if vg["fuellen"] == "Index" else " · offenes Budget als Cash"))
+
+    # --- Regeln & Sektoren je Portfolio ---------------------------------------------
+    sa = SK.lade_allokation(tab.get("sektor_allokation"))["sektoren"]
+    info_all = {t: P.ticker_info(t) for r in roh.values() for t in r["pos"].loc[r["pos"]["klasse"] == "Aktie", "ticker"]}
+    zusatz = {}
+    for i in erg:
+        r = roh[i]
+        pos, cash, total = r["pos"], r["cash"], r["total"]
+        ak_pos = pos[pos["klasse"] == "Aktie"]
+        ak_df = pd.DataFrame({"ticker": ak_pos["ticker"].tolist(),
+                              "name": [info_all.get(t, {}).get("name", "") for t in ak_pos["ticker"]],
+                              "sektor": [info_all.get(t, {}).get("sektor") or "Unbekannt" for t in ak_pos["ticker"]],
+                              "wert": ak_pos["wert"].astype(float).tolist()})
+        sek_p = SK.pruefe_portfolio(ak_df, total, sa, ctx.sek_index["gewichte"], float(ctx.alloc["aktien"]))
+        checks = pruefungen(pos, cash, total, {t: info_all.get(t, {}) for t in ak_pos["ticker"]}, ctx.alloc)
+        ak_w = float(ak_pos["wert"].sum())
+        tr = pos[pos["klasse"] == "Treasury"]
+        tr_w = float(tr["wert"].sum())
+        f_a = erg[i]["fuell"].get(SPX, 0.0)
+        f_t = erg[i]["fuell"].get(NEUTRAL_PROXY, 0.0) if NEUTRAL_PROXY != SPX else 0.0
+        dur = float(sum(PROXY[b][1] * w for b, w in zip(tr["band"], tr["wert"])) / tr_w) if tr_w else None
+        zusatz[i] = dict(sek=sek_p, checks=checks, ak_w=ak_w, tr_w=tr_w, f_a=f_a, f_t=f_t, dur=dur, ak_df=ak_df,
+                         cash_eff=max(0.0, cash - f_a - f_t), total=total, n=len(ak_pos),
+                         eff=eff_anzahl(ak_pos["wert"].astype(float)) if len(ak_pos) else 0.0)
+
+    spalten = [vg["namen"][i] for i in erg]
+    neutral_cols = ["Neutral (IPS)", "S&P 500"]
+
+    def _z(name, werte: dict, bed="", neutral=None):
+        z = {"Kennzahl": name}
+        for i in erg:
+            z[vg["namen"][i]] = werte.get(i, "–")
+        for c in neutral_cols:
+            z[c] = (neutral or {}).get(c, "–")
+        z["Bedeutung"] = bed
+        return z
+
+    zeilen = [
+        _z("Aufteilung A / T / C", {i: f"{(zusatz[i]['ak_w'] + zusatz[i]['f_a']) / zusatz[i]['total'] * 100:.0f} / "
+                                       f"{(zusatz[i]['tr_w'] + zusatz[i]['f_t']) / zusatz[i]['total'] * 100:.0f} / "
+                                       f"{zusatz[i]['cash_eff'] / zusatz[i]['total'] * 100:.0f} %" for i in erg},
+           "Aktien / Treasuries / Cash in % (inkl. offenes Budget)",
+           {"Neutral (IPS)": f"{ctx.alloc['neutral']['aktien']:.0f} / "
+                             f"{100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} / "
+                             f"{ctx.alloc['neutral'].get('cash', 5):.0f} %", "S&P 500": "100 / 0 / 0 %"}),
+        _z("Investiert", {i: f"{zusatz[i]['ak_w'] / zusatz[i]['total'] * 100:.0f} / {zusatz[i]['tr_w'] / zusatz[i]['total'] * 100:.0f} %"
+                          for i in erg}, "davon schon in Titeln bzw. Treasuries (Rest = offenes Budget / Cash)"),
+        _z("Titel (effektiv)", {i: f"{zusatz[i]['n']} ({ui.de(zusatz[i]['eff'], 1)})" for i in erg},
+           "Anzahl Aktien, in Klammern die effektive Anzahl (Klumpen zählen weniger)"),
+        _z("Kapital", {i: f"{ui.de(zusatz[i]['total'], 0)} USD" for i in erg}),
+    ]
+    for key, name, f, erkl in ZEILEN:
+        werte = {i: f(erg[i]["k"]["Vorauswahl"].get(key)) for i in erg if key in erg[i]["k"]["Vorauswahl"]}
+        if not werte:
+            continue
+        zeilen.append(_z(name, werte, erkl, {c: f(k0[c].get(key)) if key in k0[c] else "–" for c in neutral_cols}))
+    for key, name in (("vola", "Volatilität Aktienteil"), ("sharpe", "Sharpe Aktienteil"), ("beta", "Beta Aktienteil")):
+        fmt = _pct if key == "vola" else _zahl
+        zeilen.append(_z(name, {i: fmt(erg[i]["k"].get("Aktienteil", {}).get(key)) for i in erg}, "nur eure Titel, auf 100 % hochgerechnet"))
+    zeilen += [
+        _z("Duration Treasuries", {i: f"{ui.de(zusatz[i]['dur'], 1)} J." if zusatz[i]["dur"] else "–" for i in erg},
+           f"ETF-Näherung · Taktik {ui.de(ctx.alloc['duration'], 1)} J."),
+        _z("Regeln", {i: (f"{sum(1 for s_, _ in zusatz[i]['checks'] if s_ == L.ROT)} Verstösse"
+                          if any(s_ == L.ROT for s_, _ in zusatz[i]["checks"]) else "ok")
+                      + (f", {sum(1 for s_, _ in zusatz[i]['checks'] if s_ == L.GELB)} Hinweise"
+                         if any(s_ == L.GELB for s_, _ in zusatz[i]["checks"]) else "") for i in erg},
+           "IPS-Bänder, Klumpen > 10 %, Mandat S&P 500, Duration (wie Reiter «Regeln & Struktur»)"),
+        _z("Sektoren eingehalten", {i: f"{zusatz[i]['sek']['n'][L.GRUEN]} von 11" for i in erg},
+           "gegen die Seite «Sektorallokation» (Ziel bzw. Richtung)"),
+        _z("Σ |Ist − Ziel| Sektoren", {i: f"{ui.de(zusatz[i]['sek']['summe_abw'], 1)} Pp." for i in erg},
+           "Summe der Abweichungen der Sektoren mit Zielzahl (kleiner = näher am Plan)"),
+    ]
+    st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch",
+                 column_config={"Bedeutung": st.column_config.TextColumn(width="large")})
+
+    farbe = {i: PF_FARBEN[n % len(PF_FARBEN)] for n, i in enumerate(erg)}
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Wertentwicklung (Start = 100)**")
+        fig = go.Figure()
+        for i, e_ in erg.items():
+            w = (1 + e_["r_p"]).cumprod() * 100
+            fig.add_trace(go.Scatter(x=w.index, y=w, name=vg["namen"][i], line=dict(color=farbe[i], width=2)))
+        for name, rr, fb in (("Neutral (IPS)", erstes["r_n"], ui.GOLD), ("S&P 500", erstes["r_s"], ui.STAHL)):
+            w = (1 + rr).cumprod() * 100
+            fig.add_trace(go.Scatter(x=w.index, y=w, name=name, line=dict(color=fb, width=1.6, dash="dot")))
+        fig.update_layout(height=340, margin=dict(l=8, r=8, t=10, b=8), hovermode="x unified")
+        ui.zeige(fig)
+    with c2:
+        st.markdown("**Rendite und Risiko**")
+        fig = go.Figure()
+        for i, e_ in erg.items():
+            kv = e_["k"]["Vorauswahl"]
+            fig.add_trace(go.Scatter(x=[kv.get("vola")], y=[kv.get("rendite")], mode="markers+text", name=vg["namen"][i],
+                                     text=[vg["namen"][i]], textposition="top center", marker=dict(size=13, color=farbe[i]),
+                                     hovertemplate="%{text}<br>Vola %{x:.1f} %<br>Rendite %{y:.1f} %<extra></extra>"))
+        for name, fb in (("Neutral (IPS)", ui.GOLD), ("S&P 500", ui.STAHL)):
+            kv = k0[name]
+            fig.add_trace(go.Scatter(x=[kv.get("vola")], y=[kv.get("rendite")], mode="markers+text", name=name, text=[name],
+                                     textposition="bottom center", marker=dict(size=11, color=fb, symbol="diamond"),
+                                     hovertemplate="%{text}<br>Vola %{x:.1f} %<br>Rendite %{y:.1f} %<extra></extra>"))
+        fig.update_layout(height=340, margin=dict(l=8, r=8, t=10, b=8), showlegend=False)
+        fig.update_xaxes(title="Volatilität p.a.", ticksuffix=" %")
+        fig.update_yaxes(title="Rendite p.a.", ticksuffix=" %")
+        ui.zeige(fig)
+    st.caption("Vergangene Werte im gemeinsamen Zeitfenster, konstante Gewichte, dividendenbereinigt – keine Prognose. "
+               "Oben links = mehr Rendite bei weniger Schwankung.")
+
+    # --- Sektoren nebeneinander ---------------------------------------------------
+    st.markdown("**Sektoren** · Anteil am Aktienteil und Abweichung vom Ziel der Sektorallokation")
+    erste_sek = zusatz[next(iter(erg))]["sek"]["sektoren"].set_index("Sektor")
+    sek_zeilen, stufen = [], []
+    for s in C.SEKTOREN:
+        z = {"Sektor": s, "Richtung": erste_sek.loc[s, "Richtung"], "Index": f"{ui.de(erste_sek.loc[s, '_index'], 2)} %",
+             "Ziel": erste_sek.loc[s, "Ziel"]}
+        st_z = {}
+        for i in erg:
+            r_ = zusatz[i]["sek"]["sektoren"].set_index("Sektor").loc[s]
+            diff = r_["_diff"]
+            z[vg["namen"][i]] = (f"{ui.de(r_['_ist'], 1)} % ({ui.de(diff, 1, True)})" if diff is not None and pd.notna(diff)
+                                 else f"{ui.de(r_['_ist'], 1)} % (aktiv {ui.de(r_['_ist'] - r_['_index'], 1, True)})")
+            st_z[vg["namen"][i]] = r_["_stufe"]
+        sek_zeilen.append(z)
+        stufen.append(st_z)
+    sek_df = pd.DataFrame(sek_zeilen)
+    st_df = pd.DataFrame(stufen)
+
+    def _farben(_):
+        out = pd.DataFrame("", index=sek_df.index, columns=sek_df.columns)
+        for c in st_df.columns:
+            out[c] = [f"background-color: {ui.HELL.get(s_, '')}; color: {ui.FARBE.get(s_, '')}" for s_ in st_df[c]]
+        return out
+
+    st.dataframe(sek_df.style.apply(_farben, axis=None), hide_index=True, width="stretch")
+    st.caption("Je Portfolio: Ist-Anteil am Aktienteil, in Klammern Ist − Ziel in Pp. (ohne Zielzahl: aktiv vs. Index). "
+               "Grün ≤ 0,5 Pp., gelb ≤ 1 Pp., sonst rot – wie im Reiter «Regeln & Struktur».")
+
+    # --- Titel nebeneinander --------------------------------------------------------
+    st.markdown("**Titel** · Gewicht am Gesamtportfolio")
+    tz = {}
+    for i in erg:
+        for t, w in zusatz[i]["ak_df"].groupby("ticker")["wert"].sum().items():
+            tz.setdefault(t, {})[vg["namen"][i]] = w / zusatz[i]["total"] * 100
+    if tz:
+        tdf = pd.DataFrame([{"Titel": t, "Name": info_all.get(t, {}).get("name", ""), "Sektor": info_all.get(t, {}).get("sektor", ""),
+                             **{c: (f"{ui.de(w[c], 2)} %" if c in w else "") for c in spalten},
+                             "In Portfolios": f"{len(w)} von {len(spalten)}", "_n": len(w), "_w": sum(w.values())}
+                            for t, w in tz.items()])
+        tdf = tdf.sort_values(["_n", "_w"], ascending=False).drop(columns=["_n", "_w"])
+        st.dataframe(tdf, hide_index=True, width="stretch")
+        gemeinsam = [t for t, w in tz.items() if len(w) == len(spalten)]
+        if len(spalten) > 1:
+            st.caption(f"In allen gewählten Portfolios: {', '.join(sorted(gemeinsam)) if gemeinsam else 'kein Titel'} · "
+                       f"{len(tz)} verschiedene Titel insgesamt.")
+
+
+def _vgl_signatur(wahl, jahre, fuellen, eingabe_fn) -> str:
+    teile = []
+    for i in wahl:
+        if i == BESTAND:
+            teile.append(i)
+        else:
+            teile.append(_hash(eingabe_fn(i)))
+    return json.dumps([teile, jahre, fuellen], default=str)
+
+
 def seite_analyse(ctx, fred: dict, lade_kurse):
     import portfolio as P
 
-    ui.seitenkopf("Analyse – Vorauswahl prüfen",
-                  "Titel und Mengen eingeben – die App berechnet Rendite, Risiko, Sharpe Ratio, Beta, Value at Risk, "
-                  "Korrelationen und prüft eure Regeln. Vergleich immer mit dem neutralen Portfolio (strategische Allokation laut IPS) und dem S&P 500.")
+    ui.seitenkopf("Analyse – Analyseportfolios prüfen und vergleichen",
+                  "Mehrere Analyseportfolios anlegen, Titel und Mengen eingeben – die App berechnet Rendite, Risiko, Sharpe Ratio, "
+                  "Beta, Value at Risk, Korrelationen und prüft eure Regeln. Vergleich immer mit dem neutralen Portfolio "
+                  "(strategische Allokation laut IPS) und dem S&P 500.")
     tab = ctx.tabellen
     kapital_std, bm = P._einstellungen(tab.get("einstellungen"))
     ss = st.session_state
     ss.setdefault("an_ver", 0)
-    if "an_aktien" not in ss:
-        ss.update(an_aktien=_aktien_df(None, 6), an_treas=_leer_treas(), an_cash=0.0, an_kapital=float(kapital_std))
-    if list(ss["an_aktien"].columns) != AK_SPALTEN:      # Sitzung aus der Zeit vor dem Update
+    gs = portfolios(tab.get("analysen"))
+    args = (tab, kapital_std, ctx.alloc)
+
+    # --- Widget-Werte nach einem Seitenwechsel wiederherstellen ----------------------
+    for k in WIDGET_KEYS:
+        if k not in ss and "_" + k in ss:
+            ss[k] = ss["_" + k]
+    # --- Portfolios in der Sitzung -----------------------------------------------------
+    pf = ss.setdefault("an_pf", {})
+    if ziel := ss.pop("an_pf_ziel", None):                     # nach dem Löschen
+        if ziel == "__neu__":
+            _pf_neu("leer", *args)
+        else:
+            _pf_oeffnen(ziel, *args)
+    if ss.get("an_aktiv") not in pf:
+        if "an_aktien" in ss and not pf:                       # Sitzung von vor dem Update: Eingabe behalten
+            pid = uuid.uuid4().hex[:8]
+            pf[pid] = dict(name="Neues Portfolio 1", notiz="", gespeichert=False, zeit=None, basis=None, state=None)
+            for k, v in _standard_state(kapital_std, ctx.alloc).items():
+                ss.setdefault(k, v)
+            _aktiv_setzen(pid)
+        elif pf:
+            _pf_oeffnen(next(iter(pf)), *args)
+        elif len(gs):
+            _pf_oeffnen(gs["id"].iloc[0], *args)
+        else:
+            _pf_neu("leer", *args)
+    pid = ss["an_aktiv"]
+    ent = pf[pid]
+    # gespeicherte Portfolios: von anderen geändert oder gelöscht?
+    gz = gs.set_index("id") if len(gs) else None
+    for i, e_ in list(pf.items()):
+        if not e_.get("gespeichert"):
+            continue
+        if gz is None or i not in gz.index:
+            e_["gespeichert"] = False                         # inzwischen gelöscht → bleibt als ungespeichertes offen
+            if i == pid:
+                st.info("Dieses Portfolio wurde inzwischen gelöscht – «Speichern» legt es wieder an.", icon=":material/info:")
+            continue
+        neuer = (str(gz.loc[i, "zeit"]) != str(e_.get("zeit") or "")
+                 or int(gz.loc[i, "versionen"]) != int(e_.get("versionen") or 0))
+        if not neuer:
+            continue
+        if i == pid:
+            if _hash(_eingabe_aus_state(ss), _wert("an_pf_name", ""), _wert("an_pf_notiz", "")) == e_.get("basis"):
+                _pf_oeffnen(i, *args, verwerfen=True)        # unverändert → neue Version still übernehmen
+                ent = pf[pid]
+            else:
+                st.warning(f"{gz.loc[i, 'person']} hat dieses Portfolio am {_datum(gz.loc[i, 'zeit'])} gespeichert, während du es "
+                           "geändert hast. «Speichern» überschreibt die Version, «Verwerfen» lädt sie.", icon=":material/sync_problem:")
+        elif not e_.get("state") or _hash(_eingabe_aus_state(e_["state"]), e_["name"], e_.get("notiz", "")) == e_.get("basis"):
+            e_["state"] = None                                 # beim nächsten Öffnen neu laden
+            e_["zeit"], e_["versionen"] = str(gz.loc[i, "zeit"]), int(gz.loc[i, "versionen"])
+    if list(ss["an_aktien"].columns) != AK_SPALTEN:          # Sitzung aus der Zeit vor dem Update
         ss["an_aktien"] = _aktien_neu_rechnen(ss["an_aktien"])
-    if "an_kap_txt" not in ss:
-        ss.update(an_kap_txt=ui.de(float(ss["an_kapital"]), 0))
+    ss.setdefault("an_kap_txt", ui.de(float(ss.get("an_kapital") or kapital_std), 0))
     if "an_p_ak" not in ss:
         ss.update(an_p_ak=float(ctx.alloc["aktien"]), an_p_tr=float(ctx.alloc["anleihen"]), an_p_ca=float(ctx.alloc["cash"]))
     ss.setdefault("an_bezug", GESAMT)
 
-    # --- Vorlage laden --------------------------------------------------------
-    gespeichert = tab.get("analysen")
-    gespeichert = (gespeichert.sort_values("zeit", ascending=False).drop_duplicates("id")
-                   if gespeichert is not None and not gespeichert.empty else pd.DataFrame())
-    optionen = ["leer", "portfolio"] + list(gespeichert["id"]) if len(gespeichert) else ["leer", "portfolio"]
-    namen = {"leer": "Leere Vorauswahl", "portfolio": "Aktuelles Portfolio übernehmen"}
-    for _, z in gespeichert.iterrows():
-        namen[z["id"]] = f"Gespeichert: {z['name']} ({z['person']}, {str(z['zeit'])[:10]})"
-    c1, c2, _ = st.columns([2.2, 0.8, 1.6])
-    wahl = c1.selectbox("Ausgangslage", optionen, format_func=lambda i: namen.get(i, i), key="an_vorlage")
-    if c2.button("Laden", icon=":material/upload:", width="stretch"):
-        if wahl == "leer":
-            ss.update(an_aktien=_aktien_df(None, 6), an_treas=_leer_treas(), an_cash=0.0)
-        elif wahl == "portfolio":
-            v = portfolio_vorlage(tab, fred, lade_kurse)
-            if v is None:
-                ss["an_meldung"] = "Im Portfolio sind noch keine Transaktionen erfasst."
-            else:
-                ss.update(an_kapital=v[3], an_kap_txt=ui.de(float(v[3]), 0))    # zuerst: Basis für «Gewicht %»
-                ss.update(an_aktien=_aktien_neu_rechnen(v[0]), an_treas=_treas_df(v[1]), an_cash=max(0.0, v[2]))
-        else:
-            z = gespeichert.set_index("id").loc[wahl]
-            e = json.loads(z["eingabe"])
-            a_ = pd.DataFrame(e["aktien"])
-            for c_ in ("Ticker", "Menge", "Betrag USD"):
-                if c_ not in a_.columns:
-                    a_[c_] = None
-            t_ = _treas_df(pd.DataFrame(e["treas"]))
-            if isinstance(e.get("pct"), dict):
-                ss.update(an_p_ak=float(e["pct"].get("aktien", ss["an_p_ak"])), an_p_tr=float(e["pct"].get("treas", ss["an_p_tr"])),
-                          an_p_ca=float(e["pct"].get("cash", ss["an_p_ca"])))
-            kap_ = float(e.get("kapital", kapital_std))
-            ss.update(an_kapital=kap_, an_kap_txt=ui.de(kap_, 0), an_bezug=e.get("bezug") if e.get("bezug") in (GESAMT, AKTIENTEIL) else GESAMT)
-            ss.update(an_aktien=_aktien_neu_rechnen(a_),
-                      an_treas=t_ if len(t_) else _leer_treas(),
-                      an_cash=float(e.get("cash", 0)))
-        ss["an_ver"] += 1
-        ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
-        ss["an_tr_ver"] = ss.get("an_tr_ver", 0) + 1
-        ss.update(an_kap_txt=ui.de(float(ss["an_kapital"]), 0))
-        ss.pop("an_eingabe", None)
-        st.rerun()
+    ansicht = st.segmented_control("Ansicht", ["bearbeiten", "vergleich"], default="bearbeiten", key="an_ansicht",
+                                   format_func=lambda x: "Portfolio bearbeiten & analysieren" if x == "bearbeiten"
+                                   else "Portfolios vergleichen", label_visibility="collapsed") or "bearbeiten"
+    if ansicht == "vergleich":
+        _seite_vergleich(ctx, tab, gs, fred, lade_kurse)
+        _alle_portfolios(ctx, tab)
+        for k in WIDGET_KEYS:
+            if k in ss:
+                ss["_" + k] = ss[k]
+        return
+
+    _portfolio_leiste(ctx, tab, kapital_std, ctx.alloc, gs, fred, lade_kurse)
+    gespeichert = gs
 
     if m := ss.pop("an_meldung", None):
         st.warning(m)
+    if m := ss.pop("an_meldung_info", None):
+        st.info(m, icon=":material/info:")
 
-    with st.expander(f"Vorauswahl ins Portfolio übernehmen (Kauf per {pd.Timestamp(C.SIMULATION_START):%d.%m.%Y})",
+    with st.expander(f"Analyseportfolio ins Portfolio übernehmen (Kauf per {pd.Timestamp(C.SIMULATION_START):%d.%m.%Y})",
                      icon=":material/shopping_cart_checkout:", expanded=bool(ss.get("ue_vor"))):
         import uebernahme
 
@@ -1007,14 +1747,18 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         fund = o2.toggle("Bewertung laden (KGV, Dividende)", value=False, key=f"an_f{v}",
                          help="Holt pro Titel Kennzahlen von Yahoo Finance – dauert einige Sekunden.")
         los = o3.button("Kennzahlen berechnen", type="primary", icon=":material/calculate:", width="stretch")
+    for k in WIDGET_KEYS:          # Spiegel für den nächsten Seitenbesuch
+        if k in ss:
+            ss["_" + k] = ss[k]
     if los:
         kap = _num(ss.get("an_kap_txt"))
         ss.update(an_kapital=float(kap or 0), an_cash=0.0)
         ss["an_eingabe"] = dict(jahre=jahre, fund=fund, rest=True, aktien=ss["an_aktien"].copy(), treas=_treas_df(ss["an_treas"]),
                                 cash=0.0, kapital=float(kap or 0), pct=dict(b["pct"]), bezug=ss.get("an_bezug", GESAMT))
     if "an_eingabe" not in ss:
-        st.info("Titel eintragen und auf «Kennzahlen berechnen» klicken. Tipp: Mit «Aktuelles Portfolio übernehmen» siehst du "
-                "sofort, wie sich ein geplanter Kauf auf Sharpe Ratio, Risiko und Regeln auswirkt.")
+        st.info("Titel eintragen und auf «Kennzahlen berechnen» klicken. Tipp: Mit «Neu → Aus dem aktuellen Bestand» siehst du "
+                "sofort, wie sich ein geplanter Kauf auf Sharpe Ratio, Risiko und Regeln auswirkt; mit «Neu → Kopie» rechnest du "
+                "eine Variante und stellst sie unter «Portfolios vergleichen» neben das Original.")
         return
     e = ss["an_eingabe"]
     if "aktien" not in e:     # ältere Sitzung
@@ -1086,8 +1830,9 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
          + f" · {int((pos['klasse'] == 'Aktie').sum())} Titel, effektiv {ui.de(eff_anzahl(pos.loc[pos['klasse'] == 'Aktie', 'wert']), 1)}"),
     ])
 
-    t1, t2, t3, t4, t5, t6 = st.tabs(["Vergleich", "Einzeltitel", "Korrelation", "Regeln & Struktur", "Gewichte-Vorschlag",
-                                      "Speichern"])
+    ss["an_kz"] = dict(hash=_hash(_kern(aktien, treas, e["kapital"], e.get("pct") or {}, e.get("bezug", GESAMT))),
+                       kz=_kz_zusammenfassen(kv, ka, ak_w, tr_w, cash, total, fuellen))
+    t1, t2, t3, t4, t5 = st.tabs(["Vergleich", "Einzeltitel", "Korrelation", "Regeln & Struktur", "Gewichte-Vorschlag"])
     with t1:
         k = dict(erg["k"])
         akt = portfolio_vorlage(tab, fred, lade_kurse)
@@ -1279,53 +2024,3 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                           ("Sharpe mit Min.-Vola-Gewichten", _zahl(vs["sharpe"][1]), f"Vola {_pct(vs['vola'][1])}")])
             st.caption("Achtung: Die Gewichte sind auf die Vergangenheit optimiert und reagieren stark auf den Zeitraum. "
                        "Als Denkanstoss nutzen, nicht als Handelsanweisung – Entscheid im Team mit Begründung erfassen.")
-
-    with t6:
-        if ss.get("nur_lesen"):
-            st.caption("Mit Lesezugriff kann nichts gespeichert werden.")
-        with st.form("an_speichern", clear_on_submit=True):
-            name = st.text_input("Name der Vorauswahl", placeholder="z. B. Energie + Gesundheit übergewichtet, Variante A")
-            notiz = st.text_area("Notiz / Begründung", height=80)
-            if st.form_submit_button("Vorauswahl speichern", type="primary", icon=":material/save:"):
-                if not name.strip():
-                    st.error("Bitte einen Namen angeben.")
-                else:
-                    a_ = aktien[[bool(_txt(t).strip()) for t in aktien["Ticker"]]]
-                    t_ = treas[[_num(x) is not None for x in treas["Betrag USD"]]]
-                    eingabe = dict(aktien=[{"Ticker": _txt(z["Ticker"]), "Menge": _num(z.get("Menge")),
-                                            "Betrag USD": _num(z.get("Betrag USD")), "Gewicht %": _num(z.get("Gewicht %")),
-                                            "Fix": _txt(z.get("Fix"))} for z in a_.to_dict("records")],
-                                   treas=[{"Laufzeit": _txt(z["Laufzeit"]), "Betrag USD": _num(z["Betrag USD"]),
-                                           "Kupon %": _num(z.get("Kupon %")), "Kurs %": _num(z.get("Kurs %")),
-                                           "Fälligkeit": pd.Timestamp(z["Fälligkeit"]).date().isoformat()
-                                           if z.get("Fälligkeit") is not None and pd.notna(z.get("Fälligkeit")) else "",
-                                           "Bezeichnung": _txt(z.get("Bezeichnung"))}
-                                          for z in t_.to_dict("records")],
-                                   cash=float(e["cash"]), kapital=float(e["kapital"]), jahre=int(e["jahre"]),
-                                   pct=e.get("pct") or dict(budget(ss)["pct"]), bezug=e.get("bezug", GESAMT), fuellen=fuellen)
-                    kz = {k_: (round(v_, 4) if isinstance(v_, float) else v_) for k_, v_ in kv.items()
-                          if k_ not in ("von", "bis")}
-                    kz.update(aktien=round(ak_w / total * 100, 1), treasuries=round(tr_w / total * 100, 1),
-                              cash=round(cash / total * 100, 1), total=round(total, 0),
-                              von=f"{kv['von']:%Y-%m-%d}", bis=f"{kv['bis']:%Y-%m-%d}", fuellen=fuellen,
-                              vola_aktien=round(float(ka["vola"]), 4) if ka.get("vola") is not None else None,
-                              sharpe_aktien=round(float(ka["sharpe"]), 4) if ka.get("sharpe") is not None else None)
-                    ctx.speichern("analysen", [dict(zeit=jetzt(), person=ctx.person, id=uuid.uuid4().hex[:8], name=name.strip(),
-                                                    eingabe=json.dumps(eingabe, ensure_ascii=False),
-                                                    kennzahlen=json.dumps(kz, ensure_ascii=False), notiz=notiz.strip())],
-                                  f"Vorauswahl «{name.strip()}» gespeichert.")
-        if len(gespeichert):
-            zeilen = []
-            for _, z in gespeichert.iterrows():
-                try:
-                    kz = json.loads(z["kennzahlen"])
-                except Exception:  # noqa: BLE001
-                    kz = {}
-                zeilen.append({"Datum": str(z["zeit"])[:10], "Name": z["name"], "Von": z["person"],
-                               "Sharpe": _zahl(kz.get("sharpe")), "Rendite p.a.": _pct(kz.get("rendite"), 1, True),
-                               "Vola": _pct(kz.get("vola")), "Vola Aktienteil": _pct(kz.get("vola_aktien")),
-                               "Beta": _zahl(kz.get("beta")),
-                               "Aktien/Treas./Cash": f"{kz.get('aktien', '–')} / {kz.get('treasuries', '–')} / {kz.get('cash', '–')}",
-                               "Notiz": z["notiz"]})
-            st.markdown("**Gespeicherte Vorauswahlen**")
-            st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")

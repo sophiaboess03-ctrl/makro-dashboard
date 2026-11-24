@@ -421,6 +421,8 @@ def probe_ticker(tabellen: dict, analyse_id: str | None = None) -> list[str]:
         e = json.loads(z.iloc[-1]["eingabe"])
     except Exception:  # noqa: BLE001
         return []
+    if e.get("geloescht"):        # Analyseportfolio gelöscht → nicht mehr mitverfolgen
+        return []
     return sorted({str(x.get("Ticker") or "").strip().upper().replace(".", "-") for x in e.get("aktien", [])} - {""})
 
 

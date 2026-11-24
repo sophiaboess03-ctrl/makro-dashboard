@@ -234,11 +234,14 @@ def bereich(ctx, fred: dict, gespeichert: pd.DataFrame):
                "Treasuries mit Kupon und Fälligkeit aus der Analyse; ohne Kurs rechnet die App den Preis aus der Zinskurve. "
                "Erst Vorschau und Prüfung, dann «Bestätigen» – «Rückgängig» storniert die ganze Übernahme.")
     if not len(gespeichert):
-        st.info("Zuerst unten eine Vorauswahl berechnen und im Tab «Speichern» sichern – übernommen wird eine gespeicherte Vorauswahl.")
+        st.info("Zuerst oben ein Analyseportfolio speichern – übernommen wird ein gespeichertes Analyseportfolio.")
         return
     namen = {r["id"]: f"{r['name']} ({r['person']}, {str(r['zeit'])[:10]})" for _, r in gespeichert.iterrows()}
+    if ss.get("ue_aid") not in namen and ss.get("an_aktiv") in namen:
+        ss["ue_aid"] = ss["an_aktiv"]          # Standard: das gerade aktive Analyseportfolio
     c1, c2, c3 = st.columns([2.4, 1, 1])
-    aid = c1.selectbox("Vorauswahl", list(gespeichert["id"]), format_func=namen.get, key="ue_aid")
+    aid = c1.selectbox("Analyseportfolio (gespeicherter Stand)", list(gespeichert["id"]), format_func=namen.get, key="ue_aid",
+                       help="Übernommen wird die zuletzt gespeicherte Version – ungespeicherte Änderungen zuerst speichern.")
     datum = pd.Timestamp(c2.date_input("Handelsdatum", value=max(KAUFTAG, pd.Timestamp.today().normalize()).date(),
                                        format="DD.MM.YYYY", key="ue_datum"))
     if c3.button("Vorschau berechnen", type="primary", icon=":material/preview:", width="stretch", key="ue_los"):
