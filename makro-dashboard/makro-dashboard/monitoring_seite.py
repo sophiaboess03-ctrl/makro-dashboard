@@ -109,14 +109,18 @@ def seite_monitoring(ctx, team: list[str], lade_kurse):
     if not kont:
         st.warning("Noch keine E-Mail-Adressen hinterlegt – unter «Zuständigkeit & E-Mails» erfassen, sonst gehen keine Meldungen raus.")
 
-    t1, t2, t3, t4, t5 = st.tabs(["Offene Fälle", "Verlauf & Protokoll", "Kauf-Thesen & Watchlist", "Zuständigkeit & E-Mails",
-                                  "Schwellen & Probelauf"])
+    t1, t2, t3, t6, t4, t5 = st.tabs(["Offene Fälle", "Verlauf & Protokoll", "Kauf-Thesen & Watchlist", "KI-Beobachtungspunkte",
+                                      "Zuständigkeit & E-Mails", "Schwellen & Probelauf"])
     with t1:
         _offene(ctx, faelle, kont, zust, s)
     with t2:
         _verlauf(ctx, faelle, zust)
     with t3:
         _thesen_watchlist(ctx, lage)
+    with t6:
+        import ki_portfolio as KP
+
+        KP.monitoring_tab(ctx, lage, lade_kurse)
     with t4:
         if ctx.nur_lesen:
             st.caption("Nur für Teammitglieder.")

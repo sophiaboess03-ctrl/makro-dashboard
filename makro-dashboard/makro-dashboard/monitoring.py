@@ -120,6 +120,7 @@ HINWEIS = {
     "te_real": "Realisierter Tracking Error über dem IPS-Ziel – aktive Wetten verkleinern oder begründen.",
     "ips_annahme": "Annahme im IPS passt nicht mehr zur Lage – IPS bzw. Taktik überprüfen.",
     "makro": "Vorab festgelegte Reaktion prüfen und im Team besprechen.",
+    "ki_punkt": "Beobachtungspunkt aus der KI-Analyse ausgelöst – Lage einordnen und entscheiden, ob Gewichte angepasst werden.",
     "unbekannt": "Sektor des Titels unbekannt – auf der Seite Portfolio zuordnen.",
 }
 
@@ -693,6 +694,12 @@ def ticker_benoetigt(tabellen: dict) -> tuple[str, ...]:
     tx = P.transaktionen(tabellen.get("transaktionen"))
     akt = set(tx.loc[tx["klasse"] == "Aktie", "ticker"].str.upper()) if len(tx) else set()
     akt |= {w["ticker"] for w in watchlist(tabellen.get("watchlist"))}
+    try:                                  # KI-Beobachtungspunkte (Update 10): Titel, Sektor-ETFs, SPY
+        import ki_portfolio as KP
+
+        akt |= KP.ticker_benoetigt(tabellen)
+    except Exception:  # noqa: BLE001
+        pass
     return tuple(sorted(akt | set(C.SEKTOR_ETF.values())))
 
 
@@ -782,6 +789,12 @@ def alle_signale(lage: dict, s: dict, bekannt: set) -> list[dict]:
     out += signale_sektor_trigger(lage, bekannt)
     out += signale_ips_annahmen(lage, s, bekannt)
     out += signale_makro(lage["r"])
+    try:                                  # KI-Beobachtungspunkte (Update 10) – ein Fehler darf das übrige Monitoring nicht stoppen
+        import ki_portfolio as KP
+
+        out += KP.signale(lage, bekannt)
+    except Exception as e:  # noqa: BLE001
+        lage.setdefault("fehler", []).append(f"KI-Beobachtungspunkte: {type(e).__name__}")
     # gleiche Schlüssel zusammenfassen (höchste Stufe gewinnt)
     eind = {}
     for x in out:

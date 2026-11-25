@@ -62,6 +62,10 @@ TABELLEN = {
     "news_fazit": ["zeit", "person", "monat", "sektor", "text"],
     "team_rating": ["zeit", "person", "ticker", "rating", "begruendung"],
     "ki_verbrauch": ["zeit", "person", "monat", "zweck", "aufrufe", "input", "output", "usd", "modell"],
+    # KI-Analyse des Portfolios (Update 10) und daraus übernommene Beobachtungspunkte fürs Monitoring
+    "ki_analyse": ["zeit", "person", "id", "quelle", "quelle_id", "quelle_name", "modell", "ergebnis", "kennzahlen", "hash"],
+    "ki_beobachtung": ["zeit", "person", "id", "analyse_id", "bereich", "sektor", "ticker", "titel", "grund", "reaktion", "groesse",
+                       "op", "wert", "stufe", "geloescht"],
 }
 
 

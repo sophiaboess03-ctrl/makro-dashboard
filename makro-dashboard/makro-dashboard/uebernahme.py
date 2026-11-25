@@ -2,7 +2,8 @@
 
 Regeln (mit Sophy festgelegt, 23.11.2026)
 - Aktien zum Eröffnungskurs des Handelstags (Yahoo «Open»), ganze Stücke (abgerundet), der Rest bleibt Cash.
-- Treasuries: konkrete Anleihen aus der Analyse (Kupon, Fälligkeit, optional Kurs). Ohne Kurs: Preis aus der FRED-Zinskurve
+- Treasuries: konkrete Anleihen aus der Analyse (Kupon, Fälligkeit, optional Kurs und ISIN – die ISIN wird im Feld «name» der
+  Transaktion gebucht, Update 11). Ohne Kurs: Preis aus der FRED-Zinskurve
   des Handelstags. Nominal auf 100 USD abgerundet. Zeilen nur mit Laufzeitband sind nicht übernehmbar.
 - Begründung je Zeile (oder gemeinsam für alle) – Pflicht, nicht die Kauf-These.
 - Erst Vorschau mit Prüfung (Cash, IPS-Bänder, Titel-Maximum, Sektorziele), dann «Bestätigen» → alles auf einmal gebucht.
@@ -116,7 +117,8 @@ def vorschlag(eingabe: dict, datum: pd.Timestamp, fred: dict, info_fn) -> tuple[
             kurs = round(P.preis(kupon, T, y), 4) if y is not None else None
             quelle = "Zinskurve FRED" if kurs is not None else "fehlt"
         nominal = math.floor(betrag / (kurs / 100) / 100) * 100 if kurs else None
-        zt.append({"Bezeichnung": _txt(r.get("Bezeichnung")) or treasury_name(kupon, faellig), "Kupon %": kupon,
+        zt.append({"Bezeichnung": _txt(r.get("Bezeichnung")) or treasury_name(kupon, faellig), "ISIN": _txt(r.get("ISIN")).upper(),
+                   "Kupon %": kupon,
                    "Fälligkeit": faellig.date(), "Nominal USD": ui.de(nominal, 0) if nominal else "", "Kurs %": kurs,
                    "Kurs-Quelle": quelle, "Betrag aus Vorauswahl": ui.de(betrag, 0), "Begründung": ""})
     return pd.DataFrame(za), pd.DataFrame(zt), hinweise
@@ -138,7 +140,8 @@ def buchungen(aktien: pd.DataFrame, treas: pd.DataFrame, datum: pd.Timestamp, be
             continue
         n += 1
         out.append(dict(zeit=z, person=person, id=f"ue{batch}{n:02d}", datum=datum.date().isoformat(), art="Kauf", klasse="Treasury",
-                        ticker=_txt(r["Bezeichnung"]), name="", sektor="", menge=float(zahl(r["Nominal USD"])),
+                        ticker=_txt(r["Bezeichnung"]), name=_txt(r.get("ISIN")).upper(), sektor="",
+                        menge=float(zahl(r["Nominal USD"])),
                         kurs=round(float(zahl(r["Kurs %"])), 4), kupon=float(zahl(r["Kupon %"]) or 0),
                         faelligkeit=pd.Timestamp(r["Fälligkeit"]).date().isoformat(), notiz=_txt(r["Begründung"]) or begr_alle.strip(),
                         storniert=""))
@@ -272,7 +275,7 @@ def bereich(ctx, fred: dict, gespeichert: pd.DataFrame):
                                                   "Kupon %": st.column_config.NumberColumn(format="%.3f"),
                                                   "Begründung": st.column_config.TextColumn(width="large")})
         else:
-            treas = pd.DataFrame(columns=["Bezeichnung", "Kupon %", "Fälligkeit", "Nominal USD", "Kurs %", "Begründung"])
+            treas = pd.DataFrame(columns=["Bezeichnung", "ISIN", "Kupon %", "Fälligkeit", "Nominal USD", "Kurs %", "Begründung"])
         begr = st.text_area("Gemeinsame Begründung (gilt für alle Zeilen ohne eigene Begründung)", key=f"ue_b{v}", height=80,
                             placeholder="z. B. Umsetzung IC-Beschluss vom …: Sektorallokation gemäss Seite «Sektorallokation», "
                                         "Taktik Dezember …")

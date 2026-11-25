@@ -255,7 +255,12 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
             st.error("Rebalancing nötig (IPS-Toleranz ±" + ui.de(tol, 0) + " PP): " +
                      "; ".join(f"{n} Ist {ui.de(i, 1)} % vs. Taktik {ui.de(s_, 1)} %" for n, i, s_ in abw))
 
-    t1, t2, t3, t5, t4 = st.tabs(["Positionen", "Struktur & Abweichungen", "Verlauf", "Performance & Risiko", "Transaktionen"])
+    t1, t2, t3, t5, t6, t4 = st.tabs(["Positionen", "Struktur & Abweichungen", "Verlauf", "Performance & Risiko", "KI-Analyse",
+                                      "Transaktionen"])
+    with t6:
+        import ki_portfolio as KP
+
+        KP.bereich_portfolio(ctx, fred, lade_kurse)
     with t1:
         if len(b):
             d = b.copy()

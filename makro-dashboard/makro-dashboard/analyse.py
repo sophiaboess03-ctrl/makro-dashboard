@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutTimeout
@@ -667,6 +668,12 @@ def _prozent_verteilen(df: pd.DataFrame) -> pd.DataFrame:
         if ziel[i] / kurs[i] - menge[i] >= 0.5 and kurs[i] <= rest + 1e-6:
             menge[i] += 1
             rest -= kurs[i]
+    # Update 11: übrig gebliebenes Budget weiter auffüllen (grösster fehlender Bruchteil zuerst, je Titel höchstens 1 Stück
+    # über dem abgerundeten Wert) – so kommt die Summe so nah wie möglich an 100 % bzw. die Aktienquote heran.
+    for i in bruch:
+        if menge[i] * kurs[i] < ziel[i] - 1e-6 and kurs[i] <= rest + 1e-6:
+            menge[i] += 1
+            rest -= kurs[i]
     for i in zeilen:
         df.at[i, "Menge"] = _fz_menge(menge[i])
         df.at[i, "Betrag USD"] = _fz(menge[i] * kurs[i])
@@ -918,19 +925,41 @@ def scoring_lesen(datei) -> dict:
         v = r[c] if c is not None and c < len(r) else None
         return float(v) if isinstance(v, (int, float)) else _num(v)
 
-    titel, gesehen = [], set()
-    for r in rows[kopf + 1:]:
+    # Update 11: Leerzeilen (z. B. zwischen Sektoren) beenden die Liste nicht mehr; Zwischentitel, Summenzeilen und doppelte
+    # Ticker werden gemeldet statt still übergangen. Schluss erst bei «Summe/Total» oder nach 25 leeren Zeilen.
+    titel, pos, uebersprungen, leer = [], {}, [], 0
+    for z_nr, r in enumerate(rows[kopf + 1:], start=kopf + 2):
         t = r[c_t] if c_t < len(r) else None
-        if t is None or not str(t).strip():
-            break
-        tk = str(t).strip().upper().replace(".", "-")
-        if tk in gesehen:
+        roh = str(t).strip() if t is not None else ""
+        if not roh:
+            leer += 1
+            if leer >= 25:
+                break
             continue
-        gesehen.add(tk)
-        titel.append(dict(ticker=tk, akt=_w(r, c_a), ges=_w(r, c_g),
-                          sektor=str(r[c_s] or "") if c_s is not None else "", name=str(r[c_n] or "") if c_n is not None else ""))
+        leer = 0
+        if _kopf(roh).startswith(("summe", "total", "gesamt", "sum")):
+            break
+        tk = roh.upper().replace(".", "-").replace(" ", "-").replace("/", "-")
+        akt = _w(r, c_a)
+        if not re.fullmatch(r"[A-Z][A-Z0-9]{0,5}(-[A-Z])?", tk):
+            if akt:
+                uebersprungen.append(f"Zeile {z_nr}: «{roh}» ist kein Ticker (Gewicht {akt:g})")
+            continue
+        if tk in pos:                          # doppelter Ticker: Gewichte zusammenzählen
+            x = pos[tk]
+            x["akt"] = (x["akt"] or 0) + (akt or 0) if (x["akt"] is not None or akt is not None) else None
+            g_ = _w(r, c_g)
+            x["ges"] = (x["ges"] or 0) + (g_ or 0) if (x["ges"] is not None or g_ is not None) else None
+            uebersprungen.append(f"Zeile {z_nr}: {tk} kommt doppelt vor – Gewichte zusammengezählt")
+            continue
+        pos[tk] = dict(ticker=tk, akt=akt, ges=_w(r, c_g), zeile=z_nr,
+                       sektor=str(r[c_s] or "") if c_s is not None else "", name=str(r[c_n] or "") if c_n is not None else "")
+        titel.append(pos[tk])
     if not titel:
         return dict(fehler="Keine Titel gefunden.")
+    for x in titel:
+        if not x["akt"]:
+            uebersprungen.append(f"Zeile {x['zeile']}: {x['ticker']} hat kein Gewicht im Aktienteil – wird nicht übernommen")
     if all(x["akt"] is None for x in titel):
         return dict(fehler="Die Gewichte sind leer – die Datei einmal in Excel öffnen und speichern (dann sind die Formelwerte drin).")
     s_a = sum(x["akt"] or 0 for x in titel)
@@ -951,7 +980,7 @@ def scoring_lesen(datei) -> dict:
         quote = quote * 100 if quote <= 1.5 else quote
     elif s_a:
         quote = s_g / s_a * 100
-    return dict(titel=titel, quote=quote, summe_akt=s_a * faktor, summe_ges=s_g * faktor)
+    return dict(titel=titel, quote=quote, summe_akt=s_a * faktor, summe_ges=s_g * faktor, uebersprungen=uebersprungen)
 
 
 def _scoring_uebernehmen():
@@ -971,6 +1000,9 @@ def _scoring_uebernehmen():
     ss["an_aktien"] = _aktien_df(df)
     for k in ("an_ak_ver", "an_form_ver"):
         ss[k] = ss.get(k, 0) + 1
+    ss["an_sc_abgleich"] = dict(datei=d.get("datei", ""), zeit=datetime.now().strftime("%d.%m.%Y %H:%M"), quote=q,
+                                soll={x["ticker"]: float(x["akt"]) for x in d["titel"] if x["akt"]},
+                                summe=float(d.get("summe_akt") or 0), uebersprungen=list(d.get("uebersprungen") or []))
     ohne = [_txt(t) for t, k in zip(ss["an_aktien"]["Ticker"], ss["an_aktien"]["Kurs USD"]) if _txt(t).strip() and not _num(k)]
     n_t = sum(1 for x in d["titel"] if x["akt"])
     _meldung(f"{n_t} Titel aus dem Scoring-Modell übernommen · Bezug «Aktienteil» · Aktien {ui.de(q, 2)} % · Treasuries "
@@ -978,9 +1010,129 @@ def _scoring_uebernehmen():
              + (f" Ohne Kurs (Ticker prüfen): {', '.join(ohne)}." if ohne else ""))
 
 
+def scoring_abgleich(ss) -> dict | None:
+    """Update 11: Vergleich des aktiven Analyseportfolios mit dem zuletzt importierten Scoring-Modell. Ist-Gewichte im Aktienteil
+    des Modells (Betrag / (Kapital × Aktienquote des Modells)), Differenz nach Ursachen: kein Kurs, nicht mehr in der Tabelle,
+    zusätzliche Titel, Rundung auf ganze Stücke."""
+    a = ss.get("an_sc_abgleich")
+    if not a or "an_aktien" not in ss:
+        return None
+    kap = _num(ss.get("an_kap_txt")) or 0.0
+    basis = kap * float(a.get("quote") or 0) / 100
+    if basis <= 0:
+        return None
+    df = ss["an_aktien"]
+    zeile = {}
+    for t, k, b_, m in zip(df["Ticker"], df["Kurs USD"], df["Betrag USD"], df["Menge"]):
+        t = _txt(t).strip().upper()
+        if t:
+            zeile[t] = dict(kurs=_num(k), betrag=_num(b_) or 0.0, menge=_num(m))
+    out, ursache = [], dict(kein_kurs=0.0, fehlt=0.0, extra=0.0)
+    for t, soll in a["soll"].items():
+        z = zeile.get(t)
+        ist = (z["betrag"] / basis * 100) if z else 0.0
+        if z is None:
+            grund = "nicht mehr in der Tabelle"
+            ursache["fehlt"] += soll
+        elif not z["kurs"]:
+            grund = "kein Kurs von Yahoo"
+            ursache["kein_kurs"] += soll
+        else:
+            grund = "ganze Stücke" if abs(ist - soll) >= 0.0005 else ""
+        out.append(dict(Ticker=t, **{"Excel %": soll, "App Ist %": ist, "Diff. Pp.": ist - soll},
+                        Stück=(z or {}).get("menge"), **{"Kurs USD": (z or {}).get("kurs")}, Grund=grund))
+    for t, z in zeile.items():
+        if t not in a["soll"] and z["betrag"]:
+            ist = z["betrag"] / basis * 100
+            ursache["extra"] += ist
+            out.append(dict(Ticker=t, **{"Excel %": 0.0, "App Ist %": ist, "Diff. Pp.": ist}, Stück=z["menge"],
+                            **{"Kurs USD": z["kurs"]}, Grund="nicht im Modell (zusätzlich)"))
+    tab = pd.DataFrame(out)
+    s_soll, s_ist = float(sum(a["soll"].values())), float(tab["App Ist %"].sum()) if len(tab) else 0.0
+    rundung = (s_ist - s_soll) + ursache["kein_kurs"] + ursache["fehlt"] - ursache["extra"]
+    ohne_kurs = [r["Ticker"] for r in out if r["Grund"] == "kein Kurs von Yahoo"]
+    return dict(tab=tab, s_soll=s_soll, s_ist=s_ist, diff=s_ist - s_soll, rundung=rundung, ohne_kurs=ohne_kurs,
+                abw=float(tab["Diff. Pp."].abs().sum()) if len(tab) else 0.0, **ursache,
+                quote_app=float(ss.get("an_p_ak") or 0), **{k: a.get(k) for k in ("quote", "datei", "zeit", "uebersprungen")})
+
+
+def _kurse_nachladen():
+    """Update 11: Kurse für Titel ohne Kurs erneut bei Yahoo holen (der leere Abruf ist sonst 15 Min. zwischengespeichert)."""
+    import markt
+
+    ss = st.session_state
+    df = ss["an_aktien"].copy().reset_index(drop=True)
+    idx = [i for i in df.index if _txt(df.at[i, "Ticker"]).strip() and not _num(df.at[i, "Kurs USD"])]
+    if not idx:
+        return
+    tick = sorted({_txt(df.at[i, "Ticker"]).strip().upper().replace(".", "-") for i in idx})
+    try:
+        markt.lade_yahoo.clear(tuple(tick))
+    except Exception:  # noqa: BLE001  (ältere Streamlit-Versionen: nur ganzer Speicher)
+        markt.lade_yahoo.clear()
+    kurse = _letzte_kurse(tick)
+    for i in idx:
+        _ak_rechnen(df, i, {"Ticker"}, kurse)
+    ss["an_aktien"] = _aktien_df(_prozent_verteilen(df))
+    for k in ("an_ak_ver", "an_form_ver"):
+        ss[k] = ss.get(k, 0) + 1
+    noch = [t for t in tick if t not in kurse]
+    _meldung(f"Kurse nachgeladen: {len(tick) - len(noch)} von {len(tick)} gefunden."
+             + (f" Weiterhin ohne Kurs: {', '.join(noch)} – Ticker prüfen (z. B. BRK-B) oder in einer Minute nochmals." if noch else ""))
+
+
+def _abgleich_anzeigen(ab: dict):
+    ok = abs(ab["diff"]) < 0.05 and not ab["ohne_kurs"]
+    st.markdown(f"**Abgleich mit dem Scoring-Modell** · Import {ab['zeit']}"
+                + (f" · {ab['datei']}" if ab.get("datei") else ""))
+    ui.kopf_kpis([("Excel: Summe Aktienteil", f"{ui.de(ab['s_soll'], 2)} %", f"{len(ab['tab'])} Titel"),
+                  ("App: Summe Ist", f"{ui.de(ab['s_ist'], 2)} %", "Beträge / (Kapital × Aktienquote Modell)"),
+                  ("Differenz", f"{ui.de(ab['diff'], 2, True)} Pp.", "ok" if ok else "siehe Ursachen"),
+                  ("Σ |Ist − Excel|", f"{ui.de(ab['abw'], 2)} Pp.", "über alle Titel")])
+    teile = []
+    if ab["kein_kurs"] > 0.0001:
+        teile.append(f"**{ui.de(ab['kein_kurs'], 2)} Pp.** fehlen, weil Yahoo für {len(ab['ohne_kurs'])} Titel keinen Kurs geliefert "
+                     f"hat ({', '.join(ab['ohne_kurs'][:12])}{' …' if len(ab['ohne_kurs']) > 12 else ''}) – ohne Kurs kann die App "
+                     "keine Stücke rechnen.")
+    if ab["fehlt"] > 0.0001:
+        teile.append(f"**{ui.de(ab['fehlt'], 2)} Pp.** gehören zu Titeln, die nach dem Import aus der Tabelle entfernt wurden.")
+    if ab["extra"] > 0.0001:
+        teile.append(f"**{ui.de(ab['extra'], 2)} Pp.** kommen von zusätzlichen Titeln, die nicht im Modell sind.")
+    if abs(ab["rundung"]) >= 0.005:
+        teile.append(f"**{ui.de(ab['rundung'], 2, True)} Pp.** Rundung auf ganze Stücke (je Titel höchstens 1 Stück).")
+    if abs(ab["quote_app"] - float(ab["quote"] or 0)) > 0.01:
+        teile.append(f"«Aktien %» steht auf {ui.de(ab['quote_app'], 2)} %, das Modell rechnet mit {ui.de(float(ab['quote']), 2)} % – "
+                     "dadurch stimmen die Beträge nicht mit Excel überein. «Aktien %» oben auf den Wert des Modells setzen.")
+    for t in teile:
+        st.markdown(f"- {t}")
+    if ab["ohne_kurs"]:
+        st.button(f"Fehlende Kurse neu laden ({len(ab['ohne_kurs'])})", icon=":material/refresh:", key="an_sc_kurse",
+                  on_click=_kurse_nachladen, help="Holt die Kurse der Titel ohne Kurs nochmals bei Yahoo und rechnet die Stücke")
+    if ab.get("uebersprungen"):
+        with st.popover(f"Beim Lesen der Excel-Datei aufgefallen ({len(ab['uebersprungen'])})", icon=":material/rule:"):
+            for u in ab["uebersprungen"]:
+                st.markdown(f"- {u}")
+    t = ab["tab"]
+    t = t.reindex(t["Diff. Pp."].abs().sort_values(ascending=False).index)
+    nur = st.toggle("Nur Titel mit Abweichung ≥ 0,01 Pp.", value=True, key="an_sc_nur")
+    if nur:
+        t = t[t["Diff. Pp."].abs() >= 0.01]
+    st.dataframe(t, hide_index=True, width="stretch", height=min(320, 38 + 35 * max(len(t), 1)),
+                 column_config={"Excel %": st.column_config.NumberColumn(format="%.4f"),
+                                "App Ist %": st.column_config.NumberColumn(format="%.4f"),
+                                "Diff. Pp.": st.column_config.NumberColumn(format="%+.4f"),
+                                "Stück": st.column_config.NumberColumn(format="%d"),
+                                "Kurs USD": st.column_config.NumberColumn(format="%.2f")})
+
+
 def _scoring_bereich():
     ss = st.session_state
-    with st.expander("Titel aus dem Scoring-Modell übernehmen (Excel)", icon=":material/upload_file:"):
+    ab = scoring_abgleich(ss)
+    with st.expander("Titel aus dem Scoring-Modell übernehmen (Excel)", icon=":material/upload_file:",
+                     expanded=bool(ab and (abs(ab["diff"]) >= 0.05 or ab["ohne_kurs"]))):
+        if ab:
+            _abgleich_anzeigen(ab)
+            st.divider()
         st.caption("Liest im Blatt «Portfolio» Ticker und «Gewicht Aktienteil» mit voller Genauigkeit und die Aktienquote "
                    "(«Soll: Aktienquote»). So rechnet die App genau wie das Modell: Gewicht Gesamtportfolio = Aktienteil × Aktienquote.")
         f = st.file_uploader("Scoring-Modell (.xlsx)", type=["xlsx"], key=f"an_sc_up{ss.get('an_ver', 0)}",
@@ -989,11 +1141,13 @@ def _scoring_bereich():
             return
         sig = [f.name, f.size]
         if (ss.get("an_sc") or {}).get("sig") != sig:
-            ss["an_sc"] = dict(sig=sig, **scoring_lesen(f))
+            ss["an_sc"] = dict(sig=sig, datei=f.name, **scoring_lesen(f))
         d = ss["an_sc"]
         if d.get("fehler"):
             st.error(d["fehler"], icon=":material/error:")
             return
+        if d.get("uebersprungen"):
+            st.warning("Beim Lesen aufgefallen:\n" + "\n".join(f"- {u}" for u in d["uebersprungen"]), icon=":material/rule:")
         ui.kopf_kpis([("Titel", f"{len(d['titel'])}", "aus dem Blatt «Portfolio»"),
                       ("Summe Aktienteil", f"{ui.de(d['summe_akt'], 2)} %", "soll 100 %"),
                       ("Summe Gesamtportfolio", f"{ui.de(d['summe_ges'], 2)} %", "= Aktienquote"),
@@ -1005,6 +1159,330 @@ def _scoring_bereich():
         st.button("In dieses Analyseportfolio übernehmen – ersetzt die Aktien", type="primary", icon=":material/download:",
                   on_click=_scoring_uebernehmen, key="an_sc_los",
                   help="Treasuries-Zeilen bleiben. Danach prüfen und mit «Speichern» fürs Team ablegen.")
+
+
+# ---------------------------------------------------------------------------
+# Import der Treasuries aus einer Excel-Liste (Update 11, Wunsch Sophy 25.11.2026)
+# Reiter wählbar (Standard «Portfolio»), Spalten werden an der Überschrift erkannt (deutsch/englisch).
+# ---------------------------------------------------------------------------
+TR_SPALTEN = [  # (Schlüssel, Anfänge der Überschrift) – Reihenfolge zählt («Nominalzins» ist ein Kupon, kein Nominal)
+    ("isin", ("isin",)),
+    ("cusip", ("cusip",)),
+    ("kupon", ("kupon", "coupon", "cpn", "zinssatz", "nominalzins", "zins%", "zins(")),
+    ("faellig", ("fälligkeit", "faelligkeit", "fällig", "faellig", "maturity", "laufzeitende", "verfall", "rückzahlung",
+                 "rueckzahlung", "endfälligkeit", "enddatum")),
+    ("rendite", ("rendite", "ytm", "yield", "verfallrendite")),
+    ("auswahl", ("auswahl", "ausgewählt", "ausgewaehlt", "select", "kaufen", "importfolio", "inportfolio")),
+    ("gewicht", ("gewicht", "weight", "anteil", "allokation", "quote")),
+    ("nominal", ("nominal", "nennwert", "facevalue", "face", "par")),
+    ("betrag", ("betrag", "marktwert", "investiert", "investition", "amount", "marketvalue", "wert")),
+    ("kurs", ("kurs", "preis", "price", "cleanprice")),
+    ("bez", ("bezeichnung", "name", "titel", "anleihe", "security", "beschreibung", "description", "bond", "wertpapier")),
+]
+TR_MARKER = {"x", "ja", "yes", "1", "true", "wahr", "✓", "✔", "✅", "j", "y", "ok"}
+
+
+def isin_pruefziffer(basis11: str) -> int:
+    """Prüfziffer einer ISIN (Luhn über die Ziffernfolge, Buchstaben A=10 … Z=35)."""
+    ziffern = "".join(str(int(c, 36)) for c in basis11.upper())
+    summe = 0
+    for i, ch in enumerate(reversed(ziffern)):
+        d = int(ch)
+        if i % 2 == 0:
+            d *= 2
+            d = d - 9 if d > 9 else d
+        summe += d
+    return (10 - summe % 10) % 10
+
+
+def isin_ok(isin: str) -> bool:
+    s = (isin or "").strip().upper()
+    return bool(re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", s)) and isin_pruefziffer(s[:11]) == int(s[11])
+
+
+def isin_aus_cusip(cusip: str) -> str:
+    s = (cusip or "").strip().upper()
+    return f"US{s}{isin_pruefziffer('US' + s)}" if re.fullmatch(r"[A-Z0-9]{9}", s) else ""
+
+
+def _tr_zahl(zelle) -> tuple[float | None, bool]:
+    """(Zahl, war Prozent?) aus einer Excel-Zelle – auch Texte wie «4,25 %» oder «1'000'000». Prozent-Zellen kommen
+    gleich in Prozent zurück (Excel speichert 4,25 % als 0,0425 → 4,25)."""
+    v = zelle.value if hasattr(zelle, "value") else zelle
+    fmt = str(getattr(zelle, "number_format", "") or "")
+    if isinstance(v, bool):
+        return None, False
+    if isinstance(v, (int, float)):
+        return (float(v) * 100, True) if "%" in fmt else (float(v), False)
+    s = str(v or "").strip()
+    if not s:
+        return None, False
+    pct = s.endswith("%")
+    s = s.rstrip("%").replace("’", "'").strip()
+    if "," in s and "." in s:                 # 1,000,000.50 bzw. 1.000.000,50
+        s = s.replace(",", "") if s.rfind(".") > s.rfind(",") else s.replace(".", "").replace(",", ".")
+    elif s.count(",") > 1:                    # 2,000,000
+        s = s.replace(",", "")
+    elif s.count(".") > 1:                    # 2.000.000
+        s = s.replace(".", "")
+    return zahl(s), pct
+
+
+def _tr_datum(v) -> pd.Timestamp | None:
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return pd.Timestamp(v).normalize()
+    if isinstance(v, (int, float)) and 20000 < v < 80000:          # Excel-Seriennummer
+        return (pd.Timestamp("1899-12-30") + pd.Timedelta(days=int(v))).normalize()
+    s = str(v).strip()
+    t = pd.to_datetime(s, dayfirst="." in s, errors="coerce")
+    if pd.isna(t):
+        t = pd.to_datetime(s, format="%m/%d/%Y", errors="coerce")
+    return None if pd.isna(t) else pd.Timestamp(t).normalize()
+
+
+def treasury_blaetter(datei) -> list[str]:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(datei, read_only=True)
+    namen = list(wb.sheetnames)
+    wb.close()
+    return namen
+
+
+def treasury_lesen(datei, blatt: str | None = None) -> dict:
+    """Treasury-Liste lesen. Erkennt die Kopfzeile an «Kupon» + «Fälligkeit» oder «ISIN»/«CUSIP» (erste 40 Zeilen).
+    Gibt dict(blatt, zeilen=[{isin, bez, kupon, faellig, kurs, nominal, betrag, gewicht, rendite}], spalten, hinweise,
+    gewicht_bezug=«teil»/«gesamt»/None) zurück. Prozentwerte (Excel-Format %) werden in % umgerechnet."""
+    import openpyxl
+
+    try:
+        wb = openpyxl.load_workbook(datei, data_only=True, read_only=True)
+    except Exception as e:  # noqa: BLE001
+        return dict(fehler=f"Datei nicht lesbar: {e}")
+    namen = list(wb.sheetnames)
+    if blatt not in namen:
+        blatt = "Portfolio" if "Portfolio" in namen else namen[0]
+    rows = [list(r) for r in wb[blatt].iter_rows(min_row=1, max_row=800)]
+    wb.close()
+    kopf, sp, titel = None, {}, {}
+    for r_i, r in enumerate(rows[:40]):
+        n = [_kopf(c.value) for c in r]
+        m = {}
+        for j, x in enumerate(n):
+            if not x:
+                continue
+            for key, anf in TR_SPALTEN:
+                if key not in m and x.startswith(anf):
+                    m[key] = j
+                    break
+        if ("kupon" in m and "faellig" in m) or "isin" in m or "cusip" in m:
+            kopf, sp = r_i, m
+            titel = {k: str(r[j].value).strip() for k, j in m.items()}
+            break
+    if kopf is None:
+        return dict(fehler=f"Im Reiter «{blatt}» keine Kopfzeile mit «Kupon» und «Fälligkeit» (oder «ISIN»/«CUSIP») gefunden.",
+                    blaetter=namen, blatt=blatt)
+
+    def zelle(r, key):
+        j = sp.get(key)
+        return r[j] if j is not None and j < len(r) else None
+
+    roh, hinweise, leer = [], [], 0
+    for z_nr, r in enumerate(rows[kopf + 1:], start=kopf + 2):
+        werte = [c.value for c in r if c is not None]
+        if all(v is None or str(v).strip() == "" for v in werte):
+            leer += 1
+            if leer >= 25:
+                break
+            continue
+        leer = 0
+        erste = next((str(v) for v in werte if v is not None and str(v).strip()), "")
+        if _kopf(erste).startswith(("summe", "total", "gesamt")):
+            break
+        isin = str(getattr(zelle(r, "isin"), "value", "") or "").strip().upper()
+        cusip = str(getattr(zelle(r, "cusip"), "value", "") or "").strip().upper()
+        kupon, kupon_pct = _tr_zahl(zelle(r, "kupon")) if zelle(r, "kupon") is not None else (None, False)
+        faellig = _tr_datum(getattr(zelle(r, "faellig"), "value", None))
+        if not (isin or cusip or kupon is not None or faellig is not None):
+            continue                                            # Zwischentitel o. ä.
+        x = dict(zeile=z_nr, isin=isin, cusip=cusip, bez=str(getattr(zelle(r, "bez"), "value", "") or "").strip(),
+                 kupon=kupon, kupon_pct=kupon_pct, faellig=faellig,
+                 auswahl=str(getattr(zelle(r, "auswahl"), "value", "") or "").strip().lower())
+        for key in ("kurs", "nominal", "betrag", "gewicht", "rendite"):
+            v, p = _tr_zahl(zelle(r, key)) if zelle(r, key) is not None else (None, False)
+            x[key], x[key + "_pct"] = v, p
+        roh.append(x)
+    if not roh:
+        return dict(fehler=f"Im Reiter «{blatt}» unter der Kopfzeile keine Anleihen gefunden.", blaetter=namen, blatt=blatt)
+    # Auswahl-Spalte: sind Zeilen markiert, gelten nur diese
+    if "auswahl" in sp and any(x["auswahl"] in TR_MARKER for x in roh):
+        n0 = len(roh)
+        roh = [x for x in roh if x["auswahl"] in TR_MARKER]
+        hinweise.append(f"Spalte «{titel['auswahl']}»: {len(roh)} von {n0} Anleihen markiert – nur diese werden übernommen.")
+    # Prozent-Zellen sind schon in %. Übrige Zahlen als Bruch erkennen: alle Kupons/Renditen ≤ 0,2, Gewichte Σ ≤ 1,5,
+    # Kurse ≤ 2 (0,9875 des Nominals) → × 100
+    for key, als_bruch in (("kupon", lambda w: 0 < max(w) <= 0.2), ("rendite", lambda w: 0 < max(w) <= 0.2),
+                           ("gewicht", lambda w: 0 < sum(w) <= 1.5), ("kurs", lambda w: 0 < max(w) <= 2)):
+        w = [x[key] for x in roh if x[key] is not None and not x[key + "_pct"]]
+        if w and als_bruch(w):
+            for x in roh:
+                if x[key] is not None and not x[key + "_pct"]:
+                    x[key] *= 100
+    zeilen = []
+    for x in roh:
+        isin = x["isin"]
+        if not isin and x["cusip"]:
+            isin = isin_aus_cusip(x["cusip"])
+        if isin and not isin_ok(isin):
+            if re.fullmatch(r"[A-Z0-9]{9}", isin):                 # CUSIP in der ISIN-Spalte
+                isin = isin_aus_cusip(isin)
+            else:
+                hinweise.append(f"Zeile {x['zeile']}: ISIN «{isin}» hat eine falsche Prüfziffer oder Länge – bitte prüfen.")
+        if x["faellig"] is None:
+            hinweise.append(f"Zeile {x['zeile']}{' (' + isin + ')' if isin else ''}: keine Fälligkeit – nicht übernommen.")
+            continue
+        if x["kupon"] is None:
+            hinweise.append(f"Zeile {x['zeile']}{' (' + isin + ')' if isin else ''}: kein Kupon – für die Übernahme ins Portfolio "
+                            "in der Analyse ergänzen (0 bei T-Bills).")
+        zeilen.append(dict(isin=isin, bez=x["bez"], kupon=x["kupon"], faellig=x["faellig"], kurs=x["kurs"], nominal=x["nominal"],
+                           betrag=x["betrag"], gewicht=x["gewicht"], rendite=x["rendite"], zeile=x["zeile"]))
+    if not zeilen:
+        return dict(fehler="Keine Anleihe mit Fälligkeit gefunden.", blaetter=namen, blatt=blatt, hinweise=hinweise)
+    gb = None                                                       # worauf bezieht sich die Spalte Gewicht?
+    if "gewicht" in sp:
+        k_ = _kopf(titel["gewicht"])
+        gb = "gesamt" if any(w in k_ for w in ("gesamt", "total", "portfolio")) else \
+            "teil" if any(w in k_ for w in ("treasur", "anleihe", "bond", "teil", "obligation")) else None
+    return dict(blatt=blatt, blaetter=namen, zeilen=zeilen, spalten={k: titel[k] for k in sp}, hinweise=hinweise,
+                gewicht_bezug=gb)
+
+
+def treasury_betraege(zeilen: list[dict], quelle: str, budget_t: float, kapital: float, gewicht_bezug: str) -> tuple[list, list]:
+    """Betrag USD je Anleihe. quelle: betrag | nominal | gewicht | gleich. Übersteigt die Summe das Treasury-Budget,
+    werden alle im gleichen Verhältnis gekürzt (wie der Deckel in der Eingabe). Gibt (beträge, meldungen) zurück."""
+    meld, b = [], []
+    for x in zeilen:
+        if quelle == "betrag":
+            b.append(x["betrag"] or 0.0)
+        elif quelle == "nominal":
+            b.append((x["nominal"] or 0.0) * ((x["kurs"] or 100.0) / 100))
+        elif quelle == "gewicht":
+            b.append((x["gewicht"] or 0.0) / 100 * (kapital if gewicht_bezug == "gesamt" else budget_t))
+        else:
+            b.append(budget_t / len(zeilen) if zeilen else 0.0)
+    if quelle == "nominal" and any(x["nominal"] and not x["kurs"] for x in zeilen):
+        meld.append("Ohne Kurs in der Liste ist der Betrag ≈ Nominal (Kurs 100 %) – die Übernahme rechnet am Handelstag mit dem "
+                    "Kurs aus der Zinskurve.")
+    s = sum(b)
+    if budget_t > 0 and s > budget_t + 0.5:
+        f = budget_t / s
+        b = [v * f for v in b]
+        meld.append(f"Die Anleihen ergeben zusammen {ui.de(s, 0)} USD, das Treasury-Budget ist {ui.de(budget_t, 0)} USD – alle im "
+                    f"gleichen Verhältnis auf {ui.de(f * 100, 1)} % gekürzt. Stimmt «Treasuries %»?")
+    return [math.floor(v) for v in b], meld
+
+
+def _treasury_uebernehmen():
+    ss = st.session_state
+    p = ss.get("an_tri_vorschau") or {}
+    if not p.get("zeilen"):
+        return
+    neu = pd.DataFrame([{"Laufzeit": baender(max(0.0, (x["faellig"] - pd.Timestamp.today()).days / 365.25), x["bez"]),
+                         "Betrag USD": betrag, "Kupon %": x["kupon"], "Fälligkeit": x["faellig"],
+                         "Kurs %": x["kurs"] if p.get("kurs_uebernehmen") else None, "Bezeichnung": x["bez"], "ISIN": x["isin"]}
+                        for x, betrag in zip(p["zeilen"], p["betraege"]) if betrag > 0])
+    if not p.get("ersetzen") and "an_treas" in ss:
+        alt = _treas_df(ss["an_treas"])
+        alt = alt[[_num(x) is not None for x in alt["Betrag USD"]]]
+        neu = pd.concat([alt, neu], ignore_index=True)
+    ss["an_treas"] = _treas_df(neu)
+    for k in ("an_tr_ver", "an_form_ver"):
+        ss[k] = ss.get(k, 0) + 1
+    s = sum(p["betraege"])
+    _meldung(f"{sum(1 for b_ in p['betraege'] if b_ > 0)} Treasuries aus «{p['datei']}» (Reiter «{p['blatt']}») übernommen · "
+             f"{ui.de(s, 0)} USD von {ui.de(p['budget_t'], 0)} USD Treasury-Budget"
+             + (f" · {ui.de(p['budget_t'] - s, 0)} USD noch offen." if p["budget_t"] - s > 100 else "."))
+
+
+def _treasury_bereich():
+    ss = st.session_state
+    with st.expander("Treasuries aus Excel übernehmen", icon=":material/account_balance:"):
+        st.caption("Liest eure Anleihen-Liste: Reiter wählbar (Standard «Portfolio»). Erkannt werden die Spalten an der Überschrift – "
+                   "ISIN (oder CUSIP), Bezeichnung, Kupon, Fälligkeit und, falls vorhanden, Betrag, Nominal, Kurs, Gewicht und eine "
+                   "Spalte «Auswahl» (x/ja = übernehmen). Das Laufzeitband rechnet die App aus der Fälligkeit.")
+        f = st.file_uploader("Treasury-Liste (.xlsx)", type=["xlsx"], key=f"an_tri_up{ss.get('an_ver', 0)}",
+                             label_visibility="collapsed")
+        if f is None:
+            return
+        try:
+            blaetter = treasury_blaetter(f)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Datei nicht lesbar: {e}", icon=":material/error:")
+            return
+        std = "Portfolio" if "Portfolio" in blaetter else blaetter[0]
+        c1, c2 = st.columns([1.3, 2])
+        blatt = c1.selectbox("Reiter", blaetter, index=blaetter.index(std), key=f"an_tri_bl{f.name}{f.size}")
+        sig = [f.name, f.size, blatt]
+        if (ss.get("an_tri") or {}).get("sig") != sig:
+            f.seek(0)
+            ss["an_tri"] = dict(sig=sig, **treasury_lesen(f, blatt))
+        d = ss["an_tri"]
+        if d.get("fehler"):
+            st.error(d["fehler"], icon=":material/error:")
+            return
+        c2.caption("Erkannte Spalten: " + " · ".join(f"{k} = «{v}»" for k, v in d["spalten"].items()))
+        for h in d["hinweise"]:
+            st.warning(h, icon=":material/info:")
+        z = d["zeilen"]
+        quellen = [q for q, ok in (("betrag", any(x["betrag"] for x in z)), ("nominal", any(x["nominal"] for x in z)),
+                                   ("gewicht", any(x["gewicht"] for x in z)), ("gleich", True)) if ok]
+        namen_q = {"betrag": "Betrag aus der Liste", "nominal": "Nominal × Kurs", "gewicht": "Gewicht aus der Liste",
+                   "gleich": "Treasury-Budget gleich verteilen"}
+        b = budget(ss)
+        o1, o2 = st.columns([1.6, 1.4])
+        quelle = o1.radio("Beträge", quellen, format_func=namen_q.get, horizontal=True, key=f"an_tri_q{sig}")
+        gb = d.get("gewicht_bezug")
+        if quelle == "gewicht":
+            s_w = sum(x["gewicht"] or 0 for x in z)
+            vorschlag = gb or ("teil" if abs(s_w - 100) < 1.5 else "gesamt" if abs(s_w - b["pct"]["treas"]) < 1.5 else "teil")
+            gb = o2.radio("Gewicht bezogen auf", ["teil", "gesamt"], index=0 if vorschlag == "teil" else 1, horizontal=True,
+                          key=f"an_tri_gb{sig}", format_func=lambda x: "Treasury-Teil" if x == "teil" else "Gesamtportfolio",
+                          help=f"Summe der Gewichte in der Liste: {ui.de(s_w, 2)} %")
+        o3, o4 = st.columns(2)
+        ersetzen = o3.checkbox("Bisherige Treasury-Zeilen ersetzen", value=True, key=f"an_tri_ers{sig}")
+        kurs_ueb = o4.checkbox("Kurs aus der Liste auch für die Übernahme ins Portfolio verwenden", value=False,
+                               key=f"an_tri_kurs{sig}", disabled=not any(x["kurs"] for x in z),
+                               help="Aus: Die Übernahme am Handelstag rechnet den Preis aus der Zinskurve (aktueller). Ein: Kurs aus der "
+                                    "Liste wird fest eingetragen.")
+        betraege, meld = treasury_betraege(z, quelle, b["budget_t"], b["kapital"], gb or "teil")
+        for m_ in meld:
+            st.info(m_, icon=":material/content_cut:")
+        s = sum(betraege)
+        heute = pd.Timestamp.today()
+        vor = pd.DataFrame([{"ISIN": x["isin"], "Bezeichnung": x["bez"] or "(automatisch)", "Kupon %": x["kupon"],
+                             "Fälligkeit": x["faellig"].date(), "Restlaufzeit J.": round((x["faellig"] - heute).days / 365.25, 2),
+                             "Band": baender(max(0.0, (x["faellig"] - heute).days / 365.25), x["bez"]),
+                             "Kurs %": x["kurs"], "Rendite %": x["rendite"], "Betrag USD": ui.de(bt, 0),
+                             "Anteil Treasuries %": round(bt / b["budget_t"] * 100, 2) if b["budget_t"] else None}
+                            for x, bt in zip(z, betraege)])
+        ui.kopf_kpis([("Anleihen", f"{len(z)}", f"Reiter «{d['blatt']}»"),
+                      ("Summe", f"{ui.de(s, 0)} USD", f"Treasury-Budget {ui.de(b['budget_t'], 0)} USD"),
+                      ("Anteil am Budget", f"{ui.de(s / b['budget_t'] * 100 if b['budget_t'] else 0, 2)} %",
+                       f"Treasuries {ui.de(b['pct']['treas'], 2)} % des Kapitals"),
+                      ("Ø Restlaufzeit", f"{ui.de(sum(bt * (x['faellig'] - heute).days / 365.25 for x, bt in zip(z, betraege)) / s, 1) if s else '–'} J.",
+                       "betragsgewichtet")])
+        st.dataframe(vor.drop(columns=[c for c in ("Kurs %", "Rendite %") if vor[c].isna().all()]), hide_index=True,
+                     width="stretch", height=min(320, 38 + 35 * len(vor)),
+                     column_config={"Kupon %": st.column_config.NumberColumn(format="%.3f"),
+                                    "Fälligkeit": st.column_config.DateColumn(format="DD.MM.YYYY")})
+        ss["an_tri_vorschau"] = dict(zeilen=z, betraege=betraege, ersetzen=ersetzen, kurs_uebernehmen=kurs_ueb, datei=f.name,
+                                     blatt=d["blatt"], budget_t=b["budget_t"])
+        st.button("In dieses Analyseportfolio übernehmen" + (" – ersetzt die Treasuries" if ersetzen else " – anfügen"),
+                  type="primary", icon=":material/download:", on_click=_treasury_uebernehmen, key="an_tri_los",
+                  disabled=s <= 0, help="Danach prüfen und mit «Speichern» fürs Team ablegen. Ändert sich später Kapital oder "
+                                        "Treasuries %, die Liste neu übernehmen.")
 
 
 def _sektor_bereich(ctx):
@@ -1160,7 +1638,7 @@ def _such_hinzu():
 
 
 TREAS_TYPEN = {"Laufzeit": "string", "Betrag USD": "string", "Kupon %": "float64", "Fälligkeit": "datetime64[ns]",
-               "Kurs %": "float64", "Bezeichnung": "string"}
+               "Kurs %": "float64", "Bezeichnung": "string", "ISIN": "string"}
 
 
 def _treas_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -1213,6 +1691,14 @@ def _tr_aenderung(key: str):
             df.at[i, "Betrag USD"] = rest
             _meldung(f"Treasury {_txt(df.at[i, 'Laufzeit']) or _txt(df.at[i, 'Bezeichnung'])}: Betrag auf {ui.de(rest, 0)} USD gekürzt "
                      f"– Treasury-Budget ({ui.de(float(ss.get('an_p_tr') or 0), 1)} % = {ui.de(b_t, 0)} USD) ausgeschöpft.")
+    if "ISIN" in df.columns:          # Update 11: Grossbuchstaben, CUSIP (9 Zeichen) → ISIN, falsche Prüfziffer melden
+        for i in df.index:
+            s_ = _txt(df.at[i, "ISIN"]).strip().upper().replace(" ", "")
+            if re.fullmatch(r"[A-Z0-9]{9}", s_):
+                s_ = isin_aus_cusip(s_)
+            elif s_ and not isin_ok(s_):
+                _meldung(f"ISIN «{s_}» hat eine falsche Prüfziffer oder Länge – bitte prüfen.")
+            df.at[i, "ISIN"] = s_
     ss["an_treas"] = _treas_df(df.reset_index(drop=True))
     ss["an_tr_ver"] = ss.get("an_tr_ver", 0) + 1
 
@@ -1258,7 +1744,7 @@ def portfolio_vorlage(tabellen: dict, fred: dict, lade_kurse) -> tuple[pd.DataFr
 # als Kopie in st.session_state["an_pf"][id]["state"] – Wechseln verliert also keine ungespeicherten Änderungen.
 # ---------------------------------------------------------------------------
 PF_KEYS = ("an_aktien", "an_treas", "an_cash", "an_kapital", "an_kap_txt", "an_p_ak", "an_p_tr", "an_p_ca", "an_bezug",
-           "an_fuellen", "an_eingabe", "an_kz", "an_modell_quote")
+           "an_fuellen", "an_eingabe", "an_kz", "an_modell_quote", "an_sc_abgleich")
 # Widget-Schlüssel löscht Streamlit, sobald die Seite verlassen wird → Spiegel «_<key>» hält den Wert
 WIDGET_KEYS = ("an_kap_txt", "an_p_ak", "an_p_tr", "an_p_ca", "an_bezug", "an_fuellen", "an_pf_name", "an_pf_notiz")
 BESTAND = "__bestand__"        # im Vergleich: aktuelles Portfolio (Transaktionen)
@@ -1308,7 +1794,8 @@ def _kern(aktien: pd.DataFrame, treas: pd.DataFrame, kapital: float, pct: dict, 
                 "Kurs %": _num(z.get("Kurs %")),
                 "Fälligkeit": pd.Timestamp(z["Fälligkeit"]).date().isoformat()
                 if z.get("Fälligkeit") is not None and pd.notna(z.get("Fälligkeit")) else "",
-                "Bezeichnung": _txt(z.get("Bezeichnung"))} for z in t_.to_dict("records")],
+                "Bezeichnung": _txt(z.get("Bezeichnung")), "ISIN": _txt(z.get("ISIN")).strip().upper()}
+               for z in t_.to_dict("records")],
         cash=0.0, kapital=float(kapital or 0), pct={k: float(v) for k, v in (pct or {}).items()}, bezug=bezug or GESAMT)
 
 
@@ -2073,6 +2560,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         uebernahme.bereich(ctx, fred, gespeichert)
 
     _scoring_bereich()
+    _treasury_bereich()
 
     # --- Eingabe (Update 9): alles in einem Formular – getippt wird ohne Unterbruch, gerechnet erst mit «Übernehmen» ----------
     import portfolio as P2
@@ -2111,12 +2599,12 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             a1, a2, a3, a4 = st.columns([1.3, 1, 1, 1])
             a1.text_input("Kapital (USD)", value=_txt(ss.get("an_kap_txt")), key=f"an_f_kap{sfx}",
                           help="Zeilen mit fixem Gewicht % passen ihre Stückzahl beim Übernehmen automatisch an")
-            a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", value=float(ss.get("an_p_ak") or 0),
+            a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=float(ss.get("an_p_ak") or 0),
                             key=f"an_f_pak{sfx}", help=f"IPS-Band {lo_a:g}–{hi_a:g} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} %")
-            a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
+            a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
                             value=float(ss.get("an_p_tr") or 0), key=f"an_f_ptr{sfx}",
                             help=f"IPS-Band {lo_t:g}–{hi_t:g} % · Taktik {ui.de(ctx.alloc['anleihen'], 1)} %")
-            a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", value=float(ss.get("an_p_ca") or 0),
+            a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=float(ss.get("an_p_ca") or 0),
                             key=f"an_f_pca{sfx}", help=f"IPS-Band {lo_c:g}–{hi_c:g} % · Taktik {ui.de(ctx.alloc['cash'], 1)} %")
             l, r = st.columns([1.35, 1])
             with l:
@@ -2171,7 +2659,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                                                       help="Was vorgegeben ist: % (Gewicht bleibt, Stück passen sich an), "
                                                                            "Stück oder USD (Betrag bleibt)")})
             with r:
-                st.markdown("**Treasuries** · Betrag je Laufzeitband – für die Übernahme ins Portfolio Kupon und Fälligkeit ergänzen")
+                st.markdown("**Treasuries** · Betrag je Laufzeitband – für die Übernahme ins Portfolio Kupon und Fälligkeit ergänzen "
+                            "(oder oben «Treasuries aus Excel übernehmen»)")
                 st.data_editor(_treas_df(ss["an_treas"]).assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch",
                                key=f"an_ed_t{sfx}",
                                column_config={
@@ -2183,8 +2672,11 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                    "Fälligkeit": st.column_config.DateColumn(format="DD.MM.YYYY"),
                                    "Kurs %": st.column_config.NumberColumn(min_value=0.0, format="%.3f",
                                                                            help="leer = Preis aus der Zinskurve am Handelstag"),
-                                   "Bezeichnung": st.column_config.TextColumn(help="z. B. CUSIP oder «UST 4,25 % 15.11.2029»; "
-                                                                                   "leer = automatisch")})
+                                   "Bezeichnung": st.column_config.TextColumn(help="z. B. «UST 4,25 % 15.11.2029»; "
+                                                                                   "leer = automatisch"),
+                                   "ISIN": st.column_config.TextColumn(help="z. B. US91282CLF67 – wird bei der Übernahme ins "
+                                                                            "Portfolio mitgebucht. Eine CUSIP wird beim Übernehmen "
+                                                                            "in die ISIN umgerechnet.")})
                 st.caption("Treasuries höchstens Kapital × Treasury-%. Zeile entfernen: Häkchen in der Spalte ✕.")
             k1, k2, k3, k4 = st.columns([1.2, 1.3, 1.1, 2])
             k1.form_submit_button("Änderungen übernehmen", type="primary", icon=":material/check:", width="stretch",
@@ -2214,6 +2706,12 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             st.warning(f"Bezug «Aktienteil»: Die Gewichte gelten für Aktien {ui.de(float(ss.get('an_p_ak') or 0), 2)} % des Kapitals. "
                        f"Das Scoring-Modell rechnet mit {ui.de(float(ss['an_modell_quote']), 2)} % – «Aktien %» anpassen, damit die "
                        "Beträge übereinstimmen.", icon=":material/warning:")
+        ab_ = scoring_abgleich(ss)
+        if ab_ and (abs(ab_["diff"]) >= 0.05 or ab_["ohne_kurs"]):
+            st.warning(f"Abweichung zum Scoring-Modell: App {ui.de(ab_['s_ist'], 2)} % statt {ui.de(ab_['s_soll'], 2)} % des "
+                       f"Aktienteils ({ui.de(ab_['diff'], 2, True)} Pp.)"
+                       + (f", {len(ab_['ohne_kurs'])} Titel ohne Kurs" if ab_["ohne_kurs"] else "")
+                       + " – Ursachen und Liste oben unter «Titel aus dem Scoring-Modell übernehmen».", icon=":material/difference:")
         st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD · Gewicht % (Ziel) {ui.de(s_pct, 2)} % · Ist "
                    f"{ui.de(ist_pct, 2)} % von {ui.de(ziel_pct, 1)} % "
                    f"({'Aktienteil' if teil else 'Aktienquote am Gesamtportfolio'}) · "
