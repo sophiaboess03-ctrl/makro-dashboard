@@ -10,6 +10,8 @@ Methodik (auch in der App erklärt):
 - Aktien-Eingabe auch als «Gewicht %» (Bezug Gesamtportfolio oder Aktienteil); fixe % passen die Stückzahl an,
   wenn Kapital oder Aktien-% ändern.
 - Mehrere Analyseportfolios: gleichzeitig offen, je id überschreibbar, löschbar (Papierkorb), Vergleich im gleichen Zeitfenster.
+- Eingabe als Formular (Update 9): Tippen löst nichts aus, gerechnet wird mit «Änderungen übernehmen» bzw. «Übernehmen & speichern».
+- Sektorgewichtung (Update 9): Ist je Sektor, Sektoranteile anpassen → Titel im Sektor proportional skaliert.
 """
 from __future__ import annotations
 
@@ -627,24 +629,248 @@ def _basis_aenderung():
     ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
 
 
-def _kap_aenderung():
-    _feld_format("an_kap_txt")
-    _basis_aenderung()
-
-
-def _bezug_aenderung():
-    """Bezug von «Gewicht %» umgestellt: Beträge bleiben, die Prozentzahlen werden umgerechnet."""
+def _form_anwenden(sfx: str, aktion: str):
+    """Formular «Eingabe» abgeschickt (Update 9): Erst jetzt werden Aufteilung, Bezug, Aktien- und Treasury-Tabelle und
+    die Suche übernommen und gerechnet – während des Tippens passiert nichts, die Tabelle springt also nicht.
+    aktion: «uebernehmen», «speichern» (übernehmen + Portfolio speichern) oder «zurueck» (Eingaben verwerfen)."""
     ss = st.session_state
-    if "an_aktien" not in ss:
+    if aktion == "zurueck":
+        ss["an_form_ver"] = ss.get("an_form_ver", 0) + 1
         return
-    p_ak = float(ss.get("an_p_ak") or 0) / 100
-    df = ss["an_aktien"].copy().reset_index(drop=True)
+    alt_kap = _num(ss.get("an_kap_txt")) or 0.0
+    alt_pak = float(ss.get("an_p_ak") or 0)
+    alt_bez = ss.get("an_bezug", GESAMT)
+    neu_kap = _num(ss.get(f"an_f_kap{sfx}"))
+    if neu_kap is None or neu_kap < 0:
+        if _txt(ss.get(f"an_f_kap{sfx}")).strip():
+            _meldung("Kapital nicht erkannt – der bisherige Wert bleibt.")
+        neu_kap = alt_kap
+    neu_pak = float(ss.get(f"an_f_pak{sfx}", alt_pak) or 0)
+    neu_bez = ss.get(f"an_f_bez{sfx}") or alt_bez
+    # 1. Bezug umgestellt: fixe % auf den neuen Bezug umrechnen (Beträge bleiben), Zeilen bleiben an ihrem Platz,
+    #    damit die Änderungen der Tabelle (Zeilennummern) danach richtig zugeordnet werden.
+    if neu_bez != alt_bez and alt_pak > 0 and "an_aktien" in ss:
+        df = ss["an_aktien"].copy().reset_index(drop=True)
+        for i in df.index:
+            pct = _num(df.at[i, "Gewicht %"])
+            if _txt(df.at[i, "Fix"]) == "%" and pct is not None:
+                df.at[i, "Gewicht %"] = _fz(pct / (alt_pak / 100) if neu_bez == AKTIENTEIL else pct * alt_pak / 100, 2)
+        ss["an_aktien"] = df
+    # 2. Aufteilung setzen
+    ss.update(an_kap_txt=ui.de(neu_kap, 0), an_kapital=float(neu_kap), an_p_ak=neu_pak,
+              an_p_tr=float(ss.get(f"an_f_ptr{sfx}", ss.get("an_p_tr")) or 0),
+              an_p_ca=float(ss.get(f"an_f_pca{sfx}", ss.get("an_p_ca")) or 0), an_bezug=neu_bez)
+    # 3. Tabellen (nur, was geändert wurde, wird gerechnet; Deckel aufs Budget wie bisher)
+    if "an_aktien" in ss:
+        _ak_aenderung(f"an_ed_a{sfx}")
+    if "an_treas" in ss:
+        _tr_aenderung(f"an_ed_t{sfx}")
+    # 4. Kapital, Aktien-% oder Bezug geändert → Zeilen mit fixem Gewicht % bekommen die neue Stückzahl
+    if abs(neu_kap - alt_kap) > 0.5 or abs(neu_pak - alt_pak) > 1e-9 or neu_bez != alt_bez:
+        _basis_aenderung()
+    # 5. Suchfeld: Titel anfügen
+    if such := ss.get(f"an_f_such{sfx}"):
+        ss.update(an_such=such, an_such_stk=ss.get(f"an_f_stk{sfx}") or 0, an_such_pct=ss.get(f"an_f_pct{sfx}") or 0.0)
+        _such_hinzu()
+    ss["an_form_ver"] = ss.get("an_form_ver", 0) + 1
+    if aktion == "speichern":
+        ss["an_pf_save_req"] = True
+
+
+# ---------------------------------------------------------------------------
+# Sektorgewichtung des Analyseportfolios (Update 9): Ist je Sektor rechnen, Sektoranteile anpassen,
+# Titel im Sektor proportional mitziehen (Verhältnis der Titel untereinander bleibt gleich).
+# ---------------------------------------------------------------------------
+UNBEKANNT = "Unbekannt"
+
+
+def _sektor_von(x) -> str:
+    s = _txt(x).strip()
+    return s if s in C.SEKTOREN else UNBEKANNT
+
+
+def sektor_ist(df: pd.DataFrame) -> tuple[dict, float]:
+    """Ist-Anteil je Sektor in % der investierten Aktien (wie die Sektorallokation) und investierte Summe in USD.
+    Reihenfolge wie C.SEKTOREN, «Unbekannt» am Schluss."""
+    w: dict[str, float] = {}
+    for t, s, b in zip(df["Ticker"], df["Sektor"], df["Betrag USD"]):
+        v = _num(b) or 0.0
+        if _txt(t).strip() and v > 0:
+            k = _sektor_von(s)
+            w[k] = w.get(k, 0.0) + v
+    summe = sum(w.values())
+    reihe = [s for s in C.SEKTOREN + [UNBEKANNT] if s in w]
+    return ({s: w[s] / summe * 100 for s in reihe} if summe else {}), summe
+
+
+def sektor_anteile(ist: dict, neu: dict, ausgleich: bool = True) -> dict:
+    """Neue Sektoranteile (% des Aktienteils). Geänderte Sektoren gelten wie eingegeben. Mit ausgleich werden die übrigen
+    proportional angepasst, damit die Summe 100 % bleibt (geht nicht, wenn die geänderten schon > 100 % ergeben)."""
+    out = {s: max(0.0, float(neu[s])) if neu.get(s) is not None else ist[s] for s in ist}
+    geaendert = {s for s in ist if abs(out[s] - ist[s]) > 0.006}        # 0,006: gerundete Anzeige gilt als unverändert
+    uebrig = [s for s in ist if s not in geaendert]
+    rest = 100.0 - sum(out[s] for s in geaendert)
+    u = sum(ist[s] for s in uebrig)
+    if ausgleich and geaendert and uebrig and u > 0 and rest >= 0:
+        for s in uebrig:
+            out[s] = ist[s] * rest / u
+    return out
+
+
+def sektor_skalieren(df: pd.DataFrame, anteile: dict, ziel_summe: float, basis: float) -> pd.DataFrame:
+    """Titel je Sektor proportional auf den neuen Sektoranteil bringen: Betrag × (Ziel des Sektors / Ist des Sektors),
+    dann ganze Stücke (abgerundet). Das Verhältnis der Titel innerhalb des Sektors bleibt gleich.
+    ziel_summe = Aktien gesamt in USD nach dem Anpassen (anteile in % davon); basis = USD-Basis von «Gewicht %»."""
+    df = df.copy().reset_index(drop=True)
+    ist, summe = sektor_ist(df)
+    wert_s = {s: ist[s] * summe / 100 for s in ist}
     for i in df.index:
-        pct = _num(df.at[i, "Gewicht %"])
-        if _txt(df.at[i, "Fix"]) == "%" and pct is not None and p_ak > 0:
-            df.at[i, "Gewicht %"] = _fz(pct / p_ak if ss.get("an_bezug") == AKTIENTEIL else pct * p_ak, 2)
-    ss["an_aktien"] = df
-    _basis_aenderung()
+        b = _num(df.at[i, "Betrag USD"]) or 0.0
+        s = _sektor_von(df.at[i, "Sektor"])
+        if not _txt(df.at[i, "Ticker"]).strip() or b <= 0 or s not in anteile or wert_s.get(s, 0) <= 0:
+            continue
+        ziel = b * (ziel_summe * anteile[s] / 100) / wert_s[s]
+        kurs = _num(df.at[i, "Kurs USD"])
+        if kurs:
+            menge = math.floor(ziel / kurs + 1e-9)
+            betrag = menge * kurs
+            df.at[i, "Menge"] = _fz_menge(menge)
+        else:
+            betrag = ziel
+        df.at[i, "Betrag USD"] = _fz(betrag)
+        df.at[i, "Gewicht %"] = _fz(betrag / basis * 100, 2) if basis > 0 else ""
+        if _txt(df.at[i, "Fix"]) != "%":           # %-Zeilen bleiben %-fix (mit neuem Gewicht), sonst gilt die neue Stückzahl
+            df.at[i, "Fix"] = "Stück" if kurs else "USD"
+    return df
+
+
+def _sek_form(sfx: str, aktion: str, ziele: dict):
+    """Formular «Sektorgewichtung» abgeschickt: anwenden, Ziele der Sektorallokation einsetzen oder auf Ist zurücksetzen."""
+    ss = st.session_state
+    ss["an_sek_ver"] = ss.get("an_sek_ver", 0) + 1
+    if aktion == "ist":
+        ss.pop("an_sek_vorschlag", None)
+        return
+    df = ss["an_aktien"]
+    ist, summe = sektor_ist(df)
+    if aktion == "ziel":
+        z = {s: ziele.get(s) for s in ist if s in ziele and ziele.get(s) is not None}
+        tot = sum(z.values())
+        if tot > 0:
+            ss["an_sek_vorschlag"] = dict(ver=ss.get("an_ak_ver", 0), werte={s: round(v / tot * 100, 2) for s, v in z.items()},
+                                          roh=z)
+        return
+    zeilen = ss.get("an_sek_zeilen") or []
+    neu = {s: v for s, v in zeilen}
+    for i, w in ((ss.get(f"an_sek_ed{sfx}") or {}).get("edited_rows") or {}).items():
+        if int(i) < len(zeilen) and "Neu %" in w:
+            neu[zeilen[int(i)][0]] = _num(w["Neu %"])
+    neu = {s: v for s, v in neu.items() if s in ist}
+    if not ist:
+        return
+    b = budget(ss)
+    ziel_summe = b["budget_a"] if ss.get(f"an_sek_summe{sfx}") == "budget" and b["budget_a"] > 0 else summe
+    ausgleich = bool(ss.get(f"an_sek_ausgl{sfx}", True))
+    anteile = sektor_anteile(ist, neu, ausgleich)
+    if ausgleich and abs(sum(anteile.values()) - 100) > 0.05:
+        _meldung(f"Die Sektoranteile ergeben {ui.de(sum(anteile.values()), 1)} % – die geänderten Sektoren allein sind schon über "
+                 "100 % (oder alle wurden geändert), darum konnte nicht ausgeglichen werden. Die Aktiensumme ändert sich entsprechend.")
+    total = ziel_summe * sum(anteile.values()) / 100
+    if b["kapital"] > 0 and total > b["budget_a"] + 0.5:     # nie übers Aktienbudget: alles im gleichen Verhältnis kürzen
+        f = b["budget_a"] / total
+        anteile = {s: v * f for s, v in anteile.items()}
+        _meldung(f"Die Sektoranteile ergeben zusammen mehr als das Aktienbudget ({ui.de(b['budget_a'], 0)} USD) – alle Sektoren "
+                 f"wurden im gleichen Verhältnis auf {ui.de(f * 100, 1)} % gekürzt.")
+    ss["an_aktien"] = _aktien_df(sektor_skalieren(df, anteile, ziel_summe, _basis(ss)))
+    ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
+    ss.pop("an_sek_vorschlag", None)
+    neu_ist, neu_summe = sektor_ist(ss["an_aktien"])
+    geaendert = [s for s in ist if abs(neu_ist.get(s, 0) - ist[s]) >= 0.05]
+    _meldung("Sektorgewichte angewendet" + (f" ({', '.join(geaendert)})" if geaendert else " – nichts geändert")
+             + f": Aktien gesamt {ui.de(summe, 0)} → {ui.de(neu_summe, 0)} USD. Titel innerhalb eines Sektors behalten ihr Verhältnis "
+               "(ganze Stücke, abgerundet).")
+
+
+def _sektor_bereich(ctx):
+    """Sektorgewichtung des aktiven Analyseportfolios: automatisch gerechnet, im Formular anpassbar."""
+    import sektoren as SK
+
+    ss = st.session_state
+    df = ss["an_aktien"]
+    ist, summe = sektor_ist(df)
+    index = ctx.sek_index["gewichte"]
+    try:
+        ziele_sa = SK.ziele(SK.lade_allokation(ctx.tabellen.get("sektor_allokation"))["sektoren"], index)
+    except Exception:  # noqa: BLE001
+        ziele_sa = {}
+    ziele = {s: (ziele_sa.get(s) if ziele_sa.get(s) is not None else index.get(s)) for s in C.SEKTOREN}
+    with st.expander("Sektorgewichtung dieses Portfolios – automatisch gerechnet, anpassbar", icon=":material/donut_small:",
+                     expanded=bool(ss.get("an_sek_vorschlag"))):
+        if not ist:
+            st.caption("Sobald Aktien mit Betrag eingetragen (und übernommen) sind, erscheint hier die Sektorgewichtung.")
+            return
+        vs = ss.get("an_sek_vorschlag")
+        if vs and vs.get("ver") != ss.get("an_ak_ver", 0):
+            vs = None
+            ss.pop("an_sek_vorschlag", None)
+        titel: dict[str, list] = {}
+        for t, s, b_ in zip(df["Ticker"], df["Sektor"], df["Betrag USD"]):
+            if _txt(t).strip() and (_num(b_) or 0) > 0:
+                titel.setdefault(_sektor_von(s), []).append((_txt(t).strip(), _num(b_)))
+        zeilen, start = [], []
+        for s, p in ist.items():
+            tt = sorted(titel.get(s, []), key=lambda x: -x[1])
+            ws = sum(w for _, w in tt)
+            neu = (vs["werte"].get(s, 0.0) if vs else round(p, 2))
+            start.append((s, neu))
+            zeilen.append({"Sektor": s, "Titel (Anteil im Sektor)": " · ".join(f"{t} {ui.de(w / ws * 100, 0)} %" for t, w in tt),
+                           "Ist %": round(p, 2), "Index %": round(index.get(s), 2) if index.get(s) is not None else None,
+                           "Ziel %": round(ziele_sa[s], 2) if ziele_sa.get(s) is not None else None,
+                           "Ist − Ziel (Pp.)": round(p - ziele_sa[s], 2) if ziele_sa.get(s) is not None else None, "Neu %": neu})
+        ss["an_sek_zeilen"] = start
+        fehlen = [s for s in C.SEKTOREN if s not in ist and (ziele.get(s) or 0) > 0]
+        b = budget(ss)
+        st.caption(f"Anteile in % der investierten Aktien ({ui.de(summe, 0)} USD) – wie die Ziele der Sektorallokation "
+                   "(Index + geplante Abweichung). **Neu %** ändern und «Sektorgewichte anwenden»: Die Titel des Sektors werden "
+                   "im gleichen Verhältnis grösser bzw. kleiner, ganze Stücke abgerundet.")
+        if vs:
+            st.info("Ziele der Sektorallokation in «Neu %» eingesetzt – prüfen und mit «Sektorgewichte anwenden» übernehmen."
+                    + (" Sektoren ohne Titel fehlen, darum wurden die Ziele der übrigen auf 100 % hochgerechnet." if fehlen else ""),
+                   icon=":material/info:")
+        skey = f"{ss.get('an_ver', 0)}.{ss.get('an_ak_ver', 0)}.{ss.get('an_sek_ver', 0)}"
+        with st.form("an_sek_form", border=False, enter_to_submit=False):
+            st.data_editor(pd.DataFrame(zeilen), hide_index=True, width="stretch", key=f"an_sek_ed{skey}", num_rows="fixed",
+                           disabled=["Sektor", "Titel (Anteil im Sektor)", "Ist %", "Index %", "Ziel %", "Ist − Ziel (Pp.)"],
+                           column_config={
+                               "Titel (Anteil im Sektor)": st.column_config.TextColumn(width="large"),
+                               "Ist %": st.column_config.NumberColumn(format="%.2f %%"),
+                               "Index %": st.column_config.NumberColumn(format="%.2f %%", help="S&P-500-Gewicht (Sektorallokation)"),
+                               "Ziel %": st.column_config.NumberColumn(format="%.2f %%",
+                                                                       help="Index + geplante Abweichung (Seite Sektorallokation); "
+                                                                            "leer = nur Richtung festgelegt"),
+                               "Ist − Ziel (Pp.)": st.column_config.NumberColumn(format="%.2f"),
+                               "Neu %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.2f",
+                                                                      help="Gewünschter Anteil am Aktienteil")})
+            o1, o2 = st.columns([1.3, 1])
+            o1.checkbox("Übrige Sektoren gleichen aus (Summe bleibt 100 %)", value=True, key=f"an_sek_ausgl{skey}",
+                        help="Ein: Nur die geänderten Sektoren gelten wie eingegeben, die anderen werden im gleichen Verhältnis "
+                             "kleiner bzw. grösser. Aus: Jeder Sektor gilt genau wie eingegeben – die Aktiensumme ändert sich.")
+            o2.radio("Aktien gesamt danach", ["gleich", "budget"], horizontal=True, key=f"an_sek_summe{skey}",
+                     format_func=lambda x: f"wie jetzt ({ui.de(summe, 0)} USD)" if x == "gleich"
+                     else f"ganzes Aktienbudget ({ui.de(b['budget_a'], 0)} USD)",
+                     help="«Ganzes Aktienbudget» verteilt Kapital × Aktien-% nach den Sektoranteilen – so lässt sich das "
+                          "Budget voll investieren, ohne die Struktur zu ändern.")
+            k1, k2, k3, _ = st.columns([1.2, 1.5, 1, 0.8])
+            k1.form_submit_button("Sektorgewichte anwenden", type="primary", icon=":material/tune:", width="stretch",
+                                  on_click=_sek_form, args=(skey, "anwenden", ziele))
+            k2.form_submit_button("Ziele der Sektorallokation einsetzen", icon=":material/target:", width="stretch",
+                                  on_click=_sek_form, args=(skey, "ziel", ziele),
+                                  help="Füllt «Neu %» mit den Zielen (ohne Zielzahl: Indexgewicht) – angewendet wird erst danach")
+            k3.form_submit_button("Auf Ist zurücksetzen", icon=":material/restart_alt:", width="stretch",
+                                  on_click=_sek_form, args=(skey, "ist", ziele))
+        st.caption("Wirkt auf die übernommene Eingabe oben – offene Änderungen in der Aktien-Tabelle zuerst übernehmen. "
+                   + (f"Ohne Titel: {', '.join(f'{s} (Ziel {ui.de(ziele[s], 1)} %)' for s in fehlen)} – dafür oben Titel "
+                      "hinzufügen." if fehlen else "Alle Sektoren mit Zielgewicht sind vertreten."))
 
 
 def _ak_aenderung(key: str):
@@ -773,11 +999,6 @@ def _tr_aenderung(key: str):
                      f"– Treasury-Budget ({ui.de(float(ss.get('an_p_tr') or 0), 1)} % = {ui.de(b_t, 0)} USD) ausgeschöpft.")
     ss["an_treas"] = _treas_df(df.reset_index(drop=True))
     ss["an_tr_ver"] = ss.get("an_tr_ver", 0) + 1
-
-
-def _feld_format(key: str):
-    v = _num(st.session_state.get(key))
-    st.session_state[key] = ui.de(v, 0) if v is not None else ""
 
 
 def _leer_treas():
@@ -1106,8 +1327,14 @@ def _portfolio_leiste(ctx, tab: dict, kapital_std: float, alloc: dict, gs: pd.Da
         dirty = _dirty(pid)
         speichern = c3.button("Speichern", type="primary" if dirty else "secondary", icon=":material/save:", width="stretch",
                               disabled=ctx.nur_lesen or not dirty, key="an_pf_save",
-                              help="Überschreibt dieses Portfolio (frühere Versionen bleiben in der Google-Tabelle)" if ent.get("gespeichert")
-                              else "Legt das Portfolio im Team an")
+                              help=("Überschreibt dieses Portfolio (frühere Versionen bleiben in der Google-Tabelle)" if ent.get("gespeichert")
+                                    else "Legt das Portfolio im Team an")
+                              + ". Noch nicht übernommene Eingaben unten zuerst übernehmen – oder gleich «Übernehmen & speichern».")
+        if ss.pop("an_pf_save_req", False) and not ctx.nur_lesen:     # «Übernehmen & speichern» im Eingabe-Formular
+            if dirty:
+                speichern = True
+            else:
+                st.toast("Übernommen – es gab keine Änderungen zum Speichern.", icon=":material/check:")
         c4.button("Verwerfen" if ent.get("gespeichert") else "Schliessen", icon=":material/undo:" if ent.get("gespeichert") else ":material/close:",
                   width="stretch", key="an_pf_verwerfen", on_click=_pf_verwerfen, args=args,
                   disabled=ent.get("gespeichert") and not dirty,
@@ -1625,26 +1852,17 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
         uebernahme.bereich(ctx, fred, gespeichert)
 
-    # --- Eingabe (rechnet sofort, berechnet wird mit «Kennzahlen berechnen») ---------------
+    # --- Eingabe (Update 9): alles in einem Formular – getippt wird ohne Unterbruch, gerechnet erst mit «Übernehmen» ----------
     import portfolio as P2
 
     v = ss["an_ver"]
+    sfx = f"{v}.{ss.get('an_ak_ver', 0)}.{ss.get('an_tr_ver', 0)}.{ss.get('an_form_ver', 0)}"
+    lo_a, hi_a = ctx.alloc["baender"]["aktien"]
+    lo_t, hi_t = ctx.alloc["baender"]["treasuries"]
+    lo_c, hi_c = ctx.alloc["baender"]["cash"]
+    b = budget(ss)
     with st.container(border=True):
         st.markdown("**Aufteilung & Budget** · jeder Kauf verringert das verfügbare Budget seiner Anlageklasse")
-        a1, a2, a3, a4 = st.columns([1.3, 1, 1, 1])
-        a1.text_input("Kapital (USD)", key="an_kap_txt", on_change=_kap_aenderung,
-                      help="Zeilen mit fixem Gewicht % passen ihre Stückzahl automatisch an")
-        lo_a, hi_a = ctx.alloc["baender"]["aktien"]
-        lo_t, hi_t = ctx.alloc["baender"]["treasuries"]
-        lo_c, hi_c = ctx.alloc["baender"]["cash"]
-        a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", key="an_p_ak",
-                        on_change=_basis_aenderung,
-                        help=f"IPS-Band {lo_a:g}–{hi_a:g} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} %")
-        a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", key="an_p_tr",
-                        help=f"IPS-Band {lo_t:g}–{hi_t:g} % · Taktik {ui.de(ctx.alloc['anleihen'], 1)} %")
-        a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", key="an_p_ca",
-                        help=f"IPS-Band {lo_c:g}–{hi_c:g} % · Taktik {ui.de(ctx.alloc['cash'], 1)} %")
-        b = budget(ss)
 
         def _rest(x):
             return f"<span style='color:{'#B93A32' if x < -0.5 else '#2F855A'}'>{ui.de(x, 0)} USD</span>"
@@ -1666,74 +1884,90 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             st.error("Budget überschritten (z. B. nach Senken eines Prozentsatzes) – Stück bzw. Beträge reduzieren.", icon=":material/block:")
         for m_ in ss.pop("an_budget_meld", []):
             st.info(m_, icon=":material/content_cut:")
-        l, r = st.columns([1.35, 1])
-        with l:
-            st.markdown("**Aktien** · Ticker oder Firmenname eintippen, dann Stück, Betrag *oder* Gewicht % – der Rest rechnet sich")
-            st.radio("«Gewicht %» bezogen auf", [GESAMT, AKTIENTEIL], key="an_bezug", horizontal=True, on_change=_bezug_aenderung,
-                     format_func=lambda x: "Gesamtportfolio (Kapital)" if x == GESAMT else "Aktienteil (Kapital × Aktien-%)",
-                     help="Gesamtportfolio: 2 % = 2 % des Kapitals (wie Titel-Maximum im IPS). Aktienteil: 2 % = 2 % des "
-                          "Aktienbudgets (wie die Sektorgewichte). Beim Umstellen bleiben die Beträge gleich.")
-            liste = P2.sp500_liste()
-            if liste:
-                c1, c2, c2b, c3 = st.columns([2.1, 0.7, 0.7, 1.1])
-                such = c1.selectbox("Titel suchen", sorted(liste), index=None, key="an_such", placeholder="z. B. MSFT oder Microsoft",
-                                    format_func=lambda t: f"{t} – {liste[t][0]} · {liste[t][1]}", label_visibility="collapsed")
-                stk = c2.number_input("Stück", min_value=0, step=10, key="an_such_stk", label_visibility="collapsed",
-                                      help="Stückzahl")
-                pz = c2b.number_input("%", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", key="an_such_pct",
-                                      label_visibility="collapsed", help="oder Gewicht % (hat Vorrang vor Stück)")
-                if such:
-                    k_ = _letzte_kurse([such]).get(such)
-                    bas_ = _basis(ss)
-                    stk_ = math.floor(bas_ * pz / 100 / k_) if pz and k_ and bas_ > 0 else stk
-                    c3.button(f"+ {such}" + (f" · {ui.de(stk_ * k_, 0)} USD" if k_ and stk_ else ""), on_click=_such_hinzu,
-                              width="stretch", type="primary", key="an_such_b")
-                    st.caption(f"{liste[such][0]} · {liste[such][1]} · letzter Kurs {_fz(k_, 2) or '–'} USD"
-                               + (f" → {ui.de(pz, 2)} % = {ui.de(stk_, 0)} Stück = **{ui.de(stk_ * k_, 0)} USD**" if k_ and pz and stk_
-                                  else f" → {ui.de(stk, 0)} Stück = **{ui.de(stk * k_, 0)} USD**" if k_ and stk else ""))
-                else:
-                    c3.caption("Stück oder % eingeben, dann hinzufügen")
-            ak_key = f"an_ed_a{ss.get('an_ak_ver', 0)}"
-            st.data_editor(ss["an_aktien"].assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch", key=ak_key,
-                           on_change=_ak_aenderung, args=(ak_key,), disabled=["Name", "Sektor", "Kurs USD", "Fix"],
-                           column_config={
-                               "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
-                               "Ticker": st.column_config.TextColumn(help="Ticker (z. B. MSFT, BRK-B) oder Firmenname (z. B. Microsoft)"),
-                               "Name": st.column_config.TextColumn(width="medium"),
-                               "Kurs USD": st.column_config.TextColumn(help="letzter Schlusskurs (Yahoo Finance)"),
-                               "Menge": st.column_config.TextColumn("Stück", help="Stückzahl → Betrag wird berechnet"),
-                               "Betrag USD": st.column_config.TextColumn(help="Betrag → ganze Stücke (abgerundet), Betrag danach exakt"),
-                               "Gewicht %": st.column_config.TextColumn(
-                                   help="Anteil am Gesamtportfolio bzw. Aktienteil (Umschalter oben). Eingetippt = fix: ändern sich "
-                                        "Kapital oder Aktien-%, werden die Stück neu berechnet. Sonst zeigt die Spalte das Ist-Gewicht."),
-                               "Fix": st.column_config.TextColumn(width="small",
-                                                                  help="Was vorgegeben ist: % (Gewicht bleibt, Stück passen sich an), "
-                                                                       "Stück oder USD (Betrag bleibt)")})
-            n_ak = sum(1 for t in ss["an_aktien"]["Ticker"] if _txt(t).strip())
-            summe = sum(_num(b_) or 0 for b_ in ss["an_aktien"]["Betrag USD"])
-            s_pct = sum(_num(p_) or 0 for p_ in ss["an_aktien"]["Gewicht %"])
-            ziel_pct = 100.0 if ss.get("an_bezug") == AKTIENTEIL else float(ss.get("an_p_ak") or 0)
-            st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD = {ui.de(s_pct, 1)} % von {ui.de(ziel_pct, 1)} % "
-                       f"({'Aktienteil' if ss.get('an_bezug') == AKTIENTEIL else 'Aktienquote am Gesamtportfolio'}) · "
-                       "Zeile entfernen: Häkchen in der Spalte ✕ (oder Ticker leeren) · Kurse = letzter Schlusskurs; "
-                       "gekauft wird am 01.12. zum Eröffnungskurs.")
-        with r:
-            st.markdown("**Treasuries** · Betrag je Laufzeitband – für die Übernahme ins Portfolio Kupon und Fälligkeit ergänzen")
-            tr_key = f"an_ed_t{ss.get('an_tr_ver', 0)}"
-            st.data_editor(_treas_df(ss["an_treas"]).assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch",
-                           key=tr_key, on_change=_tr_aenderung, args=(tr_key,),
-                           column_config={
-                               "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
-                               "Laufzeit": st.column_config.SelectboxColumn(options=list(PROXY),
-                                                                            help="Mit Fälligkeit: automatisch aus der Restlaufzeit"),
-                               "Betrag USD": st.column_config.TextColumn(help="z. B. 3000000 – wird als 3'000'000 angezeigt"),
-                               "Kupon %": st.column_config.NumberColumn(min_value=0.0, max_value=15.0, step=0.125, format="%.3f"),
-                               "Fälligkeit": st.column_config.DateColumn(format="DD.MM.YYYY"),
-                               "Kurs %": st.column_config.NumberColumn(min_value=0.0, format="%.3f",
-                                                                       help="leer = Preis aus der Zinskurve am Handelstag"),
-                               "Bezeichnung": st.column_config.TextColumn(help="z. B. CUSIP oder «UST 4,25 % 15.11.2029»; "
-                                                                               "leer = automatisch")})
-            st.caption("Treasuries höchstens Kapital × Treasury-%. Zeile entfernen: Häkchen in der Spalte ✕.")
+
+        with st.form("an_eingabe_form", border=False, enter_to_submit=False):
+            a1, a2, a3, a4 = st.columns([1.3, 1, 1, 1])
+            a1.text_input("Kapital (USD)", value=_txt(ss.get("an_kap_txt")), key=f"an_f_kap{sfx}",
+                          help="Zeilen mit fixem Gewicht % passen ihre Stückzahl beim Übernehmen automatisch an")
+            a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", value=float(ss.get("an_p_ak") or 0),
+                            key=f"an_f_pak{sfx}", help=f"IPS-Band {lo_a:g}–{hi_a:g} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} %")
+            a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
+                            value=float(ss.get("an_p_tr") or 0), key=f"an_f_ptr{sfx}",
+                            help=f"IPS-Band {lo_t:g}–{hi_t:g} % · Taktik {ui.de(ctx.alloc['anleihen'], 1)} %")
+            a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f", value=float(ss.get("an_p_ca") or 0),
+                            key=f"an_f_pca{sfx}", help=f"IPS-Band {lo_c:g}–{hi_c:g} % · Taktik {ui.de(ctx.alloc['cash'], 1)} %")
+            l, r = st.columns([1.35, 1])
+            with l:
+                st.markdown("**Aktien** · Ticker oder Firmenname eintippen, dann Stück, Betrag *oder* Gewicht % – der Rest rechnet "
+                            "sich beim Übernehmen")
+                st.radio("«Gewicht %» bezogen auf", [GESAMT, AKTIENTEIL], horizontal=True, key=f"an_f_bez{sfx}",
+                         index=1 if ss.get("an_bezug") == AKTIENTEIL else 0,
+                         format_func=lambda x: "Gesamtportfolio (Kapital)" if x == GESAMT else "Aktienteil (Kapital × Aktien-%)",
+                         help="Gesamtportfolio: 2 % = 2 % des Kapitals (wie Titel-Maximum im IPS). Aktienteil: 2 % = 2 % des "
+                              "Aktienbudgets (wie die Sektorgewichte). Beim Umstellen bleiben die Beträge gleich; % in der Tabelle "
+                              "gelten im neuen Bezug.")
+                liste = P2.sp500_liste()
+                if liste:
+                    c1, c2, c2b = st.columns([2.4, 0.8, 0.8])
+                    c1.selectbox("Titel hinzufügen", sorted(liste), index=None, key=f"an_f_such{sfx}",
+                                 placeholder="Titel hinzufügen: z. B. MSFT oder Microsoft",
+                                 format_func=lambda t: f"{t} – {liste[t][0]} · {liste[t][1]}", label_visibility="collapsed")
+                    c2.number_input("Stück", min_value=0, step=10, value=0, key=f"an_f_stk{sfx}", label_visibility="collapsed",
+                                    help="Stückzahl für den gewählten Titel")
+                    c2b.number_input("%", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=0.0, key=f"an_f_pct{sfx}",
+                                     label_visibility="collapsed", help="oder Gewicht % (hat Vorrang vor Stück)")
+                st.data_editor(ss["an_aktien"].assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch",
+                               key=f"an_ed_a{sfx}", disabled=["Name", "Sektor", "Kurs USD", "Fix"],
+                               column_config={
+                                   "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
+                                   "Ticker": st.column_config.TextColumn(help="Ticker (z. B. MSFT, BRK-B) oder Firmenname (z. B. Microsoft)"),
+                                   "Name": st.column_config.TextColumn(width="medium"),
+                                   "Kurs USD": st.column_config.TextColumn(help="letzter Schlusskurs (Yahoo Finance)"),
+                                   "Menge": st.column_config.TextColumn("Stück", help="Stückzahl → Betrag wird berechnet"),
+                                   "Betrag USD": st.column_config.TextColumn(help="Betrag → ganze Stücke (abgerundet), Betrag danach exakt"),
+                                   "Gewicht %": st.column_config.TextColumn(
+                                       help="Anteil am Gesamtportfolio bzw. Aktienteil (Umschalter oben). Eingetippt = fix: ändern sich "
+                                            "Kapital oder Aktien-%, werden die Stück neu berechnet. Sonst zeigt die Spalte das Ist-Gewicht."),
+                                   "Fix": st.column_config.TextColumn(width="small",
+                                                                      help="Was vorgegeben ist: % (Gewicht bleibt, Stück passen sich an), "
+                                                                           "Stück oder USD (Betrag bleibt)")})
+            with r:
+                st.markdown("**Treasuries** · Betrag je Laufzeitband – für die Übernahme ins Portfolio Kupon und Fälligkeit ergänzen")
+                st.data_editor(_treas_df(ss["an_treas"]).assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch",
+                               key=f"an_ed_t{sfx}",
+                               column_config={
+                                   "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
+                                   "Laufzeit": st.column_config.SelectboxColumn(options=list(PROXY),
+                                                                                help="Mit Fälligkeit: automatisch aus der Restlaufzeit"),
+                                   "Betrag USD": st.column_config.TextColumn(help="z. B. 3000000 – wird als 3'000'000 angezeigt"),
+                                   "Kupon %": st.column_config.NumberColumn(min_value=0.0, max_value=15.0, step=0.125, format="%.3f"),
+                                   "Fälligkeit": st.column_config.DateColumn(format="DD.MM.YYYY"),
+                                   "Kurs %": st.column_config.NumberColumn(min_value=0.0, format="%.3f",
+                                                                           help="leer = Preis aus der Zinskurve am Handelstag"),
+                                   "Bezeichnung": st.column_config.TextColumn(help="z. B. CUSIP oder «UST 4,25 % 15.11.2029»; "
+                                                                                   "leer = automatisch")})
+                st.caption("Treasuries höchstens Kapital × Treasury-%. Zeile entfernen: Häkchen in der Spalte ✕.")
+            k1, k2, k3, k4 = st.columns([1.2, 1.3, 1.1, 2])
+            k1.form_submit_button("Änderungen übernehmen", type="primary", icon=":material/check:", width="stretch",
+                                  on_click=_form_anwenden, args=(sfx, "uebernehmen"),
+                                  help="Rechnet alle Eingaben (Aufteilung, Tabellen, Suche) auf einmal")
+            k2.form_submit_button("Übernehmen & speichern", icon=":material/save:", width="stretch", disabled=ctx.nur_lesen,
+                                  on_click=_form_anwenden, args=(sfx, "speichern"),
+                                  help="Übernimmt die Eingaben und speichert das Analyseportfolio fürs Team")
+            k3.form_submit_button("Eingaben verwerfen", icon=":material/undo:", width="stretch",
+                                  on_click=_form_anwenden, args=(sfx, "zurueck"),
+                                  help="Noch nicht übernommene Eingaben verwerfen (der übernommene Stand bleibt)")
+            k4.caption("Tippen und mehrere Werte ändern, so viel du willst – gerechnet wird erst beim Übernehmen. "
+                       "Der Knopf «Speichern» oben speichert nur Übernommenes.")
+        n_ak = sum(1 for t in ss["an_aktien"]["Ticker"] if _txt(t).strip())
+        summe = sum(_num(b_) or 0 for b_ in ss["an_aktien"]["Betrag USD"])
+        s_pct = sum(_num(p_) or 0 for p_ in ss["an_aktien"]["Gewicht %"])
+        ziel_pct = 100.0 if ss.get("an_bezug") == AKTIENTEIL else float(ss.get("an_p_ak") or 0)
+        st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD = {ui.de(s_pct, 1)} % von {ui.de(ziel_pct, 1)} % "
+                   f"({'Aktienteil' if ss.get('an_bezug') == AKTIENTEIL else 'Aktienquote am Gesamtportfolio'}) · "
+                   "Zeile entfernen: Häkchen in der Spalte ✕ (oder Ticker leeren) · Kurse = letzter Schlusskurs; "
+                   "gekauft wird am 01.12. zum Eröffnungskurs.")
+        _sektor_bereich(ctx)
         o1, o1b, o2, o3 = st.columns([1.2, 1.5, 1.1, 1])
         jahre = o1.segmented_control("Zeitraum der Kursdaten", [1, 2, 3, 5], default=1, format_func=lambda j: f"{j} J.",
                                      key=f"an_j{v}") or 1
