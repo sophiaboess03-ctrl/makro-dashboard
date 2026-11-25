@@ -54,8 +54,8 @@ class PDF(FPDF):
         self.cell(0, 6, f"Seite {self.page_no()}", align="R")
 
 
-def _neu(titel_kurz: str) -> PDF:
-    pdf = PDF(orientation="P", unit="mm", format="A4")
+def _neu(titel_kurz: str, quer: bool = False) -> PDF:
+    pdf = PDF(orientation="L" if quer else "P", unit="mm", format="A4")
     pdf.titel_kurz = titel_kurz
     pdf.set_margins(16, 14, 16)
     pdf.set_auto_page_break(True, margin=16)
@@ -112,7 +112,8 @@ def _text(pdf, text, gross=9, fett=False, farbe=None):
     pdf.set_text_color(*INK)
 
 
-def _tabelle(pdf, kopf, zeilen, breiten=None, gross=7.8):
+def _tabelle(pdf, kopf, zeilen, breiten=None, gross=7.8, farben=None):
+    """farben (optional): je Zeile eine Liste mit RGB-Hintergrund oder None je Zelle."""
     from fpdf.fonts import FontFace
 
     pdf.set_font("Helvetica", "", gross)
@@ -124,10 +125,12 @@ def _tabelle(pdf, kopf, zeilen, breiten=None, gross=7.8):
         r = t.row()
         for k in kopf:
             r.cell(_t(k))
-        for z in zeilen:
+        for n, z in enumerate(zeilen):
             r = t.row()
-            for v in z:
-                r.cell(_t(v))
+            fz = farben[n] if farben is not None and n < len(farben) else None
+            for j, v in enumerate(z):
+                f = fz[j] if fz is not None and j < len(fz) else None
+                r.cell(_t(v), style=FontFace(fill_color=f) if f else None)
     pdf.ln(1)
     pdf.set_font("Helvetica", "", 9)
 

@@ -283,6 +283,15 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
             st.caption(f"Cash: {_usd(cash)} (davon Zins auf Cash {_usd(cash_zins)}) · realisierte Gewinne: {_usd(realisiert)} · "
                        f"Kuponerträge (vereinfacht, seit Kauf): {_usd(zinsen)}. Treasuries: Näherung über die FRED-Zinskurve mit "
                        "konstantem Abstand seit Kauf.")
+            if (d["klasse"] == "Treasury").any():          # Update 14: Kupons, Marchzins, Ø Restlaufzeit, Konvexität
+                import anleihen as AN
+
+                kz_t = AN.kennzahlen_kurz(AN.bestand_tabelle(b))
+                if kz_t:
+                    st.markdown(f"**Treasuries im Bestand** · {kz_t['n']} Anleihen, {_usd(kz_t['betrag'])}")
+                    k8 = AN.kpis_kurz(kz_t, bestand=True)
+                    ui.kopf_kpis(k8[:4])
+                    ui.kopf_kpis(k8[4:])
             gross = d.sort_values("Gewicht", ascending=False).iloc[0]
             if gross["klasse"] == "Aktie" and gross["Gewicht"] > 10:
                 st.warning(f"Klumpenrisiko: {gross['ticker']} macht {ui.de(gross['Gewicht'], 1)} % des Portfolios aus.")

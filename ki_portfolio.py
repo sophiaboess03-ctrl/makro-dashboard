@@ -477,7 +477,7 @@ def material(ctx, qid: str, fred: dict, lade_kurse) -> dict | None:
             kor = R[a_t].corr()
             import numpy as np
 
-            oben = kor.where(np.triu(np.ones(kor.shape, dtype=bool), 1)).stack()
+            oben = kor.where(np.triu(np.ones(kor.shape, dtype=bool), 1)).stack().dropna()
             z_.append(f"Mittlere paarweise Korrelation der Aktien {_de(float(oben.mean()), 2)}")
             z_.append("Am stärksten verbunden: " + ", ".join(f"{a}/{b} {_de(v, 2)}" for (a, b), v in oben.sort_values(ascending=False).head(8).items()))
         b_ = erg["beitrag"].sort_values(ascending=False)

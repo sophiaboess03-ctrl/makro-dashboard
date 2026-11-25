@@ -405,6 +405,71 @@ def stress_anleihen(df: pd.DataFrame, par: dict) -> float:
                                           + 0.5 * z["konv"] * (dy_szenario(z["T"], par) / 1e4) ** 2 * 100) for _, z in df.iterrows()))
 
 
+def konvexitaet(kupon: float, T: float, y: float) -> float:
+    """Konvexität (Jahre²) numerisch aus dem Preis bei ±10 bp."""
+    if T <= 0:
+        return 0.0
+    p0, pm, pp = P.preis(kupon, T, y), P.preis(kupon, T, y - 0.1), P.preis(kupon, T, y + 0.1)
+    return (pm + pp - 2 * p0) / (p0 * 0.001 ** 2) if p0 else 0.0
+
+
+def kennzahlen_kurz(df: pd.DataFrame) -> dict | None:
+    """Betragsgewichtete Kurz-Kennzahlen des Treasury-Teils (aus anleihen_tabelle)."""
+    if df is None or not len(df) or not df["betrag"].sum():
+        return None
+    w = df["betrag"] / df["betrag"].sum()
+    return dict(n=len(df), betrag=float(df["betrag"].sum()), nominal=float(df["nominal"].sum()),
+                kupon=float((df["kupon"] * w).sum()), kupons=float(df["kupons_sim"].sum()), marchzins=float(df["marchzins"].sum()),
+                kupon_jahr=float((df["nominal"] * df["kupon"] / 100).sum()),
+                restlaufzeit=float((df["T"] * w).sum()), duration=float((df["D"] * w).sum()), konv=float((df["konv"] * w).sum()),
+                rendite=float((df["y"] * w).sum()), dv01=float(df["dv01"].sum()),
+                kuerzeste=float(df["T"].min()), laengste=float(df["T"].max()))
+
+
+def kpis_kurz(kz: dict, kauf: pd.Timestamp | None = None, ende: pd.Timestamp | None = None, bench: dict | None = None,
+              bestand: bool = False, konv_b: float | None = None) -> list[tuple[str, str, str]]:
+    """8 Kacheln: Kupons, Marchzins, Ø Restlaufzeit, Konvexität (+ Ø Kupon, Rendite, Duration, DV01)."""
+    kauf = kauf or max(pd.Timestamp(C.SIMULATION_START), pd.Timestamp.today().normalize())
+    ende = ende or pd.Timestamp(C.SIMULATION_ENDE)
+    return [
+        ("Kupons bis " + f"{ende:%d.%m.}", _usd(kz["kupons"]),
+         ("seit Kauf" if bestand else f"Zahlungen {kauf:%d.%m.} – {ende:%d.%m.%Y}") + f" · {_usd(kz['kupon_jahr'])} pro Jahr"),
+        ("Marchzins " + ("bezahlt" if bestand else f"beim Kauf {kauf:%d.%m.}"), _usd(kz["marchzins"]),
+         "aufgelaufener Zins seit dem letzten Kupon (Dirty − Clean)"),
+        ("Ø Restlaufzeit", f"{ui.de(kz['restlaufzeit'], 2)} J.",
+         f"{ui.de(kz['kuerzeste'], 1)} – {ui.de(kz['laengste'], 1)} J." + (f" · Benchmark {ui.de(bench['laufzeit'], 1)} J." if bench else "")),
+        ("Konvexität", ui.de(kz["konv"], 1), (f"Benchmark {ui.de(konv_b, 1)} · " if konv_b is not None else "")
+         + "betragsgewichtet, ½ × K × Δy²"),
+        ("Ø Kupon", f"{ui.de(kz['kupon'], 3)} %", f"{kz['n']} Anleihen · Nominal {_usd(kz['nominal'])}"),
+        ("Ø Rendite (YTM)", f"{ui.de(kz['rendite'], 2)} %", "betragsgewichtet"),
+        ("Mod. Duration", f"{ui.de(kz['duration'], 2)} J." , f"Benchmark {ui.de(bench['duration'], 2)} J." if bench else ""),
+        ("DV01", _usd(kz["dv01"]), "Wertänderung je +1 bp (negativ)"),
+    ]
+
+
+def bestand_tabelle(b: pd.DataFrame, heute: pd.Timestamp | None = None, ende: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Treasuries im Bestand (portfolio.bewerte) → gleiche Spalten wie anleihen_tabelle für kennzahlen_kurz.
+    Kupons = Zahlungen seit Kauf bis Simulationsende, Marchzins = beim Kauf bezahlt."""
+    heute = (heute or pd.Timestamp.today()).normalize()
+    ende = ende or pd.Timestamp(C.SIMULATION_ENDE)
+    t = b[b["klasse"] == "Treasury"] if b is not None and len(b) else pd.DataFrame()
+    zeilen = []
+    for _, z in t.iterrows():
+        fa, kupon = z.get("faelligkeit"), float(z.get("kupon") or 0)
+        T = float(z.get("restlaufzeit") or 0)
+        y = z.get("rendite")
+        y = float(y) if y is not None and pd.notna(y) else kupon
+        D = z.get("duration")
+        kauf = pd.Timestamp(z["kaufdatum"])
+        kup = kupon_termine(fa, kauf, ende) if pd.notna(fa) else []
+        zeilen.append(dict(betrag=float(z["wert"]), nominal=float(z["menge"]), kupon=kupon, T=T, y=y,
+                           D=float(D) if D is not None and pd.notna(D) else 0.0, konv=konvexitaet(kupon, T, y),
+                           dv01=float(z["wert"]) * (float(D) if D is not None and pd.notna(D) else 0.0) / 1e4,
+                           kupons_sim=float(z["menge"]) * kupon / 100 / 2 * len(kup),
+                           marchzins=marchzins(float(z["menge"]), kupon, fa, kauf) if pd.notna(fa) else 0.0))
+    return pd.DataFrame(zeilen)
+
+
 def _usd(x, d=0) -> str:
     return "–" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{ui.de(x, d)} USD"
 
@@ -462,6 +527,11 @@ def bereich_analyse(ctx, fred: dict):
     ]
     ui.kopf_kpis(kpis)
     R.kpis(kpis)
+    kz_ = kennzahlen_kurz(df) if len(df) else None
+    if kz_:
+        k8 = kpis_kurz(kz_, kauf, ende, bench, konv_b=m_b["konv"])
+        ui.kopf_kpis(k8[:4])
+        R.kpis(k8[:4])
     if not ips["duration_min"] <= m_p["duration"] <= ips["duration_max"]:
         st.error(f"Die Duration liegt ausserhalb des IPS-Bands ({ui.de(ips['duration_min'], 0)}–{ui.de(ips['duration_max'], 0)} J.).")
     if a.get("duration") and abs(a["duration"] - m_p["duration"]) > 0.5:
@@ -492,6 +562,7 @@ def bereich_analyse(ctx, fred: dict):
                 "Rendite": df["y"].map(lambda x: f"{ui.de(x, 2)} %"),
                 "Spread zur Kurve": df["spread"].map(lambda x: f"{ui.de(x, 0, True)} bp"),
                 "Mod. Duration": df["D"].map(lambda x: ui.de(x, 2)),
+                "Konvexität": df["konv"].map(lambda x: ui.de(x, 1)),
                 "DV01": df["dv01"].map(_usd),
                 "Carry + Roll / Mt.": [f"{ui.de((c + r_) * 100, 0)} bp · {_usd((c + r_) / 100 * w)}"
                                        for c, r_, w in zip(df["carry"], df["roll"], df["betrag"])],
@@ -499,26 +570,23 @@ def bereich_analyse(ctx, fred: dict):
                 "Erw. 1 Mt.": df["erw"].map(lambda x: f"{ui.de(x, 2, True)} %"),
                 **{defs[s]["kurz"]: df[f"r_{s}"].map(lambda x: f"{ui.de(x, 2, True)} %") for s in defs},
                 "Kupons bis 28.02.": df["kupons_sim"].map(_usd),
+                "Kupontermine": df["kupon_daten"].replace("", "–"),
+                f"Marchzins {kauf:%d.%m.}": df["marchzins"].map(_usd),
                 "Berechnung": df["art"]})
             st.dataframe(out, hide_index=True, width="stretch",
                          column_config={"Berechnung": st.column_config.TextColumn(width="medium")})
             kup_tot, mz_tot = float(df["kupons_sim"].sum()), float(df["marchzins"].sum())
             p_txt = " · ".join(f"{defs[s_]['kurz']} {pw[s_] * 100:.0f} %" for s_ in defs)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Kupons bis 28.02.", _usd(kup_tot), help="Kuponzahlungen zwischen Kauf und Simulationsende (fliessen ins Cash)")
-            c2.metric(f"Marchzins beim Kauf ({kauf:%d.%m.})", _usd(mz_tot),
-                      help="Aufgelaufener Zins seit dem letzten Kupon, den ihr beim Kauf zusätzlich zum Clean-Kurs bezahlt "
-                           "(Dirty = Clean + Marchzins). Rechnet die Dozenten-App mit Dirty-Preisen, fehlt dieser Betrag im Cash.")
-            c3.metric("Ø Restlaufzeit", f"{ui.de(m_p['laufzeit'], 1)} J.", f"Benchmark {ui.de(bench['laufzeit'], 1)} J.",
-                      delta_color="off")
-            c4.metric("Konvexität", ui.de(m_p["konv"], 1), f"Benchmark {ui.de(m_b['konv'], 1)}", delta_color="off")
+            st.caption(f"Marchzins = aufgelaufener Zins seit dem letzten Kupon, den ihr beim Kauf am {kauf:%d.%m.} zusätzlich zum "
+                       "Clean-Kurs bezahlt (Dirty = Clean + Marchzins). Rechnet die Dozenten-App mit Dirty-Preisen, fehlt dieser "
+                       "Betrag im Cash. Konvexität: Wertänderung ≈ −Duration × Δy + ½ × Konvexität × Δy².")
             st.caption("Rendite = Yield to Maturity (halbjährlich). Mit «Kurs %» aus der Liste rechnet die App die Rendite aus dem Kurs "
                        "und hält den Abstand (Spread) zur FRED-Kurve fest; ohne Kurs liegt die Anleihe auf der Kurve. Carry + Roll = "
                        "Ertrag in einem Monat bei unveränderter Kurve. Puffer = so viele bp darf die Rendite steigen, bevor die Anleihe "
                        "im Monat verliert. Szenario-Spalten = Monatsrendite je Szenario "
                        f"({p_txt}).")
             R.h("Unsere Anleihen")
-            R.tabelle(out.drop(columns=["ISIN", "Berechnung", "Puffer"]))
+            R.tabelle(out.drop(columns=["ISIN", "Berechnung", "Puffer", "Kupontermine"]))
             # Fälligkeitsprofil
             prof = df.assign(b_=df["band"]).groupby("b_")["betrag"].sum()
             fig = go.Figure(go.Bar(x=list(prof.index), y=list(prof.values / betrag * 100), marker_color=ui.BLAU,
