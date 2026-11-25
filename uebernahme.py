@@ -2,7 +2,8 @@
 
 Regeln (mit Sophy festgelegt, 23.11.2026)
 - Aktien zum Eröffnungskurs des Handelstags (Yahoo «Open»), ganze Stücke (abgerundet), der Rest bleibt Cash.
-- Treasuries: konkrete Anleihen aus der Analyse (Kupon, Fälligkeit, optional Kurs). Ohne Kurs: Preis aus der FRED-Zinskurve
+- Treasuries: konkrete Anleihen aus der Analyse (Kupon, Fälligkeit, optional Kurs und ISIN – die ISIN wird im Feld «name» der
+  Transaktion gebucht, Update 11). Ohne Kurs: Preis aus der FRED-Zinskurve
   des Handelstags. Nominal auf 100 USD abgerundet. Zeilen nur mit Laufzeitband sind nicht übernehmbar.
 - Begründung je Zeile (oder gemeinsam für alle) – Pflicht, nicht die Kauf-These.
 - Erst Vorschau mit Prüfung (Cash, IPS-Bänder, Titel-Maximum, Sektorziele), dann «Bestätigen» → alles auf einmal gebucht.
@@ -98,7 +99,7 @@ def vorschlag(eingabe: dict, datum: pd.Timestamp, fred: dict, info_fn) -> tuple[
         else:
             stueck = None
         za.append({"Ticker": t, "Name": i.get("name", ""), "Sektor": i.get("sektor") or "", "Stück": stueck,
-                   "Kurs USD": k, "Betrag aus Vorauswahl": betrag, "Begründung": ""})
+                   "Kurs USD": k, "Betrag aus Vorauswahl": ui.de(betrag, 0) if betrag else "", "Begründung": ""})
     zt = []
     for r in eingabe.get("treas", []):
         betrag, kupon, faellig = zahl(r.get("Betrag USD")), zahl(r.get("Kupon %")), _datum(r.get("Fälligkeit"))
@@ -116,9 +117,10 @@ def vorschlag(eingabe: dict, datum: pd.Timestamp, fred: dict, info_fn) -> tuple[
             kurs = round(P.preis(kupon, T, y), 4) if y is not None else None
             quelle = "Zinskurve FRED" if kurs is not None else "fehlt"
         nominal = math.floor(betrag / (kurs / 100) / 100) * 100 if kurs else None
-        zt.append({"Bezeichnung": _txt(r.get("Bezeichnung")) or treasury_name(kupon, faellig), "Kupon %": kupon,
-                   "Fälligkeit": faellig.date(), "Nominal USD": nominal, "Kurs %": kurs, "Kurs-Quelle": quelle,
-                   "Betrag aus Vorauswahl": betrag, "Begründung": ""})
+        zt.append({"Bezeichnung": _txt(r.get("Bezeichnung")) or treasury_name(kupon, faellig), "ISIN": _txt(r.get("ISIN")).upper(),
+                   "Kupon %": kupon,
+                   "Fälligkeit": faellig.date(), "Nominal USD": ui.de(nominal, 0) if nominal else "", "Kurs %": kurs,
+                   "Kurs-Quelle": quelle, "Betrag aus Vorauswahl": ui.de(betrag, 0), "Begründung": ""})
     return pd.DataFrame(za), pd.DataFrame(zt), hinweise
 
 
@@ -138,7 +140,8 @@ def buchungen(aktien: pd.DataFrame, treas: pd.DataFrame, datum: pd.Timestamp, be
             continue
         n += 1
         out.append(dict(zeit=z, person=person, id=f"ue{batch}{n:02d}", datum=datum.date().isoformat(), art="Kauf", klasse="Treasury",
-                        ticker=_txt(r["Bezeichnung"]), name="", sektor="", menge=float(zahl(r["Nominal USD"])),
+                        ticker=_txt(r["Bezeichnung"]), name=_txt(r.get("ISIN")).upper(), sektor="",
+                        menge=float(zahl(r["Nominal USD"])),
                         kurs=round(float(zahl(r["Kurs %"])), 4), kupon=float(zahl(r["Kupon %"]) or 0),
                         faelligkeit=pd.Timestamp(r["Fälligkeit"]).date().isoformat(), notiz=_txt(r["Begründung"]) or begr_alle.strip(),
                         storniert=""))
@@ -234,11 +237,14 @@ def bereich(ctx, fred: dict, gespeichert: pd.DataFrame):
                "Treasuries mit Kupon und Fälligkeit aus der Analyse; ohne Kurs rechnet die App den Preis aus der Zinskurve. "
                "Erst Vorschau und Prüfung, dann «Bestätigen» – «Rückgängig» storniert die ganze Übernahme.")
     if not len(gespeichert):
-        st.info("Zuerst unten eine Vorauswahl berechnen und im Tab «Speichern» sichern – übernommen wird eine gespeicherte Vorauswahl.")
+        st.info("Zuerst oben ein Analyseportfolio speichern – übernommen wird ein gespeichertes Analyseportfolio.")
         return
     namen = {r["id"]: f"{r['name']} ({r['person']}, {str(r['zeit'])[:10]})" for _, r in gespeichert.iterrows()}
+    if ss.get("ue_aid") not in namen and ss.get("an_aktiv") in namen:
+        ss["ue_aid"] = ss["an_aktiv"]          # Standard: das gerade aktive Analyseportfolio
     c1, c2, c3 = st.columns([2.4, 1, 1])
-    aid = c1.selectbox("Vorauswahl", list(gespeichert["id"]), format_func=namen.get, key="ue_aid")
+    aid = c1.selectbox("Analyseportfolio (gespeicherter Stand)", list(gespeichert["id"]), format_func=namen.get, key="ue_aid",
+                       help="Übernommen wird die zuletzt gespeicherte Version – ungespeicherte Änderungen zuerst speichern.")
     datum = pd.Timestamp(c2.date_input("Handelsdatum", value=max(KAUFTAG, pd.Timestamp.today().normalize()).date(),
                                        format="DD.MM.YYYY", key="ue_datum"))
     if c3.button("Vorschau berechnen", type="primary", icon=":material/preview:", width="stretch", key="ue_los"):
@@ -259,19 +265,17 @@ def bereich(ctx, fred: dict, gespeichert: pd.DataFrame):
                                 column_config={"Stück": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
                                                "Kurs USD": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
                                                "Sektor": st.column_config.SelectboxColumn(options=C.SEKTOREN),
-                                               "Betrag aus Vorauswahl": st.column_config.NumberColumn(format="%.0f"),
                                                "Begründung": st.column_config.TextColumn(width="large")}) if len(vor["aktien"]) else vor["aktien"]
         if len(vor["treas"]):
             st.markdown(f"**Treasuries** · {len(vor['treas'])} Anleihen · Nominal, Kurs und Begründung änderbar")
             treas = st.data_editor(vor["treas"], hide_index=True, width="stretch", key=f"ue_t{v}",
                                    disabled=["Kupon %", "Fälligkeit", "Kurs-Quelle", "Betrag aus Vorauswahl"],
-                                   column_config={"Nominal USD": st.column_config.NumberColumn(min_value=0, step=100, format="%.0f"),
+                                   column_config={"Nominal USD": st.column_config.TextColumn(help="z. B. 3'000'000"),
                                                   "Kurs %": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
                                                   "Kupon %": st.column_config.NumberColumn(format="%.3f"),
-                                                  "Betrag aus Vorauswahl": st.column_config.NumberColumn(format="%.0f"),
                                                   "Begründung": st.column_config.TextColumn(width="large")})
         else:
-            treas = pd.DataFrame(columns=["Bezeichnung", "Kupon %", "Fälligkeit", "Nominal USD", "Kurs %", "Begründung"])
+            treas = pd.DataFrame(columns=["Bezeichnung", "ISIN", "Kupon %", "Fälligkeit", "Nominal USD", "Kurs %", "Begründung"])
         begr = st.text_area("Gemeinsame Begründung (gilt für alle Zeilen ohne eigene Begründung)", key=f"ue_b{v}", height=80,
                             placeholder="z. B. Umsetzung IC-Beschluss vom …: Sektorallokation gemäss Seite «Sektorallokation», "
                                         "Taktik Dezember …")
