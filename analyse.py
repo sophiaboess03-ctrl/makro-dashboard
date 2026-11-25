@@ -619,6 +619,83 @@ def _aktien_neu_rechnen(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _download_leiste(ctx, fred: dict):
+    """Oben in «Portfolio bearbeiten» (Update 15): ganzes Portfolio als PDF (rechnet selbst) und Positionen als Excel."""
+    ss = st.session_state
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1.35, 1.25, 1.4])
+        if c1.button("Ganzes Portfolio als PDF", icon=":material/picture_as_pdf:", width="stretch", key="an_pdf_top",
+                     help="Rechnet alle Kennzahlen mit dem übernommenen Stand und erstellt ein PDF mit allem: Kennzahlen, Vergleich, "
+                          "Einzeltitel, Korrelation, Regeln & Sektoren, Gewichte-Vorschlag, Anleihen & Cash."):
+            ss["an_pdf_auto"] = True
+            ss.pop("pdfdata_analyse_pdf", None)
+        try:
+            daten = _excel_export(ctx, fred)
+        except Exception:  # noqa: BLE001
+            daten = None
+        name = _wert("an_pf_name", "") or (ss.get("an_pf", {}).get(ss.get("an_aktiv"), {}) or {}).get("name", "Portfolio")
+        c2.download_button("Positionen als Excel", daten or b"", f"Positionen_{re.sub(r'[^A-Za-z0-9]+', '_', str(name)).strip('_')}_"
+                                                                 f"{datetime.now():%Y-%m-%d}.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", icon=":material/table_view:",
+                           width="stretch", key="an_xlsx_top", disabled=not daten,
+                           help="Alle Aktien und Treasuries des übernommenen Stands mit Beträgen, Gewichten und Anleihen-Kennzahlen")
+        ph = c3.empty()
+    return ph
+
+
+def _excel_export(ctx, fred: dict) -> bytes | None:
+    """Übernommener Stand als Excel: Übersicht, Aktien, Treasuries (mit Kupons, Marchzins, Restlaufzeit, Duration, Konvexität)."""
+    import io
+
+    import anleihen as AN
+
+    ss = st.session_state
+    if "an_aktien" not in ss:
+        return None
+    b = budget(ss)
+    kap = b["kapital"] or 0.0
+    ak = ss["an_aktien"]
+    ak = ak[[bool(_txt(t).strip()) for t in ak["Ticker"]]]
+    aktien = pd.DataFrame({
+        "Ticker": ak["Ticker"].astype(str), "Name": ak["Name"].astype(str), "Sektor": ak["Sektor"].astype(str),
+        "Kurs USD": [_num(x) for x in ak["Kurs USD"]], "Stück": [_num(x) for x in ak["Menge"]],
+        "Betrag USD": [_num(x) for x in ak["Betrag USD"]],
+        "Gewicht % (Vorgabe)": [_num(x) for x in ak["Gewicht %"]], "Fix": ak["Fix"].astype(str)})
+    aktien["% Gesamtportfolio"] = [x / kap * 100 if x and kap else None for x in aktien["Betrag USD"]]
+    s_ak = float(aktien["Betrag USD"].fillna(0).sum())
+    aktien["% Aktienteil"] = [x / s_ak * 100 if x and s_ak else None for x in aktien["Betrag USD"]]
+    k = AN.kurve(fred)
+    df = AN.anleihen_tabelle(_treas_df(ss["an_treas"]), k, ctx.szdef, ctx.szen) if len(k) >= 5 else pd.DataFrame()
+    if len(df):
+        treas = pd.DataFrame({
+            "Bezeichnung": df["name"], "ISIN": df["isin"], "Band": df["band"], "Kupon %": df["kupon"],
+            "Fälligkeit": df["faellig"].dt.date if hasattr(df["faellig"], "dt") else df["faellig"], "Restlaufzeit J.": df["T"],
+            "Betrag USD": df["betrag"], "Nominal USD": df["nominal"], "Kurs %": df["kurs"], "Rendite %": df["y"],
+            "Spread bp": df["spread"], "Mod. Duration": df["D"], "Konvexität": df["konv"], "DV01 USD": df["dv01"],
+            "Kupons bis 28.02. USD": df["kupons_sim"], "Kupontermine": df["kupon_daten"], "Marchzins beim Kauf USD": df["marchzins"],
+            "% Gesamtportfolio": df["betrag"] / kap * 100 if kap else None, "% Treasury-Teil": df["gewicht"], "Berechnung": df["art"]})
+    else:
+        treas = _treas_df(ss["an_treas"])
+    kz = AN.kennzahlen_kurz(df) if len(df) else None
+    ueb = [("Portfolio", _wert("an_pf_name", "") or ""), ("Stand", datetime.now().strftime("%d.%m.%Y %H:%M")),
+           ("Kapital USD", kap), ("Aktien % (geplant)", b["pct"]["aktien"]), ("Treasuries % (geplant)", b["pct"]["treas"]),
+           ("Cash % (geplant)", b["pct"]["cash"]), ("Aktien investiert USD", b["inv_a"]), ("Treasuries investiert USD", b["inv_t"]),
+           ("Cash (Rest) USD", b["frei"]), ("Anzahl Aktien", len(aktien))]
+    if kz:
+        ueb += [("Anzahl Anleihen", kz["n"]), ("Ø Kupon %", kz["kupon"]), ("Kupons bis 28.02. USD", kz["kupons"]),
+                ("Marchzins beim Kauf USD", kz["marchzins"]), ("Ø Restlaufzeit J.", kz["restlaufzeit"]),
+                ("Mod. Duration J.", kz["duration"]), ("Konvexität", kz["konv"]), ("Ø Rendite %", kz["rendite"]), ("DV01 USD", kz["dv01"])]
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        pd.DataFrame(ueb, columns=["Grösse", "Wert"]).to_excel(w, sheet_name="Übersicht", index=False)
+        aktien.to_excel(w, sheet_name="Aktien", index=False)
+        treas.to_excel(w, sheet_name="Treasuries", index=False)
+        for ws in w.book.worksheets:
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or "")) for c in col) + 2, 45)
+    return out.getvalue()
+
+
 def _treasury_kennzahlen(ctx, fred: dict, ss):
     """Unter der Eingabe (Update 14): Kupons, Marchzins, Ø Restlaufzeit, Konvexität usw. der erfassten Treasuries."""
     try:
@@ -2683,6 +2760,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
     _portfolio_leiste(ctx, tab, kapital_std, ctx.alloc, gs, fred, lade_kurse)
     gespeichert = gs
+    ph_dl = _download_leiste(ctx, fred)
 
     if m := ss.pop("an_meldung", None):
         st.warning(m)
@@ -2869,6 +2947,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         fund = o2.toggle("Bewertung laden (KGV, Dividende)", value=False, key=f"an_f{v}",
                          help="Holt pro Titel Kennzahlen von Yahoo Finance – dauert einige Sekunden.")
         los = o3.button("Kennzahlen berechnen", type="primary", icon=":material/calculate:", width="stretch")
+    pdf_auto = bool(ss.pop("an_pdf_auto", False))        # Knopf «Ganzes Portfolio als PDF» oben: rechnet selbst
+    los = los or pdf_auto
     for k in WIDGET_KEYS:          # Spiegel für den nächsten Seitenbesuch
         if k in ss:
             ss["_" + k] = ss[k]
@@ -3231,8 +3311,17 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
            "Laufzeitband (Näherung); Anleihen-Teil mit den einzelnen Anleihen auf der FRED-Zinskurve. Vergangene Werte sind keine "
            "Prognose.", klein=True)
     pf_name = _wert("an_pf_name", "") or (ss.get("an_pf", {}).get(ss.get("an_aktiv"), {}) or {}).get("name", "Analyse")
-    SP.knopf(ph_pdf, R, "analyse_pdf",
-             dateiname=f"Analyse_{re.sub(r'[^A-Za-z0-9]+', '_', str(pf_name)).strip('_') or 'Portfolio'}_{datetime.now():%Y-%m-%d}.pdf")
+    datei = f"Analyse_{re.sub(r'[^A-Za-z0-9]+', '_', str(pf_name)).strip('_') or 'Portfolio'}_{datetime.now():%Y-%m-%d}.pdf"
+    if pdf_auto:
+        try:
+            ss["pdfdata_analyse_pdf"] = R.pdf()
+            ss["an_pdf_pid"] = ss.get("an_aktiv")
+        except Exception as ex:  # noqa: BLE001
+            ph_dl.error(f"PDF konnte nicht erstellt werden: {ex}")
+    SP.knopf(ph_pdf, R, "analyse_pdf", dateiname=datei)
+    if ss.get("pdfdata_analyse_pdf") and ss.get("an_pdf_pid", ss.get("an_aktiv")) == ss.get("an_aktiv"):
+        ph_dl.download_button("PDF herunterladen", ss["pdfdata_analyse_pdf"], datei, "application/pdf", icon=":material/download:",
+                              key="an_dl_top", width="stretch", type="primary")
 
 
 _HELL_RGB = {L.ROT: (253, 241, 240), L.GELB: (253, 246, 231), L.GRUEN: (237, 247, 241)}
