@@ -104,7 +104,7 @@ class Budget:
         return ""
 
     def anfrage(self, prompt: str, zweck: str, max_tokens: int = 600, schaetzung_out: int | None = None,
-                system: str | None = None) -> str | None:
+                system: str | None = None, timeout: int = 120) -> str | None:
         """Text der Antwort oder None (kein Key, Deckel erreicht oder Fehler). Prüft vorher, ob die Abfrage
         (grob geschätzt) noch unter den Deckel passt."""
         if not self.aktiv:
@@ -114,7 +114,7 @@ class Budget:
             self.fehler.append(f"{zweck}: übersprungen (Rest {self.rest:.3f} USD reicht nicht)")
             return None
         try:
-            r = requests.post("https://api.anthropic.com/v1/messages", timeout=120,
+            r = requests.post("https://api.anthropic.com/v1/messages", timeout=timeout,
                               headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
                                        "content-type": "application/json"},
                               json={"model": self.modell, "max_tokens": max_tokens, "system": system or SYSTEM,

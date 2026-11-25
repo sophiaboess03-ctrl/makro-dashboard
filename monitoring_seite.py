@@ -109,14 +109,18 @@ def seite_monitoring(ctx, team: list[str], lade_kurse):
     if not kont:
         st.warning("Noch keine E-Mail-Adressen hinterlegt – unter «Zuständigkeit & E-Mails» erfassen, sonst gehen keine Meldungen raus.")
 
-    t1, t2, t3, t4, t5 = st.tabs(["Offene Fälle", "Verlauf & Protokoll", "Kauf-Thesen & Watchlist", "Zuständigkeit & E-Mails",
-                                  "Schwellen & Probelauf"])
+    t1, t2, t3, t6, t4, t5 = st.tabs(["Offene Fälle", "Verlauf & Protokoll", "Kauf-Thesen & Watchlist", "KI-Beobachtungspunkte",
+                                      "Zuständigkeit & E-Mails", "Schwellen & Probelauf"])
     with t1:
         _offene(ctx, faelle, kont, zust, s)
     with t2:
         _verlauf(ctx, faelle, zust)
     with t3:
         _thesen_watchlist(ctx, lage)
+    with t6:
+        import ki_portfolio as KP
+
+        KP.monitoring_tab(ctx, lage, lade_kurse)
     with t4:
         if ctx.nur_lesen:
             st.caption("Nur für Teammitglieder.")
@@ -465,14 +469,16 @@ def _probelauf(ctx, s, kont, zust, lade_kurse, lage):
     gehalten = [a["ticker"] for a in lage.get("aktien_liste") or []]
     vorschlag = gehalten
     if not vorschlag:
-        an = ctx.tabellen.get("analysen")
-        if an is not None and not an.empty:
+        import analyse as A
+
+        an = A.portfolios(ctx.tabellen.get("analysen"))
+        if len(an):
             try:
-                e = json.loads(an.sort_values("zeit").iloc[-1]["eingabe"])
+                e = json.loads(an.iloc[0]["eingabe"])
                 vorschlag = [str(z.get("Ticker") or "").upper() for z in e.get("aktien", []) if str(z.get("Ticker") or "").strip()]
             except (ValueError, KeyError, TypeError):
                 vorschlag = []
-    quelle = "aktuelles Portfolio" if gehalten else "letzte gespeicherte Vorauswahl (Seite Analyse)" if vorschlag else "Eingabe"
+    quelle = "aktuelles Portfolio" if gehalten else "zuletzt gespeichertes Analyseportfolio (Seite Analyse)" if vorschlag else "Eingabe"
     txt = st.text_input(f"Titel (Vorschlag aus: {quelle})", value=", ".join(vorschlag), key="probe_titel",
                         placeholder="z. B. MSFT, JPM, XOM, UNH")
     ticker = [t.strip().upper() for t in txt.replace(";", ",").split(",") if t.strip()]
