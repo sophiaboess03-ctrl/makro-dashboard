@@ -719,7 +719,9 @@ def lage_bauen(tabellen: dict, fred: dict, kurse: dict, hist: dict, r: dict, sp5
         pos, cash_delta, _ = P.positionen(tx)
         b = P.bewerte(pos, kurse, fred, heute)
         zinsen = float(b["zins"].sum()) if len(b) else 0.0
-        cash = kapital + cash_delta
+        import cashzins as CZ
+
+        cash = kapital + cash_delta + CZ.zins_bis(tx, kapital, fred, heute)
         total = (float(b["wert"].sum()) if len(b) else 0.0) + cash + zinsen
         lage.update(hat_tx=True, b=b, cash=cash, total=total, kapital=kapital, tx=tx, pf_faktor=total / kapital if kapital else None)
         akt = b[b["klasse"] == "Aktie"] if len(b) else b

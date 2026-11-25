@@ -714,7 +714,10 @@ def _bestand_bewertung(tabellen: dict, fred: dict, kurse: dict):
     kapital, _ = P._einstellungen(tabellen.get("einstellungen"))
     pos, cash_delta, _ = P.positionen(tx)
     b = P.bewerte(pos, kurse, fred, pd.Timestamp.today().normalize())
-    total = (float(b["wert"].sum()) if len(b) else 0.0) + kapital + cash_delta + (float(b["zins"].sum()) if len(b) else 0.0)
+    import cashzins as CZ
+
+    total = ((float(b["wert"].sum()) if len(b) else 0.0) + kapital + cash_delta + (float(b["zins"].sum()) if len(b) else 0.0)
+             + CZ.zins_bis(tx, kapital, fred))
     return (b, total)
 
 

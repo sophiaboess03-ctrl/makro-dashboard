@@ -35,7 +35,7 @@ SEITEN_BEREICHE = {
     "sektoren": "Sektorallokation",
     "taktik": "Taktik",
     "risiko": "Risiko & Risikobudget",
-    "anleihen": "Anleihen & Duration",
+    "anleihen": "Anleihen & Cash (früher Anleihen & Duration)",
     "entscheide": "Entscheide",
     "monitoring": "Monitoring",
     "bericht": "Berichte",
