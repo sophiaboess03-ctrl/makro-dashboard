@@ -619,6 +619,32 @@ def _aktien_neu_rechnen(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _treasury_kennzahlen(ctx, fred: dict, ss):
+    """Unter der Eingabe (Update 14): Kupons, Marchzins, Ø Restlaufzeit, Konvexität usw. der erfassten Treasuries."""
+    try:
+        import anleihen as AN
+
+        k = AN.kurve(fred)
+        if len(k) < 5 or "an_treas" not in ss:
+            return
+        df = AN.anleihen_tabelle(_treas_df(ss["an_treas"]), k, ctx.szdef, ctx.szen)
+        kz = AN.kennzahlen_kurz(df)
+        if not kz:
+            return
+        bench = AN.benchmark_info(k, ctx.einst.get("bond_benchmark", C.BOND_BENCHMARK_DEFAULT))
+        m_b = AN.mix(AN.tabelle(k, ctx.szdef, ctx.szen), bench["gewichte"], ctx.szdef)
+        st.markdown(f"**Treasuries im Überblick** · {kz['n']} Anleihen, {ui.de(kz['betrag'], 0)} USD (übernommener Stand) – "
+                    "Details unter «Anleihen & Cash»")
+        k8 = AN.kpis_kurz(kz, bench=bench, konv_b=m_b["konv"])
+        ui.kopf_kpis(k8[:4])
+        ui.kopf_kpis(k8[4:])
+        if (df["art"].str.startswith("nur Laufzeitband")).any():
+            st.caption("Zeilen nur mit Laufzeitband zählen als Par-Anleihe in der Bandmitte (ohne Kupontermine und Marchzins) – "
+                       "für genaue Werte Kupon und Fälligkeit ergänzen.")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _cash_zins_txt(cash: float, fred: dict, ctx) -> str:
     """Kurzer Zusatz: erwarteter Zins auf dem Cash bis Simulationsende (SOFR − 0,5 %)."""
     try:
@@ -2336,6 +2362,23 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
         return
     erstes = next(iter(erg.values()))
     k0 = erstes["k"]
+    # --- PDF des Vergleichs (Update 13) ------------------------------------------------
+    import seitenpdf as SP
+
+    ph_pdf = st.empty()
+    R = SP.Sammler("Vergleich der Analyseportfolios",
+                   f"{len(erg)} Portfolios nebeneinander · gemeinsames Zeitfenster {k0['S&P 500']['von']:%d.%m.%Y} – "
+                   f"{k0['S&P 500']['bis']:%d.%m.%Y} ({k0['S&P 500']['tage']} Handelstage) · offenes Budget als "
+                   f"{'Index' if vg['fuellen'] == 'Index' else 'Cash'} gerechnet", kurz="Vergleich Analyseportfolios", quer=True)
+    gz_ = gs.set_index("id") if len(gs) else None
+    R.tabelle(pd.DataFrame([{
+        "Portfolio": vg["namen"][i],
+        "Art": "Bestand (Transaktionen)" if i == BESTAND else ("offen, ungespeichert" if i in pf and not pf[i].get("gespeichert")
+                                                               else "gespeichert"),
+        "Angelegt von": (str(gz_.loc[i, "erstellt_von"]) if gz_ is not None and i in gz_.index else "–"),
+        "Zuletzt": (f"{gz_.loc[i, 'person']}, {_datum(gz_.loc[i, 'zeit'])}" if gz_ is not None and i in gz_.index else "–"),
+        "Notiz": (str(gz_.loc[i, "notiz"])[:120] if gz_ is not None and i in gz_.index and _txt(gz_.loc[i, "notiz"]) else "")}
+        for i in erg]), breiten=[55, 40, 35, 50, 85])
     st.caption(f"Gemeinsames Zeitfenster {k0['S&P 500']['von']:%d.%m.%Y} – {k0['S&P 500']['bis']:%d.%m.%Y} "
                f"({k0['S&P 500']['tage']} Handelstage) · Kurse {zeit}"
                + (f" · offenes Budget als Index gerechnet" if vg["fuellen"] == "Index" else " · offenes Budget als Cash"))
@@ -2413,8 +2456,36 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
     ]
     st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch",
                  column_config={"Bedeutung": st.column_config.TextColumn(width="large")})
+    vgl_df = pd.DataFrame(zeilen)
+    R.h("Kennzahlen nebeneinander")
+    R.tabelle(vgl_df, breiten=[34] + [24] * (len(vgl_df.columns) - 2) + [70])
 
     farbe = {i: PF_FARBEN[n % len(PF_FARBEN)] for n, i in enumerate(erg)}
+    R.linien([(vg["namen"][i], (1 + e_["r_p"]).cumprod() * 100, SP.rgb(farbe[i])) for i, e_ in erg.items()]
+             + [(n_, (1 + rr).cumprod() * 100, SP.rgb(fb)) for n_, rr, fb in
+                (("Neutral (IPS)", erstes["r_n"], ui.GOLD), ("S&P 500", erstes["r_s"], ui.STAHL))],
+             titel="Wertentwicklung (Start = 100)")
+    R.h2("Rendite und Risiko")
+    R.tabelle(pd.DataFrame([{"Portfolio": vg["namen"][i], "Rendite p.a.": _pct(e_["k"]["Vorauswahl"].get("rendite"), 1, True),
+                             "Volatilität p.a.": _pct(e_["k"]["Vorauswahl"].get("vola")),
+                             "Sharpe": _zahl(e_["k"]["Vorauswahl"].get("sharpe")),
+                             "Max. Drawdown": _pct(e_["k"]["Vorauswahl"].get("mdd")),
+                             "Rendite pro Einheit Vola": _zahl((e_["k"]["Vorauswahl"].get("rendite") or 0)
+                                                               / (e_["k"]["Vorauswahl"].get("vola") or float("nan")))}
+                            for i, e_ in erg.items()]
+                           + [{"Portfolio": n_, "Rendite p.a.": _pct(k0[n_].get("rendite"), 1, True), "Volatilität p.a.": _pct(k0[n_].get("vola")),
+                               "Sharpe": _zahl(k0[n_].get("sharpe")), "Max. Drawdown": _pct(k0[n_].get("mdd")),
+                               "Rendite pro Einheit Vola": _zahl((k0[n_].get("rendite") or 0) / (k0[n_].get("vola") or float("nan")))}
+                              for n_ in ("Neutral (IPS)", "S&P 500")]), breiten=[60, 35, 35, 30, 35, 40])
+    R.neue_seite()
+    R.h("Regeln je Portfolio")
+    regel_z, regel_f = [], []
+    for i in erg:
+        for s_, t_ in zusatz[i]["checks"]:
+            regel_z.append({"Portfolio": vg["namen"][i], "Status": {L.ROT: "Verstoss", L.GELB: "Hinweis", L.GRUEN: "ok"}[s_],
+                            "Prüfung": t_})
+            regel_f.append([None, _HELL_RGB.get(s_), None])
+    R.tabelle(pd.DataFrame(regel_z), breiten=[50, 22, 190], farben=regel_f, max_zeilen=200)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Wertentwicklung (Start = 100)**")
@@ -2473,6 +2544,10 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
         return out
 
     st.dataframe(sek_df.style.apply(_farben, axis=None), hide_index=True, width="stretch")
+    R.h("Sektoren nebeneinander")
+    R.text("Je Portfolio: Ist-Anteil am Aktienteil, in Klammern Ist − Ziel in Pp. (ohne Zielzahl: aktiv vs. Index). "
+           "Grün ≤ 0,5 Pp., gelb ≤ 1 Pp., sonst rot.", klein=True)
+    R.tabelle(sek_df, farben=[[None] * 4 + [_HELL_RGB.get(st_z.get(c_)) for c_ in sek_df.columns[4:]] for st_z in stufen])
     st.caption("Je Portfolio: Ist-Anteil am Aktienteil, in Klammern Ist − Ziel in Pp. (ohne Zielzahl: aktiv vs. Index). "
                "Grün ≤ 0,5 Pp., gelb ≤ 1 Pp., sonst rot – wie im Reiter «Regeln & Struktur».")
 
@@ -2489,10 +2564,17 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
                             for t, w in tz.items()])
         tdf = tdf.sort_values(["_n", "_w"], ascending=False).drop(columns=["_n", "_w"])
         st.dataframe(tdf, hide_index=True, width="stretch")
+        R.neue_seite()
+        R.h(f"Titel nebeneinander · Gewicht am Gesamtportfolio ({len(tz)} verschiedene Titel)")
+        R.tabelle(tdf, max_zeilen=600)
         gemeinsam = [t for t, w in tz.items() if len(w) == len(spalten)]
         if len(spalten) > 1:
             st.caption(f"In allen gewählten Portfolios: {', '.join(sorted(gemeinsam)) if gemeinsam else 'kein Titel'} · "
                        f"{len(tz)} verschiedene Titel insgesamt.")
+            R.text(f"In allen gewählten Portfolios: {', '.join(sorted(gemeinsam)) if gemeinsam else 'kein Titel'}.", klein=True)
+    R.text("Vergangene Werte im gemeinsamen Zeitfenster, konstante Gewichte, dividendenbereinigt – keine Prognose. Cash verzinst "
+           "mit SOFR − 0,5 % wie in der Simulation. Duration der Treasuries im Vergleich als ETF-Näherung.", klein=True)
+    SP.knopf(ph_pdf, R, "vergleich_pdf", dateiname=f"Vergleich_Analyseportfolios_{datetime.now():%Y-%m-%d}.pdf")
 
 
 def _vgl_signatur(wahl, jahre, fuellen, eingabe_fn) -> str:
@@ -2772,6 +2854,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                    f"({'Aktienteil' if teil else 'Aktienquote am Gesamtportfolio'}) · "
                    "Zeile entfernen: Häkchen in der Spalte ✕ (oder Ticker leeren) · Kurse = letzter Schlusskurs; "
                    "gekauft wird am 01.12. zum Eröffnungskurs.")
+        _treasury_kennzahlen(ctx, fred, ss)
         _sektor_bereich(ctx)
         o1, o1b, o2, o3 = st.columns([1.2, 1.5, 1.1, 1])
         jahre = o1.segmented_control("Zeitraum der Kursdaten", [1, 2, 3, 5], default=1, format_func=lambda j: f"{j} J.",
@@ -2850,7 +2933,15 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         st.info(f"{ui.de(cash / total * 100, 0)} % des Kapitals sind noch nicht investiert und zählen als Cash – darum sind "
                 "Volatilität, Beta und Drawdown der Vorauswahl so tief. Für die Titel allein siehe «Aktienteil», oder oben "
                 "«Noch nicht verteiltes Budget rechnen als: Index» wählen.", icon=":material/info:")
-    ui.kopf_kpis([
+    # --- PDF der Analyse (Update 13): sammelt unten alle Zahlen, Knopf oben ----------------------------------
+    import seitenpdf as SP
+
+    ph_pdf = st.empty()
+    R = _analyse_sammler(ctx, e, kv, total, cash, ak_w, tr_w, f_a, f_t, cash_eff, zeit, erg)
+    if erg["fuell"]:
+        R.text(f"Noch nicht verteilt und als Index gerechnet: {ui.de(f_a, 0)} USD Aktienbudget → S&P 500 ({SPX}), "
+               f"{ui.de(f_t, 0)} USD Treasury-Budget → {NEUTRAL_PROXY}.", klein=True)
+    kpi1 = [
         ("Sharpe Ratio", _zahl(kv.get("sharpe")), f"Aktienteil {_zahl(ka.get('sharpe'))} · neutral {_zahl(kn.get('sharpe'))} · "
                                                    f"S&P 500 {_zahl(ks.get('sharpe'))}"),
         ("Rendite p.a.", _pct(kv.get("rendite"), 1, True), f"Aktienteil {_pct(ka.get('rendite'), 1, True)} · "
@@ -2858,8 +2949,9 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         ("Volatilität p.a.", _pct(kv.get("vola")), f"Aktienteil {_pct(ka.get('vola'))} · neutral {_pct(kn.get('vola'))} · "
                                                     f"S&P 500 {_pct(ks.get('vola'))}"),
         ("Max. Drawdown", _pct(kv.get("mdd")), f"Aktienteil {_pct(ka.get('mdd'))} · neutral {_pct(kn.get('mdd'))}"),
-    ])
-    ui.kopf_kpis([
+    ]
+    ui.kopf_kpis(kpi1)
+    kpi2 = [
         ("Beta zum S&P 500", _zahl(kv.get("beta")), f"Aktienteil {_zahl(ka.get('beta'))} · neutral {_zahl(kn.get('beta'))}"),
         ("Tracking Error vs. neutral", _pct(kv.get("te_neutral")), f"Information Ratio {_zahl(kv.get('ir_neutral'))}"),
         ("VaR 95 % · 1 Tag", f"{ui.de(kv.get('var95', 0) / 100 * total, 0)} USD",
@@ -2867,7 +2959,10 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         ("Aufteilung", f"{(ak_w + f_a) / total * 100:.0f} / {(tr_w + f_t) / total * 100:.0f} / {cash_eff / total * 100:.0f} %",
          f"Aktien / Treasuries / Cash" + (f" (davon investiert {ak_w / total * 100:.0f} / {tr_w / total * 100:.0f} %)" if erg["fuell"] else "")
          + f" · {int((pos['klasse'] == 'Aktie').sum())} Titel, effektiv {ui.de(eff_anzahl(pos.loc[pos['klasse'] == 'Aktie', 'wert']), 1)}"),
-    ])
+    ]
+    ui.kopf_kpis(kpi2)
+    R.h("Kennzahlen auf einen Blick")
+    R.kpis(kpi1 + kpi2)
 
     ss["an_kz"] = dict(hash=_hash(_kern(aktien, treas, e["kapital"], e.get("pct") or {}, e.get("bezug", GESAMT))),
                        kz=_kz_zusammenfassen(kv, ka, ak_w, tr_w, cash, total, fuellen))
@@ -2888,8 +2983,20 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             if e2:
                 k = {n_: k[n_] for n_ in ("Vorauswahl", "Aktienteil") if n_ in k} | {"Aktuelles Portfolio": e2["k"]["Vorauswahl"]} | \
                     {n_: k[n_] for n_ in ("Neutral (IPS)", "S&P 500")}
-        st.dataframe(vergleichstabelle(k), hide_index=True, width="stretch",
+        vgl_df = vergleichstabelle(k)
+        st.dataframe(vgl_df, hide_index=True, width="stretch",
                      column_config={"Bedeutung": st.column_config.TextColumn(width="large")})
+        R.h("Kennzahlen im Vergleich")
+        R.text("Vorauswahl = ganzes Portfolio (Aktien, Treasuries, Cash" + (", offenes Budget als Index" if erg["fuell"] else "")
+               + ") · Aktienteil = nur eure Titel, auf 100 % hochgerechnet · Neutral = strategische Allokation laut IPS.", klein=True)
+        R.tabelle(vgl_df, breiten=[34] + [22] * (len(vgl_df.columns) - 2) + [80])
+        R.linien([(n_, (1 + rr).cumprod() * 100, SP.rgb(fb)) for n_, rr, fb in
+                  (("Vorauswahl", erg["r_p"], ui.BLAU), ("Aktienteil", erg["r_a"], ui.PETROL),
+                   ("Neutral (IPS)", erg["r_n"], ui.GOLD), ("S&P 500", erg["r_s"], ui.STAHL)) if rr is not None],
+                 titel="Wertentwicklung (Start = 100)")
+        R.linien([(n_, ((1 + rr).cumprod() / (1 + rr).cumprod().cummax() - 1) * 100, SP.rgb(fb)) for n_, rr, fb in
+                  (("Vorauswahl", erg["r_p"], ui.BLAU), ("Neutral (IPS)", erg["r_n"], ui.GOLD))],
+                 einheit=" %", titel="Drawdown (Verlust vom Höchststand)")
         st.caption("Vorauswahl = ganzes Portfolio (Aktien, Treasuries, Cash" + (", offenes Budget als Index" if erg["fuell"] else "")
                    + ") · Aktienteil = nur eure Titel, auf 100 % hochgerechnet (so schwankt der Aktienteil für sich allein).")
         c1, c2 = st.columns(2)
@@ -2967,6 +3074,17 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                            "Korr. zum Rest": _zahl(ke.get("korr_rest")),
                            **({"KGV fwd": "–", "Div.-Rendite": "–"} if e["fund"] else {})})
         st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+        R.neue_seite()
+        R.h(f"Einzeltitel ({int((pos['klasse'] == 'Aktie').sum())} Aktien, Treasuries als ETF-Näherung)")
+        ez = pd.DataFrame(zeilen).drop(columns=["Risikobeitrag im Aktienteil"], errors="ignore")
+        R.tabelle(ez, max_zeilen=400, breiten=([20, 40, 20] + [13] * (len(ez.columns) - 3)) if len(ez.columns) > 3 else None)
+        R.text("Gewicht/Risikobeitrag = Anteil am ganzen Portfolio; «im Aktienteil» = nur unter euren Titeln. Liegt der Risikobeitrag "
+               "deutlich über dem Gewicht, treibt der Titel das Risiko überproportional. Korr. zum Rest = Korrelation mit dem übrigen "
+               "Portfolio.", klein=True)
+        if len(erg["beitrag"]):
+            top_ = erg["beitrag"].sort_values(ascending=False).head(15)
+            R.balken([(_label(t), float(v), SP.rgb(ui.BLAU)) for t, v in top_.items()], einheit=" %",
+                     titel="Grösste Risikobeiträge (Anteil am Portfoliorisiko)")
         st.caption("Vola p.a. = Schwankung des einzelnen Titels. Gewicht/Risikobeitrag = Anteil am ganzen Portfolio, «im Aktienteil» = "
                    "nur unter euren Titeln. Liegt der Risikobeitrag deutlich über dem Gewicht, treibt der Titel das Risiko "
                    "überproportional. Korr. zum Rest = Korrelation mit dem übrigen Portfolio (tief = guter Diversifikationsbeitrag).")
@@ -2995,8 +3113,21 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             fig.update_layout(height=max(320, 30 * len(spalten) + 120), margin=dict(l=8, r=8, t=10, b=8))
             fig.update_yaxes(autorange="reversed")
             ui.zeige(fig)
-            oben = kor.where(np.triu(np.ones(kor.shape, dtype=bool), 1)).stack().sort_values(ascending=False)
+            oben = kor.where(np.triu(np.ones(kor.shape, dtype=bool), 1)).stack().dropna().sort_values(ascending=False)
             oben = oben[[a != SPX and b_ != SPX for a, b_ in oben.index]]
+            R.h("Korrelation")
+            if len(oben):
+                R.text(f"Durchschnittliche Korrelation zwischen den Positionen: {ui.de(float(oben.mean()), 2)} "
+                       f"({len(oben)} Paare, ohne S&P 500).")
+                paare = pd.concat([oben.head(10), oben.tail(5)])
+                R.tabelle(pd.DataFrame({"Paar": [f"{a} / {b_}" for a, b_ in paare.index],
+                                        "Korrelation": [ui.de(v, 2) for v in paare.values],
+                                        "": ["stärkste"] * min(10, len(oben)) + ["schwächste"] * (len(paare) - min(10, len(oben)))}),
+                          breiten=[60, 25, 25])
+            if len(spalten) <= 16:
+                R.h2("Korrelationsmatrix (Tagesrenditen)")
+                R.tabelle(pd.DataFrame([[b_] + [ui.de(v, 2) for v in zeile] for b_, zeile in zip(beschr, kor.values)],
+                                       columns=["", *[c[:10] for c in beschr]]))
             if len(oben):
                 st.caption("Am stärksten miteinander verbunden: " + ", ".join(
                     f"{a}/{b_} {ui.de(v, 2)}" for (a, b_), v in oben.head(3).items()) +
@@ -3025,6 +3156,27 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {L.ROT: "Verstoss", L.GELB: "Hinweis", L.GRUEN: "ok"}[s_])}'
                             f'&nbsp; {txt}</span><span></span></div>' for s_, txt in checks), unsafe_allow_html=True)
         st.markdown("")
+        R.neue_seite()
+        R.h(f"Regeln & Struktur · {n_rot} Verstösse" if n_rot else "Regeln & Struktur · alles im Rahmen")
+        R.tabelle(pd.DataFrame({"Status": [{L.ROT: "Verstoss", L.GELB: "Hinweis", L.GRUEN: "ok"}[s_] for s_, _ in checks],
+                                "Prüfung": [t_ for _, t_ in checks]}), breiten=[25, 240],
+                  farben=[[_HELL_RGB.get(s_), None] for s_, _ in checks])
+        R.h2("Anlageklassen vs. Taktik")
+        R.tabelle(pd.DataFrame({"Klasse": ["Aktien", "Treasuries", "Cash"],
+                                "Vorauswahl": [_pct(ak_w / total * 100), _pct(tr_w / total * 100), _pct(cash / total * 100)],
+                                "inkl. offenes Budget": [_pct((ak_w + f_a) / total * 100), _pct((tr_w + f_t) / total * 100),
+                                                         _pct(cash_eff / total * 100)],
+                                "Taktik": [_pct(ctx.alloc["aktien"]), _pct(ctx.alloc["anleihen"]), _pct(ctx.alloc["cash"])],
+                                "IPS-Band": [f"{lo:g}–{hi:g} %" for lo, hi in (ctx.alloc["baender"]["aktien"],
+                                                                              ctx.alloc["baender"]["treasuries"],
+                                                                              ctx.alloc["baender"]["cash"])]}),
+                  breiten=[40, 40, 45, 40, 40])
+        sek_tab = sek_p["sektoren"]
+        R.h2(f"Sektorallokation · {sek_p['n'][L.GRUEN]} von 11 eingehalten · Aktienquote {ui.de(sek_p['quote'], 1)} %")
+        spalten_s = ["Sektor", "Richtung", "Abw. geplant", "Index", "Ziel", "Ist", "Aktiv vs. Index", "Ist − Ziel",
+                     "Fehlt (+) / zu viel (−)", "Anzahl Titel"]
+        R.tabelle(sek_tab[[c_ for c_ in spalten_s if c_ in sek_tab.columns]],
+                  farben=[[_HELL_RGB.get(s_)] + [None] * (len(spalten_s) - 1) for s_ in sek_tab["_stufe"]])
         SK.zeige_pruefung(ctx, ak_df, total, "Sektorallokation im Probe-Portfolio", key="an")
         c2, _ = st.columns(2)
         with c2:
@@ -3058,8 +3210,116 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                "Min. Volatilität": _pct(vs["min_vola"][t] * 100),
                                "Stück (Min. Vola)": ui.de(vs["min_vola"][t] * total / kurs, 0) if kurs else "–"})
             st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
-            ui.kopf_kpis([("Sharpe heute", _zahl(kv.get("sharpe")), f"Vola {_pct(kv.get('vola'))}"),
-                          ("Sharpe mit Max.-Sharpe-Gewichten", _zahl(vs["sharpe"][0]), f"Vola {_pct(vs['vola'][0])}"),
-                          ("Sharpe mit Min.-Vola-Gewichten", _zahl(vs["sharpe"][1]), f"Vola {_pct(vs['vola'][1])}")])
+            kpi_v = [("Sharpe heute", _zahl(kv.get("sharpe")), f"Vola {_pct(kv.get('vola'))}"),
+                     ("Sharpe mit Max.-Sharpe-Gewichten", _zahl(vs["sharpe"][0]), f"Vola {_pct(vs['vola'][0])}"),
+                     ("Sharpe mit Min.-Vola-Gewichten", _zahl(vs["sharpe"][1]), f"Vola {_pct(vs['vola'][1])}")]
+            ui.kopf_kpis(kpi_v)
+            R.neue_seite()
+            R.h("Gewichte-Vorschlag (historisch optimiert, nur Denkanstoss)")
+            R.text(f"Aus {ui.de(vs['n'], 0)} zufälligen Gewichtungen des Aktienteils ({regel}); Treasuries, Cash und offenes Budget fix. "
+                   "Auf die Vergangenheit optimiert – keine Handelsanweisung.", klein=True)
+            R.kpis(kpi_v)
+            R.tabelle(pd.DataFrame(zeilen), max_zeilen=400)
             st.caption("Achtung: Die Gewichte sind auf die Vergangenheit optimiert und reagieren stark auf den Zeitraum. "
                        "Als Denkanstoss nutzen, nicht als Handelsanweisung – Entscheid im Team mit Begründung erfassen.")
+
+    _anleihen_pdf(R, ctx, fred, e, cash_eff)
+    R.h("Methodik")
+    R.text(f"Zeitraum {kv['von']:%d.%m.%Y} – {kv['bis']:%d.%m.%Y} ({kv['tage']} Handelstage), Kurse {zeit}. Dividendenbereinigte "
+           "Tageskurse (Yahoo Finance), konstante Gewichte, annualisiert mit 252 Handelstagen. Risikofreier Zins: 13-Wochen-T-Bill "
+           f"(Ø {ui.de(kv['rf'], 2)} %). Cash verzinst wie in der Simulation mit SOFR − 0,5 %. Treasuries in den Kennzahlen über ETFs je "
+           "Laufzeitband (Näherung); Anleihen-Teil mit den einzelnen Anleihen auf der FRED-Zinskurve. Vergangene Werte sind keine "
+           "Prognose.", klein=True)
+    pf_name = _wert("an_pf_name", "") or (ss.get("an_pf", {}).get(ss.get("an_aktiv"), {}) or {}).get("name", "Analyse")
+    SP.knopf(ph_pdf, R, "analyse_pdf",
+             dateiname=f"Analyse_{re.sub(r'[^A-Za-z0-9]+', '_', str(pf_name)).strip('_') or 'Portfolio'}_{datetime.now():%Y-%m-%d}.pdf")
+
+
+_HELL_RGB = {L.ROT: (253, 241, 240), L.GELB: (253, 246, 231), L.GRUEN: (237, 247, 241)}
+
+
+def _analyse_sammler(ctx, e: dict, kv: dict, total: float, cash: float, ak_w: float, tr_w: float, f_a: float, f_t: float,
+                     cash_eff: float, zeit: str, erg: dict):
+    """PDF der Analyse (Update 13): Kopf mit Portfolio, Ersteller, Version, Zeitraum, Aufteilung."""
+    import seitenpdf as SP
+
+    ss = st.session_state
+    ent = (ss.get("an_pf", {}).get(ss.get("an_aktiv"), {}) or {})
+    name = _wert("an_pf_name", "") or ent.get("name", "Analyseportfolio")
+    notiz = _wert("an_pf_notiz", "") or ent.get("notiz", "")
+    status = "gespeichert" if ent.get("gespeichert") else "nicht gespeichert"
+    if ent.get("versionen"):
+        status += f", Version {ent.get('versionen')}"
+    R = SP.Sammler(f"Analyse: {name}",
+                   f"Analyseportfolio ({status}) · Kapital {ui.de(e.get('kapital') or total, 0)} USD · "
+                   f"Zeitraum {kv['von']:%d.%m.%Y} – {kv['bis']:%d.%m.%Y}",
+                   kurz=f"Analyse {name}", quer=True)
+    if notiz:
+        R.text(f"Notiz: {notiz}", klein=True)
+    pct = e.get("pct") or {}
+    R.text(f"Aufteilung geplant (Aktien / Treasuries / Cash): {ui.de(pct.get('aktien', 0), 2)} / {ui.de(pct.get('treas', 0), 2)} / "
+           f"{ui.de(pct.get('cash', 0), 2)} % · investiert {ui.de(ak_w / total * 100, 1)} / {ui.de(tr_w / total * 100, 1)} % · "
+           f"Cash {ui.de(cash / total * 100, 1)} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} / {ui.de(ctx.alloc['anleihen'], 1)} / "
+           f"{ui.de(ctx.alloc['cash'], 1)} % · Bezug «Gewicht %»: {e.get('bezug', GESAMT)}.", klein=True)
+    return R
+
+
+def _anleihen_pdf(R, ctx, fred: dict, e: dict, cash: float):
+    """Anleihen & Cash im Analyse-PDF: Kennzahlen je Anleihe vs. Benchmark und Zins auf Cash bis Simulationsende."""
+    try:
+        import anleihen as AN
+        import cashzins as CZ
+
+        k = AN.kurve(fred)
+        R.neue_seite()
+        R.h("Anleihen & Cash")
+        if len(k) < 5:
+            R.text("Keine Zinskurve von FRED – Anleihen-Teil nicht gerechnet.", klein=True)
+            return
+        defs, szen = ctx.szdef, ctx.szen
+        df = AN.anleihen_tabelle(_treas_df(e["treas"]), k, defs, szen)
+        bench = AN.benchmark_info(k, ctx.einst.get("bond_benchmark", C.BOND_BENCHMARK_DEFAULT))
+        tab = AN.tabelle(k, defs, szen)
+        m_b = AN.mix(tab, bench["gewichte"], defs)
+        a = CZ.aktuell(fred)
+        pg = CZ.prognose(cash, a["sofr"], defs, szen) if a else None
+        if len(df):
+            m_p = AN.mix_anleihen(df, defs)
+            betrag = float(df["betrag"].sum())
+            R.kpis([
+                ("Treasury-Teil", f"{ui.de(betrag, 0)} USD", f"{len(df)} Anleihen"),
+                ("Duration", f"{ui.de(m_p['duration'], 2)} J.", f"Benchmark {ui.de(bench['duration'], 2)} J. · Taktik "
+                                                              f"{ui.de(ctx.alloc.get('duration') or 0, 1)} J."),
+                ("Rendite (Yield)", f"{ui.de(m_p['rendite'], 2)} %", f"Benchmark {ui.de(m_b['rendite'], 2)} % · DV01 "
+                                                                   f"{ui.de(betrag * m_p['duration'] / 1e4, 0)} USD"),
+                ("Erw. Mehrrendite 1 Mt.", f"{ui.de((m_p['erw'] - m_b['erw']) * 100, 0, True)} bp",
+                 f"Anleihen {ui.de(m_p['erw'], 2, True)} % vs. Benchmark {ui.de(m_b['erw'], 2, True)} %"),
+            ])
+            R.kpis(AN.kpis_kurz(AN.kennzahlen_kurz(df), bench=bench, konv_b=m_b["konv"])[:4])
+            R.tabelle(pd.DataFrame({
+                "Anleihe": df["name"], "ISIN": df["isin"], "Kupon": df["kupon"].map(lambda x: f"{ui.de(x, 3)} %"),
+                "Fälligkeit": df["faellig"].map(lambda d: f"{d:%d.%m.%Y}" if pd.notna(d) else "–"),
+                "Betrag USD": df["betrag"].map(lambda x: ui.de(x, 0)), "Gewicht": df["gewicht"].map(lambda x: f"{ui.de(x, 1)} %"),
+                "Kurs": df["kurs"].map(lambda x: f"{ui.de(x, 3)} %"), "Rendite": df["y"].map(lambda x: f"{ui.de(x, 2)} %"),
+                "Spread": df["spread"].map(lambda x: f"{ui.de(x, 0, True)} bp"), "Mod. Dur.": df["D"].map(lambda x: ui.de(x, 2)),
+                "Konvexität": df["konv"].map(lambda x: ui.de(x, 1)), "Restlaufz.": df["T"].map(lambda x: f"{ui.de(x, 1)} J."),
+                "DV01 USD": df["dv01"].map(lambda x: ui.de(x, 0)),
+                "Carry+Roll/Mt.": [f"{ui.de((c + r_) * 100, 0)} bp" for c, r_ in zip(df["carry"], df["roll"])],
+                "Erw. 1 Mt.": df["erw"].map(lambda x: f"{ui.de(x, 2, True)} %"),
+                **{defs[s]["kurz"]: df[f"r_{s}"].map(lambda x: f"{ui.de(x, 2, True)} %") for s in defs},
+                "Kupons bis 28.02.": df["kupons_sim"].map(lambda x: ui.de(x, 0)),
+                "Marchzins": df["marchzins"].map(lambda x: ui.de(x, 0))}), max_zeilen=200)
+            R.text(f"Kupons bis 28.02.: {ui.de(float(df['kupons_sim'].sum()), 0)} USD · Marchzins beim Kauf: "
+                   f"{ui.de(float(df['marchzins'].sum()), 0)} USD · Benchmark: {bench['name']}. Rendite aus dem Kurs der Liste "
+                   "(sonst FRED-Kurve), Szenario-Spalten = Monatsrendite je Szenario.", klein=True)
+        else:
+            R.text("Keine Treasuries im Analyseportfolio erfasst.", klein=True)
+        if a and pg:
+            R.h2("Zins auf Cash (SOFR − 0,5 %)")
+            R.kpis([("Satz heute", f"{ui.de(a['netto'], 2)} %", f"SOFR {ui.de(a['sofr'], 2)} % ({a['datum']:%d.%m.%Y}) − 0,5 %"),
+                    ("Cash", f"{ui.de(cash, 0)} USD", "Kapital − Aktien − Treasuries"),
+                    ("Zins bis 28.02.", f"{ui.de(pg['total'], 0)} USD", f"szenariogewichtet · unverändert {ui.de(pg['unveraendert'], 0)} USD"),
+                    ("Je Szenario", " / ".join(ui.de(v, 0) for v in pg["szen"].values()),
+                     " / ".join(defs[s]["kurz"] for s in pg["szen"]))])
+    except Exception as ex:  # noqa: BLE001 – Anleihen-Teil soll das PDF nicht verhindern
+        R.text(f"(Anleihen & Cash konnte nicht gerechnet werden: {type(ex).__name__})", klein=True)

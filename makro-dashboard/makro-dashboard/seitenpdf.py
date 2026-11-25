@@ -26,9 +26,12 @@ def klar(x) -> str:
 
 
 class Sammler:
-    def __init__(self, titel: str, unter: str = "", kurz: str | None = None):
-        self.titel, self.unter, self.kurz = titel, unter, kurz or titel
+    def __init__(self, titel: str, unter: str = "", kurz: str | None = None, quer: bool = False):
+        self.titel, self.unter, self.kurz, self.quer = titel, unter, kurz or titel, quer
         self.bloecke: list[tuple] = []
+
+    def neue_seite(self):
+        self.bloecke.append(("seite",))
 
     # --- Inhalte -----------------------------------------------------------
     def h(self, text: str):
@@ -47,32 +50,65 @@ class Sammler:
         for i in range(0, len(items), 4):
             teil = items[i:i + 4]
             n = max(len(teil), 1)
-            m = {1: 120, 2: 70, 3: 44, 4: 32}[n]
+            m = {1: 120, 2: 70, 3: 44, 4: 32}[n] * (3 if self.quer else 2) // 2
             self.bloecke.append(("kpis", [(a[:m], b, c if len(c) <= m else c[:m - 1] + "…") for a, b, c in teil]))
 
-    def tabelle(self, df: pd.DataFrame, breiten=None, max_zeilen: int = 60):
+    def tabelle(self, df: pd.DataFrame, breiten=None, max_zeilen: int = 60, farben=None, gross: float | None = None):
+        """farben (optional): je Zeile eine Liste RGB-Tupel oder None je Spalte (Zellhintergrund)."""
         if df is None or len(df) == 0:
             return
         d = df.head(max_zeilen)
         kopf = [klar(c) for c in d.columns]
         zeilen = [[klar(v) if not (isinstance(v, float) and pd.isna(v)) else "–" for v in r] for r in d.itertuples(index=False)]
-        self.bloecke.append(("tabelle", kopf, zeilen, breiten))
+        self.bloecke.append(("tabelle", kopf, zeilen, breiten, farben[:max_zeilen] if farben else None, gross))
 
-    def linien(self, serien, einheit="", titel=""):
-        self.bloecke.append(("linien", serien, einheit, titel))
+    def linien(self, serien, einheit="", titel="", h: float | None = None):
+        self.bloecke.append(("linien", serien, einheit, titel, h))
 
     def balken(self, items: list[tuple[str, float, tuple]], einheit="", titel="", max_wert=None):
         self.bloecke.append(("balken", items, einheit, titel, max_wert))
 
     # --- PDF ---------------------------------------------------------------
+    def _hoehe(self, b, pdf) -> float:
+        """Grobe Höhe eines Blocks in mm (für Seitenumbrüche)."""
+        art = b[0]
+        breite = pdf.w - pdf.l_margin - pdf.r_margin
+        if art == "titel":
+            return 14.0
+        if art == "untertitel":
+            return 6.5
+        if art == "text":
+            gross = 7.8 if b[3] else 9
+            zeichen = breite / (gross * 0.19)
+            return (len(b[1]) // max(zeichen, 1) + 1) * gross * 0.52 + 1
+        if art == "kpis":
+            return 20.0
+        if art == "tabelle":
+            return (len(b[2]) + 1) * (_gross_tabelle(b, self.quer) * 0.55 + 2.6) + 2
+        if art == "linien":
+            return (b[4] if len(b) > 4 and b[4] else 46 if self.quer else 58) + 16
+        if art == "balken":
+            return 5.2 * len(b[1]) + 12
+        return 0.0
+
     def pdf(self) -> bytes:
-        pdf = B._neu(self.kurz)
+        pdf = B._neu(self.kurz, self.quer)
         pdf.deckblatt = True
         pdf.add_page()
         B._haupttitel(pdf, self.titel, klar(self.unter) + f"  -  erstellt {datetime.now():%d.%m.%Y %H:%M}")
-        for b in self.bloecke:
+        nutzbar = pdf.h - 18 - 24          # Seite ohne Kopf/Fuss
+        for n_b, b in enumerate(self.bloecke):
             art = b[0]
             try:
+                if art in ("titel", "untertitel"):
+                    # Überschrift nicht allein unten auf der Seite: mit dem folgenden Inhalt bis zur ersten Tabelle/Grafik zusammenhalten
+                    gruppe = 0.0
+                    for b2 in self.bloecke[n_b:]:
+                        gruppe += self._hoehe(b2, pdf)
+                        if b2[0] in ("tabelle", "linien", "balken", "kpis", "seite"):
+                            break
+                    if gruppe > pdf.h - 18 - pdf.get_y() and gruppe < nutzbar:
+                        pdf.add_page()
                 if art == "titel":
                     B._titel(pdf, b[1])
                 elif art == "untertitel":
@@ -83,15 +119,36 @@ class Sammler:
                 elif art == "kpis":
                     B._kpis(pdf, b[1])
                 elif art == "tabelle":
-                    n = len(b[1])
-                    B._tabelle(pdf, b[1], b[2], b[3], gross=7.4 if n <= 6 else 6.6 if n <= 9 else 5.9)
+                    gross = _gross_tabelle(b, self.quer)
+                    # kurze Tabellen nicht über einen Seitenumbruch zerreissen
+                    zeilen_h = gross * 0.55 + 2.6
+                    hoehe = (len(b[2]) + 1) * zeilen_h
+                    rest = pdf.h - 18 - pdf.get_y()
+                    if hoehe > rest and hoehe < nutzbar and rest < nutzbar - 10:
+                        pdf.add_page()
+                    B._tabelle(pdf, b[1], b[2], b[3], gross=gross, farben=b[4] if len(b) > 4 else None)
+                elif art == "seite":
+                    pdf.add_page()
                 elif art == "linien":
-                    B._linien(pdf, b[1], einheit=b[2], titel=b[3])
+                    B._linien(pdf, b[1], h=(b[4] if len(b) > 4 and b[4] else 46 if self.quer else 58), einheit=b[2], titel=b[3])
                 elif art == "balken":
                     _balken(pdf, b[1], b[2], b[3], b[4])
             except Exception as e:  # noqa: BLE001 – ein kaputter Block soll das PDF nicht verhindern
                 B._text(pdf, f"(Abschnitt konnte nicht dargestellt werden: {type(e).__name__})", gross=7, farbe=B.MUTED)
         return bytes(pdf.output())
+
+
+def _gross_tabelle(b, quer: bool) -> float:
+    n = len(b[1])
+    return (b[5] if len(b) > 5 and b[5] else
+            (7.6 if n <= 8 else 7.0 if n <= 11 else 6.4 if n <= 15 else 5.8) if quer else
+            7.4 if n <= 6 else 6.6 if n <= 9 else 5.9)
+
+
+def rgb(farbe: str) -> tuple[int, int, int]:
+    """'#1F4E8C' → (31, 78, 140)."""
+    f = farbe.lstrip("#")
+    return tuple(int(f[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def _balken(pdf, items, einheit, titel, max_wert):
