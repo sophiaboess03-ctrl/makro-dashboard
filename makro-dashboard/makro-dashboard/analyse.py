@@ -12,6 +12,8 @@ Methodik (auch in der App erklärt):
 - Mehrere Analyseportfolios: gleichzeitig offen, je id überschreibbar, löschbar (Papierkorb), Vergleich im gleichen Zeitfenster.
 - Eingabe als Formular (Update 9): Tippen löst nichts aus, gerechnet wird mit «Änderungen übernehmen» bzw. «Übernehmen & speichern».
 - Sektorgewichtung (Update 9): Ist je Sektor, Sektoranteile anpassen → Titel im Sektor proportional skaliert.
+- Update 9.2: Gewicht % mit bis zu 4 Nachkommastellen, %-Titel gemeinsam auf die nächste ganze Stückzahl gerundet (Budget als
+  Obergrenze, bei zu wenig Budget alle proportional gekürzt), Spalte «Ist %», Import aus dem Scoring-Modell (Excel).
 """
 from __future__ import annotations
 
@@ -467,6 +469,15 @@ def _fz(x, d: int = 0) -> str:
     return "" if v is None else ui.de(v, d)
 
 
+def _fz_pct(x) -> str:
+    """Gewicht % mit 2–4 Nachkommastellen (0,5466 bleibt 0,5466, 2 wird 2,00) – eingetippte Gewichte gehen nicht verloren."""
+    v = _num(x)
+    if v is None:
+        return ""
+    ganz, _, dez = ui.de(v, 4).partition(",")
+    return f"{ganz},{dez.rstrip('0').ljust(2, '0')}"
+
+
 def _fz_menge(x) -> str:
     v = _num(x)
     return "" if v is None else ui.de(v, 0 if abs(v - round(v)) < 1e-9 else 2)
@@ -483,11 +494,22 @@ def _aktien_df(df: pd.DataFrame | None, mindestens_leer: int = 3) -> pd.DataFram
         df[c] = [_txt(x) for x in df[c]]
     df["Menge"] = [_fz_menge(x) if _txt(x) else "" for x in df["Menge"]]
     df["Betrag USD"] = [_fz(x) if _txt(x) else "" for x in df["Betrag USD"]]
-    df["Gewicht %"] = [_fz(x, 2) if _txt(x) else "" for x in df["Gewicht %"]]
+    df["Gewicht %"] = [_fz_pct(x) if _txt(x) else "" for x in df["Gewicht %"]]
     df = df[[bool(t.strip()) or bool(m) or bool(b) or bool(p)
              for t, m, b, p in zip(df["Ticker"], df["Menge"], df["Betrag USD"], df["Gewicht %"])]]
     leer = pd.DataFrame([{c: "" for c in AK_SPALTEN}] * mindestens_leer)
     return pd.concat([df, leer], ignore_index=True).astype("string")
+
+
+def _editor_ansicht(df: pd.DataFrame) -> pd.DataFrame:
+    """Aktien-Tabelle für den Editor: zusätzlich «Ist %» (tatsächliches Gewicht aus dem Betrag, gleicher Bezug wie
+    «Gewicht %») und die Löschen-Spalte. «Ist %» ist nur Anzeige und wird nicht gespeichert."""
+    basis = _basis(st.session_state)
+    d = df.copy()
+    ist = [_fz(_num(b_) / basis * 100, 2) if _num(b_) is not None and basis > 0 and _txt(t).strip() else ""
+           for t, b_ in zip(d["Ticker"], d["Betrag USD"])]
+    d.insert(d.columns.get_loc("Gewicht %") + 1, "Ist %", pd.Series(ist, index=d.index, dtype="string"))
+    return d.assign(Löschen=False)
 
 
 def _ticker_aufloesen(text: str, liste: dict) -> str:
@@ -553,7 +575,7 @@ def _ak_rechnen(df: pd.DataFrame, i: int, spalten: set, kurse: dict | None = Non
         fix = fix or ("Stück" if menge else "USD" if betrag else "")
     df.at[i, "Menge"] = _fz_menge(menge) if menge is not None else ""
     df.at[i, "Betrag USD"] = _fz(betrag) if betrag is not None else ""
-    df.at[i, "Gewicht %"] = _fz(pct, 2) if pct is not None else ""
+    df.at[i, "Gewicht %"] = _fz_pct(pct) if pct is not None else ""
     df.at[i, "Fix"] = fix
 
 
@@ -590,7 +612,7 @@ def _ak_deckeln(df: pd.DataFrame, i: int, offen: set | None = None):
     Änderung erst danach geprüft werden (zählen noch nicht – Reihenfolge von oben nach unten)."""
     ss = st.session_state
     b = budget(ss)
-    if b["kapital"] <= 0:
+    if b["kapital"] <= 0 or _txt(df.at[i, "Fix"]) == "%":      # %-Zeilen: gemeinsam in _prozent_verteilen (Update 9.2)
         return
     andere = sum(_num(x) or 0 for j, x in zip(df.index, df["Betrag USD"]) if j != i and j not in (offen or set()))
     rest = max(0.0, b["budget_a"] - andere)
@@ -609,12 +631,51 @@ def _ak_deckeln(df: pd.DataFrame, i: int, offen: set | None = None):
         _meldung(f"{t}: Betrag auf {ui.de(rest, 0)} USD gekürzt – Aktienbudget ausgeschöpft.")
     basis = _basis(ss)        # Gewicht % auf das gekürzte (machbare) Gewicht setzen
     neu = _num(df.at[i, "Betrag USD"])
-    df.at[i, "Gewicht %"] = _fz(neu / basis * 100, 2) if neu is not None and basis > 0 else ""
+    df.at[i, "Gewicht %"] = _fz_pct(neu / basis * 100) if neu is not None and basis > 0 else ""
+
+
+def _prozent_verteilen(df: pd.DataFrame) -> pd.DataFrame:
+    """Alle Zeilen mit fixem Gewicht % gemeinsam in ganze Stücke umrechnen (Update 9.2):
+    - auf die **nächste** ganze Stückzahl gerundet (nicht mehr immer abgerundet), solange Summe der Ziele und Aktienbudget
+      nicht überschritten werden – so liegen die Ist-Gewichte so nah wie möglich an den eingegebenen;
+    - ergeben die %-Zeilen zusammen mehr als das freie Aktienbudget, werden alle im gleichen Verhältnis gekürzt
+      (statt die untersten Zeilen auf 0 zu setzen). Das eingegebene Gewicht % bleibt stehen, «Ist %» zeigt das Erreichte."""
+    ss = st.session_state
+    df = df.copy()
+    basis = _basis(ss)
+    zeilen = [i for i in df.index if _txt(df.at[i, "Ticker"]).strip() and _txt(df.at[i, "Fix"]) == "%"
+              and _num(df.at[i, "Gewicht %"]) is not None and _num(df.at[i, "Kurs USD"])]
+    if not zeilen or basis <= 0:
+        return df
+    b = budget(ss)
+    andere = sum(_num(df.at[j, "Betrag USD"]) or 0 for j in df.index if j not in zeilen and _txt(df.at[j, "Ticker"]).strip())
+    frei = max(0.0, b["budget_a"] - andere) if b["kapital"] > 0 else float("inf")
+    kurs = {i: _num(df.at[i, "Kurs USD"]) for i in zeilen}
+    ziel = {i: basis * _num(df.at[i, "Gewicht %"]) / 100 for i in zeilen}
+    total = sum(ziel.values())
+    if total > frei * 1.0001 + 0.5:                 # kleine Rundungsdifferenzen (z. B. 45,00001 %) nicht melden
+        f = frei / total
+        ziel = {i: v * f for i, v in ziel.items()}
+        _meldung(f"Die Titel mit fixem Gewicht % brauchen zusammen {ui.de(total, 0)} USD, im Aktienbudget sind noch "
+                 f"{ui.de(frei, 0)} USD frei (Aktien {ui.de(b['pct']['aktien'], 2)} % = {ui.de(b['budget_a'], 0)} USD) – "
+                 f"alle wurden im gleichen Verhältnis auf {ui.de(f * 100, 1)} % gekürzt. Stimmt «Aktien %» mit eurem Modell überein?")
+    grenze = min(sum(ziel.values()), frei)
+    menge = {i: math.floor(ziel[i] / kurs[i] + 1e-9) for i in zeilen}
+    rest = grenze - sum(menge[i] * kurs[i] for i in zeilen)
+    bruch = sorted(zeilen, key=lambda i: -(ziel[i] / kurs[i] - menge[i]))
+    for i in bruch:                      # aufrunden, wo ≥ ½ Stück fehlt und es noch Platz hat (grösster Rest zuerst)
+        if ziel[i] / kurs[i] - menge[i] >= 0.5 and kurs[i] <= rest + 1e-6:
+            menge[i] += 1
+            rest -= kurs[i]
+    for i in zeilen:
+        df.at[i, "Menge"] = _fz_menge(menge[i])
+        df.at[i, "Betrag USD"] = _fz(menge[i] * kurs[i])
+    return df
 
 
 def _basis_aenderung():
     """Kapital oder Aktien-% geändert: Zeilen mit fixem Gewicht % → neue Stückzahl, übrige Zeilen → neues Gewicht %.
-    Zeilen mit fixem % werden danach aufs Aktienbudget gedeckelt (von oben nach unten)."""
+    Zeilen mit fixem % werden danach gemeinsam verteilt (_prozent_verteilen)."""
     ss = st.session_state
     if "an_aktien" not in ss:
         return
@@ -622,17 +683,39 @@ def _basis_aenderung():
     belegt = [i for i in df.index if _txt(df.at[i, "Ticker"]).strip()]
     for i in belegt:
         _ak_rechnen(df, i, set())
-    prozent = [i for i in belegt if _txt(df.at[i, "Fix"]) == "%"]
-    for n_, i in enumerate(prozent):
-        _ak_deckeln(df, i, set(prozent[n_ + 1:]))
-    ss["an_aktien"] = _aktien_df(df)
+    ss["an_aktien"] = _aktien_df(_prozent_verteilen(df))
     ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
 
 
-def _form_anwenden(sfx: str, aktion: str):
+SORTIERUNG = {"sektor": "Sektor, dann A–Z", "ticker": "Ticker A–Z", "name": "Name A–Z", "keine": "Reihenfolge lassen"}
+
+
+def _sortieren(df: pd.DataFrame, art: str) -> pd.DataFrame:
+    """Aktien-Tabelle sortieren (Update 9.1): nach Sektor (alphabetisch, ohne Sektor am Schluss) und Ticker, nach Ticker
+    oder nach Name. Leere Zeilen bleiben unten."""
+    df = _aktien_df(df, 0).reset_index(drop=True)
+    if art not in ("sektor", "ticker", "name") or not len(df):
+        return _aktien_df(df)
+    voll = [i for i in df.index if _txt(df.at[i, "Ticker"]).strip()]
+    rest = [i for i in df.index if i not in voll]
+
+    def _k(i):
+        t = _txt(df.at[i, "Ticker"]).strip().upper()
+        if art == "sektor":
+            sek = _txt(df.at[i, "Sektor"]).strip()
+            return (sek == "", sek.lower(), t)
+        if art == "name":
+            n = _txt(df.at[i, "Name"]).strip()
+            return (n == "" or n.startswith("nicht gefunden"), n.lower(), t)
+        return (t,)
+    return _aktien_df(df.loc[sorted(voll, key=_k) + rest])
+
+
+def _form_anwenden(sfx: str, aktion: str, sortierung: str | None = None):
     """Formular «Eingabe» abgeschickt (Update 9): Erst jetzt werden Aufteilung, Bezug, Aktien- und Treasury-Tabelle und
     die Suche übernommen und gerechnet – während des Tippens passiert nichts, die Tabelle springt also nicht.
-    aktion: «uebernehmen», «speichern» (übernehmen + Portfolio speichern) oder «zurueck» (Eingaben verwerfen)."""
+    aktion: «uebernehmen», «speichern» (übernehmen + Portfolio speichern) oder «zurueck» (Eingaben verwerfen).
+    sortierung: neue Sortierung der Aktien-Tabelle (bleibt für weitere Übernahmen gesetzt, neue Titel landen am richtigen Ort)."""
     ss = st.session_state
     if aktion == "zurueck":
         ss["an_form_ver"] = ss.get("an_form_ver", 0) + 1
@@ -654,7 +737,7 @@ def _form_anwenden(sfx: str, aktion: str):
         for i in df.index:
             pct = _num(df.at[i, "Gewicht %"])
             if _txt(df.at[i, "Fix"]) == "%" and pct is not None:
-                df.at[i, "Gewicht %"] = _fz(pct / (alt_pak / 100) if neu_bez == AKTIENTEIL else pct * alt_pak / 100, 2)
+                df.at[i, "Gewicht %"] = _fz_pct(pct / (alt_pak / 100) if neu_bez == AKTIENTEIL else pct * alt_pak / 100)
         ss["an_aktien"] = df
     # 2. Aufteilung setzen
     ss.update(an_kap_txt=ui.de(neu_kap, 0), an_kapital=float(neu_kap), an_p_ak=neu_pak,
@@ -672,6 +755,12 @@ def _form_anwenden(sfx: str, aktion: str):
     if such := ss.get(f"an_f_such{sfx}"):
         ss.update(an_such=such, an_such_stk=ss.get(f"an_f_stk{sfx}") or 0, an_such_pct=ss.get(f"an_f_pct{sfx}") or 0.0)
         _such_hinzu()
+    if "an_aktien" in ss:
+        ss["an_aktien"] = _aktien_df(_prozent_verteilen(ss["an_aktien"]))
+    if sortierung:
+        ss["an_sort"] = sortierung
+    if ss.get("an_sort") in ("sektor", "ticker", "name") and "an_aktien" in ss:
+        ss["an_aktien"] = _sortieren(ss["an_aktien"], ss["an_sort"])
     ss["an_form_ver"] = ss.get("an_form_ver", 0) + 1
     if aktion == "speichern":
         ss["an_pf_save_req"] = True
@@ -738,7 +827,7 @@ def sektor_skalieren(df: pd.DataFrame, anteile: dict, ziel_summe: float, basis: 
         else:
             betrag = ziel
         df.at[i, "Betrag USD"] = _fz(betrag)
-        df.at[i, "Gewicht %"] = _fz(betrag / basis * 100, 2) if basis > 0 else ""
+        df.at[i, "Gewicht %"] = _fz_pct(betrag / basis * 100) if basis > 0 else ""
         if _txt(df.at[i, "Fix"]) != "%":           # %-Zeilen bleiben %-fix (mit neuem Gewicht), sonst gilt die neue Stückzahl
             df.at[i, "Fix"] = "Stück" if kurs else "USD"
     return df
@@ -789,6 +878,133 @@ def _sek_form(sfx: str, aktion: str, ziele: dict):
     _meldung("Sektorgewichte angewendet" + (f" ({', '.join(geaendert)})" if geaendert else " – nichts geändert")
              + f": Aktien gesamt {ui.de(summe, 0)} → {ui.de(neu_summe, 0)} USD. Titel innerhalb eines Sektors behalten ihr Verhältnis "
                "(ganze Stücke, abgerundet).")
+
+
+# ---------------------------------------------------------------------------
+# Import aus dem Scoring-Modell (Excel, Blatt «Portfolio») – Update 9.2
+# ---------------------------------------------------------------------------
+def _kopf(x) -> str:
+    return "".join(str(x or "").lower().split()).replace("-", "").replace("\u00ad", "")
+
+
+def scoring_lesen(datei) -> dict:
+    """Blatt «Portfolio» des Scoring-Modells lesen: Titel mit Sektor, Name, Gewicht Aktienteil und Gesamtportfolio (in %),
+    Aktienquote (Zelle «Soll: Aktienquote», sonst Summe Gesamt / Summe Aktienteil). Liest die in Excel gespeicherten Werte."""
+    import openpyxl
+
+    try:
+        wb = openpyxl.load_workbook(datei, data_only=True, read_only=True)
+    except Exception as e:  # noqa: BLE001
+        return dict(fehler=f"Datei nicht lesbar: {e}")
+    if "Portfolio" not in wb.sheetnames:
+        return dict(fehler="Blatt «Portfolio» nicht gefunden – ist das das Scoring-Modell?")
+    rows = [list(r) for r in wb["Portfolio"].iter_rows(min_row=1, max_row=600, values_only=True)]
+    wb.close()
+    kopf = None
+    for r_i, r in enumerate(rows[:30]):
+        n = [_kopf(c) for c in r]
+        if "ticker" in n and any(x.startswith("gewichtaktienteil") for x in n):
+            kopf = r_i
+            c_t = n.index("ticker")
+            c_a = next(i for i, x in enumerate(n) if x.startswith("gewichtaktienteil"))
+            c_g = next((i for i, x in enumerate(n) if x.startswith("gewichtgesamt")), None)
+            c_s = n.index("sektor") if "sektor" in n else None
+            c_n = n.index("bezeichnung") if "bezeichnung" in n else None
+            break
+    if kopf is None:
+        return dict(fehler="Im Blatt «Portfolio» keine Kopfzeile mit «Ticker» und «Gewicht Aktienteil» gefunden.")
+
+    def _w(r, c):
+        v = r[c] if c is not None and c < len(r) else None
+        return float(v) if isinstance(v, (int, float)) else _num(v)
+
+    titel, gesehen = [], set()
+    for r in rows[kopf + 1:]:
+        t = r[c_t] if c_t < len(r) else None
+        if t is None or not str(t).strip():
+            break
+        tk = str(t).strip().upper().replace(".", "-")
+        if tk in gesehen:
+            continue
+        gesehen.add(tk)
+        titel.append(dict(ticker=tk, akt=_w(r, c_a), ges=_w(r, c_g),
+                          sektor=str(r[c_s] or "") if c_s is not None else "", name=str(r[c_n] or "") if c_n is not None else ""))
+    if not titel:
+        return dict(fehler="Keine Titel gefunden.")
+    if all(x["akt"] is None for x in titel):
+        return dict(fehler="Die Gewichte sind leer – die Datei einmal in Excel öffnen und speichern (dann sind die Formelwerte drin).")
+    s_a = sum(x["akt"] or 0 for x in titel)
+    s_g = sum(x["ges"] or 0 for x in titel)
+    faktor = 100.0 if s_a <= 1.5 else 1.0                 # Excel speichert 1,21 % als 0,0121
+    for x in titel:
+        x["akt"] = x["akt"] * faktor if x["akt"] is not None else None
+        x["ges"] = x["ges"] * faktor if x["ges"] is not None else None
+    quote = None
+    for r in rows[:60]:
+        for j, c in enumerate(r):
+            if _kopf(c).startswith("soll:aktienquote"):
+                quote = next((v for v in r[j + 1:] if isinstance(v, (int, float))), None)
+                break
+        if quote is not None:
+            break
+    if quote is not None:
+        quote = quote * 100 if quote <= 1.5 else quote
+    elif s_a:
+        quote = s_g / s_a * 100
+    return dict(titel=titel, quote=quote, summe_akt=s_a * faktor, summe_ges=s_g * faktor)
+
+
+def _scoring_uebernehmen():
+    """Titel aus dem Scoring-Modell ins aktive Analyseportfolio: Bezug «Aktienteil», Aktien % = Aktienquote des Modells,
+    Treasuries = 100 − Aktien − Cash, alle Titel mit fixem Gewicht % (volle Genauigkeit), Kurse in einem Abruf."""
+    ss = st.session_state
+    d = ss.get("an_sc") or {}
+    if not d.get("titel"):
+        return
+    q = float(d.get("quote") or ss.get("an_p_ak") or 0)
+    ca = float(ss.get("an_p_ca") or 0)
+    ss.update(an_p_ak=round(q, 4), an_p_tr=round(max(0.0, 100 - q - ca), 4), an_bezug=AKTIENTEIL, an_modell_quote=round(q, 4))
+    df = pd.DataFrame([{"Ticker": x["ticker"], "Gewicht %": _fz_pct(x["akt"]), "Fix": "%"} for x in d["titel"] if x["akt"]])
+    df = _prozent_verteilen(_aktien_neu_rechnen(df))
+    if ss.get("an_sort") in ("sektor", "ticker", "name"):
+        df = _sortieren(df, ss["an_sort"])
+    ss["an_aktien"] = _aktien_df(df)
+    for k in ("an_ak_ver", "an_form_ver"):
+        ss[k] = ss.get(k, 0) + 1
+    ohne = [_txt(t) for t, k in zip(ss["an_aktien"]["Ticker"], ss["an_aktien"]["Kurs USD"]) if _txt(t).strip() and not _num(k)]
+    n_t = sum(1 for x in d["titel"] if x["akt"])
+    _meldung(f"{n_t} Titel aus dem Scoring-Modell übernommen · Bezug «Aktienteil» · Aktien {ui.de(q, 2)} % · Treasuries "
+             f"{ui.de(max(0.0, 100 - q - ca), 2)} % · Cash {ui.de(ca, 2)} %."
+             + (f" Ohne Kurs (Ticker prüfen): {', '.join(ohne)}." if ohne else ""))
+
+
+def _scoring_bereich():
+    ss = st.session_state
+    with st.expander("Titel aus dem Scoring-Modell übernehmen (Excel)", icon=":material/upload_file:"):
+        st.caption("Liest im Blatt «Portfolio» Ticker und «Gewicht Aktienteil» mit voller Genauigkeit und die Aktienquote "
+                   "(«Soll: Aktienquote»). So rechnet die App genau wie das Modell: Gewicht Gesamtportfolio = Aktienteil × Aktienquote.")
+        f = st.file_uploader("Scoring-Modell (.xlsx)", type=["xlsx"], key=f"an_sc_up{ss.get('an_ver', 0)}",
+                             label_visibility="collapsed")
+        if f is None:
+            return
+        sig = [f.name, f.size]
+        if (ss.get("an_sc") or {}).get("sig") != sig:
+            ss["an_sc"] = dict(sig=sig, **scoring_lesen(f))
+        d = ss["an_sc"]
+        if d.get("fehler"):
+            st.error(d["fehler"], icon=":material/error:")
+            return
+        ui.kopf_kpis([("Titel", f"{len(d['titel'])}", "aus dem Blatt «Portfolio»"),
+                      ("Summe Aktienteil", f"{ui.de(d['summe_akt'], 2)} %", "soll 100 %"),
+                      ("Summe Gesamtportfolio", f"{ui.de(d['summe_ges'], 2)} %", "= Aktienquote"),
+                      ("Aktienquote", f"{ui.de(d['quote'], 2)} %" if d.get("quote") is not None else "–", "wird «Aktien %»")])
+        st.dataframe(pd.DataFrame([{"Sektor": x["sektor"], "Ticker": x["ticker"], "Name": x["name"],
+                                    "Gewicht Aktienteil %": round(x["akt"], 4) if x["akt"] is not None else None,
+                                    "Gewicht Gesamt %": round(x["ges"], 4) if x["ges"] is not None else None} for x in d["titel"]]),
+                     hide_index=True, width="stretch", height=240)
+        st.button("In dieses Analyseportfolio übernehmen – ersetzt die Aktien", type="primary", icon=":material/download:",
+                  on_click=_scoring_uebernehmen, key="an_sc_los",
+                  help="Treasuries-Zeilen bleiben. Danach prüfen und mit «Speichern» fürs Team ablegen.")
 
 
 def _sektor_bereich(ctx):
@@ -930,7 +1146,7 @@ def _such_hinzu():
     stueck = ss.get("an_such_stk") or 0
     pct = ss.get("an_such_pct") or 0.0
     if pct:                        # Prozent hat Vorrang vor Stück
-        df.at[i, "Gewicht %"] = _fz(pct, 2)
+        df.at[i, "Gewicht %"] = _fz_pct(pct)
         _ak_rechnen(df, i, {"Ticker", "Gewicht %"})
     else:
         df.at[i, "Menge"] = _fz_menge(stueck) if stueck else ""
@@ -1042,7 +1258,7 @@ def portfolio_vorlage(tabellen: dict, fred: dict, lade_kurse) -> tuple[pd.DataFr
 # als Kopie in st.session_state["an_pf"][id]["state"] – Wechseln verliert also keine ungespeicherten Änderungen.
 # ---------------------------------------------------------------------------
 PF_KEYS = ("an_aktien", "an_treas", "an_cash", "an_kapital", "an_kap_txt", "an_p_ak", "an_p_tr", "an_p_ca", "an_bezug",
-           "an_fuellen", "an_eingabe", "an_kz")
+           "an_fuellen", "an_eingabe", "an_kz", "an_modell_quote")
 # Widget-Schlüssel löscht Streamlit, sobald die Seite verlassen wird → Spiegel «_<key>» hält den Wert
 WIDGET_KEYS = ("an_kap_txt", "an_p_ak", "an_p_tr", "an_p_ca", "an_bezug", "an_fuellen", "an_pf_name", "an_pf_notiz")
 BESTAND = "__bestand__"        # im Vergleich: aktuelles Portfolio (Transaktionen)
@@ -1103,6 +1319,8 @@ def _eingabe_aus_state(s) -> dict:
     e = _kern(s.get("an_aktien", _aktien_df(None, 0)), s.get("an_treas", _leer_treas()), b["kapital"], b["pct"],
               s.get("an_bezug", GESAMT))
     e["fuellen"] = s.get("an_fuellen") if s.get("an_fuellen") in FUELLEN else "Index"
+    if s.get("an_modell_quote") is not None:
+        e["modell_quote"] = float(s["an_modell_quote"])       # Aktienquote des Scoring-Modells (nur für den Hinweis)
     return e
 
 
@@ -1140,7 +1358,9 @@ def _aus_eingabe_laden(e: dict, kapital_std: float, alloc: dict):
         if c_ not in a_.columns:
             a_[c_] = None
     t_ = _treas_df(pd.DataFrame(e.get("treas") or []))
-    ss.update(an_aktien=_aktien_neu_rechnen(a_), an_treas=t_ if len(t_) else _leer_treas())
+    if e.get("modell_quote") is not None:
+        ss["an_modell_quote"] = float(e["modell_quote"])
+    ss.update(an_aktien=_aktien_df(_prozent_verteilen(_aktien_neu_rechnen(a_))), an_treas=t_ if len(t_) else _leer_treas())
 
 
 def _wert(key: str, default=None):
@@ -1852,6 +2072,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
         uebernahme.bereich(ctx, fred, gespeichert)
 
+    _scoring_bereich()
+
     # --- Eingabe (Update 9): alles in einem Formular – getippt wird ohne Unterbruch, gerechnet erst mit «Übernehmen» ----------
     import portfolio as P2
 
@@ -1908,7 +2130,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                               "gelten im neuen Bezug.")
                 liste = P2.sp500_liste()
                 if liste:
-                    c1, c2, c2b = st.columns([2.4, 0.8, 0.8])
+                    c1, c2, c2b, c3 = st.columns([2.1, 0.7, 0.7, 1.1])
                     c1.selectbox("Titel hinzufügen", sorted(liste), index=None, key=f"an_f_such{sfx}",
                                  placeholder="Titel hinzufügen: z. B. MSFT oder Microsoft",
                                  format_func=lambda t: f"{t} – {liste[t][0]} · {liste[t][1]}", label_visibility="collapsed")
@@ -1916,8 +2138,21 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                     help="Stückzahl für den gewählten Titel")
                     c2b.number_input("%", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=0.0, key=f"an_f_pct{sfx}",
                                      label_visibility="collapsed", help="oder Gewicht % (hat Vorrang vor Stück)")
-                st.data_editor(ss["an_aktien"].assign(Löschen=False), num_rows="dynamic", hide_index=True, width="stretch",
-                               key=f"an_ed_a{sfx}", disabled=["Name", "Sektor", "Kurs USD", "Fix"],
+                    c3.form_submit_button("Hinzufügen", icon=":material/add:", type="primary", width="stretch",
+                                          on_click=_form_anwenden, args=(sfx, "uebernehmen"),
+                                          help="Fügt den gewählten Titel in die Tabelle ein (übernimmt dabei auch die übrigen Eingaben)")
+                akt_sort = ss.get("an_sort", "keine")
+                s0, *s_kn = st.columns([0.7, 1.2, 1, 1, 1.2])
+                s0.caption(f"Sortieren · aktiv: {SORTIERUNG.get(akt_sort, SORTIERUNG['keine'])}")
+                for col, art in zip(s_kn, SORTIERUNG):
+                    col.form_submit_button(SORTIERUNG[art], width="stretch", type="secondary",
+                                           icon=":material/check:" if art == akt_sort else None,
+                                           on_click=_form_anwenden, args=(sfx, "uebernehmen", art),
+                                           help="Sortiert die Tabelle (übernimmt dabei die übrigen Eingaben). Die Sortierung bleibt, "
+                                                "neu hinzugefügte Titel landen am richtigen Ort." if art != "keine"
+                                           else "Ab jetzt nicht mehr automatisch sortieren (neue Titel unten anfügen)")
+                st.data_editor(_editor_ansicht(ss["an_aktien"]), num_rows="dynamic", hide_index=True, width="stretch",
+                               key=f"an_ed_a{sfx}", disabled=["Name", "Sektor", "Kurs USD", "Ist %", "Fix"],
                                column_config={
                                    "Löschen": st.column_config.CheckboxColumn("✕", help="Häkchen setzen = Zeile entfernen", width="small"),
                                    "Ticker": st.column_config.TextColumn(help="Ticker (z. B. MSFT, BRK-B) oder Firmenname (z. B. Microsoft)"),
@@ -1926,8 +2161,12 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                    "Menge": st.column_config.TextColumn("Stück", help="Stückzahl → Betrag wird berechnet"),
                                    "Betrag USD": st.column_config.TextColumn(help="Betrag → ganze Stücke (abgerundet), Betrag danach exakt"),
                                    "Gewicht %": st.column_config.TextColumn(
-                                       help="Anteil am Gesamtportfolio bzw. Aktienteil (Umschalter oben). Eingetippt = fix: ändern sich "
-                                            "Kapital oder Aktien-%, werden die Stück neu berechnet. Sonst zeigt die Spalte das Ist-Gewicht."),
+                                       help="Anteil am Gesamtportfolio bzw. Aktienteil (Umschalter oben), bis 4 Nachkommastellen. "
+                                            "Eingetippt = fix (Ziel): ändern sich Kapital oder Aktien-%, werden die Stück neu berechnet. "
+                                            "Sonst zeigt die Spalte das Ist-Gewicht."),
+                                   "Ist %": st.column_config.TextColumn(
+                                       help="Tatsächliches Gewicht mit ganzen Stücken (gleicher Bezug wie «Gewicht %»). Weicht vom "
+                                            "Ziel ab, weil nur ganze Aktien gekauft werden – bei teuren Titeln (z. B. BKNG) sichtbar."),
                                    "Fix": st.column_config.TextColumn(width="small",
                                                                       help="Was vorgegeben ist: % (Gewicht bleibt, Stück passen sich an), "
                                                                            "Stück oder USD (Betrag bleibt)")})
@@ -1962,9 +2201,22 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         n_ak = sum(1 for t in ss["an_aktien"]["Ticker"] if _txt(t).strip())
         summe = sum(_num(b_) or 0 for b_ in ss["an_aktien"]["Betrag USD"])
         s_pct = sum(_num(p_) or 0 for p_ in ss["an_aktien"]["Gewicht %"])
-        ziel_pct = 100.0 if ss.get("an_bezug") == AKTIENTEIL else float(ss.get("an_p_ak") or 0)
-        st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD = {ui.de(s_pct, 1)} % von {ui.de(ziel_pct, 1)} % "
-                   f"({'Aktienteil' if ss.get('an_bezug') == AKTIENTEIL else 'Aktienquote am Gesamtportfolio'}) · "
+        basis_ = _basis(ss)
+        ist_pct = summe / basis_ * 100 if basis_ > 0 else 0.0
+        teil = ss.get("an_bezug") == AKTIENTEIL
+        ziel_pct = 100.0 if teil else float(ss.get("an_p_ak") or 0)
+        if s_pct > ziel_pct + 0.01:
+            st.warning(f"Die eingegebenen Gewichte ergeben {ui.de(s_pct, 2)} % "
+                       + (f"des Aktienteils – mehr als 100 %." if teil else
+                          f"des Gesamtportfolios, «Aktien %» steht aber auf {ui.de(ziel_pct, 2)} %. Für euer Modell «Aktien %» auf "
+                          f"{ui.de(s_pct, 2)} setzen – sonst werden die Titel gekürzt."), icon=":material/warning:")
+        elif teil and n_ak and abs(float(ss.get("an_p_ak") or 0) - float(ss.get("an_modell_quote") or ss.get("an_p_ak") or 0)) > 0.01:
+            st.warning(f"Bezug «Aktienteil»: Die Gewichte gelten für Aktien {ui.de(float(ss.get('an_p_ak') or 0), 2)} % des Kapitals. "
+                       f"Das Scoring-Modell rechnet mit {ui.de(float(ss['an_modell_quote']), 2)} % – «Aktien %» anpassen, damit die "
+                       "Beträge übereinstimmen.", icon=":material/warning:")
+        st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD · Gewicht % (Ziel) {ui.de(s_pct, 2)} % · Ist "
+                   f"{ui.de(ist_pct, 2)} % von {ui.de(ziel_pct, 1)} % "
+                   f"({'Aktienteil' if teil else 'Aktienquote am Gesamtportfolio'}) · "
                    "Zeile entfernen: Häkchen in der Spalte ✕ (oder Ticker leeren) · Kurse = letzter Schlusskurs; "
                    "gekauft wird am 01.12. zum Eröffnungskurs.")
         _sektor_bereich(ctx)
