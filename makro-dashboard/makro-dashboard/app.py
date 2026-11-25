@@ -288,6 +288,7 @@ fred, labels = pipeline.mische_markt(fred_roh, yahoo)
 hist, hist_fehler, _ = analyse.lade_historie(pipeline.HIST_TICKER, 6)
 _r = pipeline.berechne(fred, labels, tabellen, hist, yahoo)
 analyse.setze_benchmark(_r["einst"]["bond_benchmark"])
+analyse.setze_cashzins(fred)
 daten, status, kombis, szen, risiken, alloc = _r["daten"], _r["status"], _r["kombis"], _r["szen"], _r["risiken"], _r["alloc"]
 try:
     _fp = erwartungen.fed_pfad(fred)
@@ -475,8 +476,6 @@ seiten = {
                 url_path="sektoren"),
         st.Page(_doks(_seite_taktik, "taktik"), title="Taktik", icon=M("donut_large"), url_path="taktik"),
         st.Page(_doks(lambda: risiko.seite_risiko(ctx), "risiko"), title="Risiko & Risikobudget", icon=M("shield"), url_path="risiko"),
-        st.Page(_doks(lambda: anleihen.seite_anleihen(ctx, fred), "anleihen"), title="Anleihen & Duration", icon=M("stacked_line_chart"),
-                url_path="anleihen"),
         st.Page(_doks(lambda: entscheide.seite_entscheide(ctx, TEAM), "entscheide"), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
         st.Page(_doks(lambda: monitoring_seite.seite_monitoring(ctx, TEAM, markt.lade_yahoo), "monitoring"), title="Monitoring",
                 icon=M("notifications_active"), url_path="monitoring"),

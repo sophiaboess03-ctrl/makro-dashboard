@@ -17,7 +17,7 @@ from makro import szenarien as SZm
 from storage import jetzt, zahl
 
 WIRKT_AUF = ("Änderungen wirken sofort auf: **Erwartungen** (Wahrscheinlichkeit jeder Antwort), **Taktik** (Orientierung neben "
-             "jedem Feld), **Anleihen & Duration** (Zinsszenarien), **Was ist eingepreist?** (eure Sicht gegen den Markt), "
+             "jedem Feld), **Analyse → Anleihen & Cash** (Zinsszenarien), **Was ist eingepreist?** (eure Sicht gegen den Markt), "
              "**IPS** (Plausibilität von Rendite und Verlust) und das **Gesamtbild**.")
 
 

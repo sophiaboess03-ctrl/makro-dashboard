@@ -4,7 +4,8 @@ Methodik (auch in der App erklärt):
 - Tagesschlusskurse von Yahoo Finance, dividendenbereinigt (Total Return).
 - Konstante Gewichte (tägliches Rebalancing), annualisiert mit 252 Handelstagen.
 - Risikofreier Zins: 13-Wochen-T-Bill (^IRX), Ersatzwert 4 %.
-- Treasuries über liquide ETFs je Laufzeitband (Näherung), Cash verzinst zum risikofreien Zins.
+- Treasuries über liquide ETFs je Laufzeitband (Näherung). Cash verzinst wie in der Simulation mit SOFR − 0,5 % (Update 12;
+  vor dem Start der SOFR-Reihe 13-Wochen-T-Bill − 0,5 %). Sharpe Ratio weiterhin gegen den T-Bill.
 - Noch nicht verteiltes Budget: wahlweise als Index-Platzhalter (SPY bzw. Treasury-ETF des Benchmarks) oder als Cash.
 - «Aktienteil» = nur die eingegebenen Titel, auf 100 % hochgerechnet (Risiko der Titel für sich allein).
 - Aktien-Eingabe auch als «Gewicht %» (Bezug Gesamtportfolio oder Aktienteil); fixe % passen die Stückzahl an,
@@ -56,6 +57,31 @@ BENCH_ETF = {"US-Treasury-Markt gesamt (≈ GOVT)": "GOVT", "Treasuries 3–7 J.
 def setze_benchmark(name: str):
     global NEUTRAL_PROXY
     NEUTRAL_PROXY = BENCH_ETF.get(name, "GOVT")
+
+
+CASH_SOFR: pd.Series | None = None   # SOFR in % je Tag (von FRED, gesetzt von der App), für die Verzinsung des Cash
+
+
+def setze_cashzins(fred: dict):
+    """Cash in den Kennzahlen wie in der Simulation verzinsen: SOFR − Marge (cashzins.py)."""
+    global CASH_SOFR
+    import cashzins as CZ
+
+    CASH_SOFR = CZ.basis(fred)[0]
+
+
+def cash_rendite(index: pd.DatetimeIndex, rf: pd.Series) -> pd.Series:
+    """Tagesrendite des Cash: max(SOFR − Marge, 0), Act/360; ohne SOFR (oder davor) T-Bill − Marge."""
+    import cashzins as CZ
+
+    ersatz = (rf.reindex(index).fillna(RF_ERSATZ / TAGE) * TAGE * 100 - CZ.MARGE).clip(lower=0)   # % p.a.
+    if CASH_SOFR is not None and len(CASH_SOFR):
+        s = CASH_SOFR.reindex(CASH_SOFR.index.union(index)).ffill().reindex(index)
+        s[index < CASH_SOFR.index[0]] = np.nan
+        satz = (s - CZ.MARGE).clip(lower=0).fillna(ersatz)
+    else:
+        satz = ersatz
+    return satz / 100 * 365 / CZ.TAGE_BASIS / TAGE
 KLUMPEN = 10.0          # % des Gesamtportfolios je Einzeltitel
 
 
@@ -186,10 +212,10 @@ def kennzahlen(r: pd.Series, rf: pd.Series, bm: pd.Series | None = None) -> dict
 
 
 def portfolio_reihe(R: pd.DataFrame, rf: pd.Series, gewichte: dict[str, float], cash: float) -> pd.Series:
-    """Tagesrendite bei konstanten Gewichten; Cash verzinst zum risikofreien Zins."""
+    """Tagesrendite bei konstanten Gewichten; Cash verzinst wie in der Simulation (SOFR − 0,5 %, siehe cash_rendite)."""
     w = pd.Series({k: v for k, v in gewichte.items() if k in R.columns}, dtype=float)
     r = R[w.index].mul(w, axis=1).sum(axis=1) if len(w) else pd.Series(0.0, index=R.index)
-    return r + cash * rf.reindex(R.index).fillna(RF_ERSATZ / TAGE)
+    return r + (cash * cash_rendite(R.index, rf) if cash else 0.0)
 
 
 def risikobeitraege(R: pd.DataFrame, gewichte: dict[str, float]) -> pd.Series:
@@ -591,6 +617,20 @@ def _aktien_neu_rechnen(df: pd.DataFrame) -> pd.DataFrame:
         if _txt(df.at[i, "Ticker"]).strip():
             _ak_rechnen(df, i, {"Ticker"}, kurse)
     return df
+
+
+def _cash_zins_txt(cash: float, fred: dict, ctx) -> str:
+    """Kurzer Zusatz: erwarteter Zins auf dem Cash bis Simulationsende (SOFR − 0,5 %)."""
+    try:
+        import cashzins as CZ
+
+        a = CZ.aktuell(fred)
+        if a is None or cash <= 0:
+            return ""
+        pg = CZ.prognose(cash, a["sofr"], ctx.szdef, ctx.szen)
+        return f" · Zins bis 28.02. ≈ {ui.de(pg['total'], 0)} USD ({ui.de(a['netto'], 2)} %)"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def budget(ss) -> dict:
@@ -1729,8 +1769,10 @@ def portfolio_vorlage(tabellen: dict, fred: dict, lade_kurse) -> tuple[pd.DataFr
         t = tr.groupby("band")["wert"].sum().reset_index().rename(columns={"band": "Laufzeit", "wert": "Betrag USD"})
     else:
         t = _leer_treas()
+    import cashzins as CZ
+
     zinsen = float(b["zins"].sum()) if len(b) else 0.0
-    cash = float(kapital + cash_delta + zinsen)
+    cash = float(kapital + cash_delta + zinsen + CZ.zins_bis(tx, kapital, fred))
     wert = float(b["wert"].sum()) + cash if len(b) else cash
     return (pd.concat([a, _leer_aktien(2)], ignore_index=True).astype({"Ticker": "string", "Menge": "float64", "Betrag USD": "float64"}),
             t.astype({"Laufzeit": "string", "Betrag USD": "float64"}),
@@ -2469,7 +2511,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
     ui.seitenkopf("Analyse – Analyseportfolios prüfen und vergleichen",
                   "Mehrere Analyseportfolios anlegen, Titel und Mengen eingeben – die App berechnet Rendite, Risiko, Sharpe Ratio, "
                   "Beta, Value at Risk, Korrelationen und prüft eure Regeln. Vergleich immer mit dem neutralen Portfolio "
-                  "(strategische Allokation laut IPS) und dem S&P 500.")
+                  "(strategische Allokation laut IPS) und dem S&P 500. Ansicht «Anleihen & Cash»: Treasuries einzeln gegen die "
+                  "Benchmark, Szenarien, Stresstest und Zins auf Cash.")
     tab = ctx.tabellen
     kapital_std, bm = P._einstellungen(tab.get("einstellungen"))
     ss = st.session_state
@@ -2534,9 +2577,20 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         ss.update(an_p_ak=float(ctx.alloc["aktien"]), an_p_tr=float(ctx.alloc["anleihen"]), an_p_ca=float(ctx.alloc["cash"]))
     ss.setdefault("an_bezug", GESAMT)
 
-    ansicht = st.segmented_control("Ansicht", ["bearbeiten", "vergleich"], default="bearbeiten", key="an_ansicht",
-                                   format_func=lambda x: "Portfolio bearbeiten & analysieren" if x == "bearbeiten"
-                                   else "Portfolios vergleichen", label_visibility="collapsed") or "bearbeiten"
+    ansicht = st.segmented_control("Ansicht", ["bearbeiten", "anleihen", "vergleich"], default="bearbeiten", key="an_ansicht",
+                                   format_func=lambda x: {"bearbeiten": "Portfolio bearbeiten & analysieren",
+                                                          "anleihen": "Anleihen & Cash",
+                                                          "vergleich": "Portfolios vergleichen"}[x],
+                                   label_visibility="collapsed") or "bearbeiten"
+    if ansicht == "anleihen":       # Update 12: frühere Seite «Anleihen & Duration» + Zins auf Cash, für das aktive Portfolio
+        import anleihen as AN
+
+        _portfolio_leiste(ctx, tab, kapital_std, ctx.alloc, gs, fred, lade_kurse)
+        AN.bereich_analyse(ctx, fred)
+        for k in WIDGET_KEYS:
+            if k in ss:
+                ss["_" + k] = ss[k]
+        return
     if ansicht == "vergleich":
         _seite_vergleich(ctx, tab, gs, fred, lade_kurse)
         _alle_portfolios(ctx, tab)
@@ -2580,7 +2634,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             ("Aktien verfügbar", _rest(b["rest_a"]), f"Budget {ui.de(b['budget_a'], 0)} · investiert {ui.de(b['inv_a'], 0)} USD"),
             ("Treasuries verfügbar", _rest(b["rest_t"]), f"Budget {ui.de(b['budget_t'], 0)} · investiert {ui.de(b['inv_t'], 0)} USD"),
             ("Cash (Rest)", f"{ui.de(b['frei'], 0)} USD",
-             f"{ui.de(b['frei'] / b['kapital'] * 100 if b['kapital'] else 0, 1)} % · Ziel mind. {ui.de(b['cash_ziel'], 0)} USD"),
+             f"{ui.de(b['frei'] / b['kapital'] * 100 if b['kapital'] else 0, 1)} % · Ziel mind. {ui.de(b['cash_ziel'], 0)} USD"
+             + _cash_zins_txt(b["frei"], fred, ctx)),
             ("Verfügbares Kapital", f"{ui.de(max(b['frei'] - b['cash_ziel'], 0), 0)} USD",
              f"von {ui.de(b['kapital'], 0)} USD · noch investierbar ohne Cash-Ziel zu unterschreiten"),
         ])
@@ -2863,7 +2918,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             fig.update_yaxes(ticksuffix=" %")
             ui.zeige(fig)
         st.caption(f"Zeitraum {kv['von']:%d.%m.%Y} – {kv['bis']:%d.%m.%Y} ({kv['tage']} Handelstage) · risikofreier Zins "
-                   f"Ø {ui.de(kv['rf'], 2)} % (13-Wochen-T-Bill) · dividendenbereinigte Kurse, konstante Gewichte · "
+                   f"Ø {ui.de(kv['rf'], 2)} % (13-Wochen-T-Bill) · Cash verzinst mit SOFR − 0,5 % wie in der Simulation · dividendenbereinigte Kurse, konstante Gewichte · "
                    f"Neutral = {ctx.alloc['neutral']['aktien']:.0f} % S&P 500 / "
                    f"{100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} % Treasuries ({NEUTRAL_PROXY}) / "
                    f"{ctx.alloc['neutral'].get('cash', 5):.0f} % Cash. Vergangene Werte sind keine Prognose. Kurse {zeit}.")

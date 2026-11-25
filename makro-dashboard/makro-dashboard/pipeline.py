@@ -79,7 +79,7 @@ def berechne(fred: dict, labels: dict, tabellen: dict, hist: dict | None = None,
 
 def fred_serien(markt_fred: list[str]) -> list[str]:
     return sorted({i["series"] for i in C.INDIKATOREN if i["quelle"] == "fred"} | {"GDPC1", "GDPPOT", C.REZESSION_SERIE}
-                  | set(C.ZINSKURVE) | set(C.ERWARTUNGS_SERIEN) | set(markt_fred) | {"CPIAUCSL", "DFEDTARU", "T5YIFR"} | set(_trigger_serien()))
+                  | set(C.ZINSKURVE) | set(C.ERWARTUNGS_SERIEN) | set(markt_fred) | {"CPIAUCSL", "DFEDTARU", "T5YIFR", "SOFR", "DFF"} | set(_trigger_serien()))
 
 
 def _trigger_serien() -> list[str]:

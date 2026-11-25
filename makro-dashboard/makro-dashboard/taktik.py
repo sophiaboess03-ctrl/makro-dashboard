@@ -262,7 +262,7 @@ def seite_taktik(ctx, bond: dict):
                   + (f" · Frage 1: {erw.get(1)}" if erw.get(1) else "") + (f" · Frage 2: {erw.get(2)}" if erw.get(2) else ""),
         "anleihen": f"Benchmark 50 % · Szenarien: {ui.de(100 - o_aktien - ips['saa_cash'], 0)} %"
                     + (f" · Frage 5: {erw.get(5)}" if erw.get(5) else ""),
-        "cash": f"IPS {ui.de(ips['cash_min'], 0)}–{ui.de(ips['cash_max'], 0)} % · Cash-Zins ≈ {ui.de(bond.get('cash', 0), 2)} % p.a.",
+        "cash": f"IPS {ui.de(ips['cash_min'], 0)}–{ui.de(ips['cash_max'], 0)} % · Cash-Zins (SOFR − 0,5 %) ≈ {ui.de(bond.get('cash', 0), 2)} % p.a.",
     }
     werte = {}
     pdf_kl = []
@@ -358,7 +358,7 @@ def seite_taktik(ctx, bond: dict):
                            help=f"Szenarien gewichtet {ui.de(gew['alloc']['tips'], 0)} %")
     lz = c3.text_input("Laufzeiten-Schwerpunkt", value=(t or {}).get("laufzeiten", "") or "1–7 J., nichts > 10 J.", key=f"{prefix}lz")
     st.caption(f"Orientierung: Benchmark-Duration ≈ {ui.de(bond['duration'], 1)} J. · Szenarien {ui.de(gew['alloc']['duration'], 1)} J. · "
-               f"aktive Signale: {', '.join(ui.de(x, 1) + ' J.' for x in ctx.alloc['duration_ziele']) or 'keine'} · Details auf «Anleihen & Duration».")
+               f"aktive Signale: {', '.join(ui.de(x, 1) + ' J.' for x in ctx.alloc['duration_ziele']) or 'keine'} · Details auf «Analyse → Anleihen & Cash».")
     begr = st.text_area("Begründung der Taktik (für Entscheidungsprotokoll und Dozent, mindestens 30 Zeichen)",
                         value=(t or {}).get("begruendung", ""), height=120, key=f"{prefix}begr")
 

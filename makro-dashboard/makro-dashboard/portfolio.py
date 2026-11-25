@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import cashzins as CZ
 import sektoren as SK
 from makro import config as C
 from makro import ui
@@ -167,11 +168,12 @@ def verlauf(tx: pd.DataFrame, kurse: dict, fred: dict, start_kapital: float) -> 
     if tx.empty:
         return pd.Series(dtype=float)
     tage = pd.bdate_range(tx["datum"].min(), pd.Timestamp.today().normalize())
+    cz = CZ.zins_reihe(tx, start_kapital, fred, tage[-1] if len(tage) else None)["zins_total"]   # Zins auf Cash (Update 12)
     werte = {}
     for d in tage:
         pos, cash, _ = positionen(tx, d)
         b = bewerte(pos, kurse, fred, d)
-        werte[d] = start_kapital + cash + (b["wert"].sum() + b["zins"].sum() if len(b) else 0.0)
+        werte[d] = start_kapital + cash + float(cz.get(d, 0.0)) + (b["wert"].sum() + b["zins"].sum() if len(b) else 0.0)
     return pd.Series(werte)
 
 
@@ -206,7 +208,9 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
     heute = pd.Timestamp.today().normalize()
     pos, cash_delta, realisiert = positionen(tx)
     b = bewerte(pos, kurse, fred, heute)
-    cash = kapital + cash_delta
+    cz_reihe = CZ.zins_reihe(tx, kapital, fred, heute)
+    cash_zins = float(cz_reihe["zins_total"].iloc[-1]) if len(cz_reihe) else 0.0
+    cash = kapital + cash_delta + cash_zins
     aktien = float(b.loc[b["klasse"] == "Aktie", "wert"].sum()) if len(b) else 0.0
     treas = float(b.loc[b["klasse"] == "Treasury", "wert"].sum()) if len(b) else 0.0
     zinsen = float(b["zins"].sum()) if len(b) else 0.0
@@ -276,13 +280,16 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                                        for y, du in zip(d["rendite"], d["duration"])],
                 "Bewertung": d["quelle"]})
             st.dataframe(out, hide_index=True, width="stretch")
-            st.caption(f"Cash: {_usd(cash)} · realisierte Gewinne: {_usd(realisiert)} · Kuponerträge (vereinfacht, seit Kauf): "
-                       f"{_usd(zinsen)}. Treasuries: Näherung über die FRED-Zinskurve mit konstantem Abstand seit Kauf.")
+            st.caption(f"Cash: {_usd(cash)} (davon Zins auf Cash {_usd(cash_zins)}) · realisierte Gewinne: {_usd(realisiert)} · "
+                       f"Kuponerträge (vereinfacht, seit Kauf): {_usd(zinsen)}. Treasuries: Näherung über die FRED-Zinskurve mit "
+                       "konstantem Abstand seit Kauf.")
             gross = d.sort_values("Gewicht", ascending=False).iloc[0]
             if gross["klasse"] == "Aktie" and gross["Gewicht"] > 10:
                 st.warning(f"Klumpenrisiko: {gross['ticker']} macht {ui.de(gross['Gewicht'], 1)} % des Portfolios aus.")
         else:
             st.caption("Keine offenen Positionen.")
+        if len(tx):
+            _cash_zins_bereich(cz_reihe, cash, fred, ctx)
 
     with t2:
         c1, c2 = st.columns(2)
@@ -482,6 +489,35 @@ def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
     st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {"Rot": "Verstoss", "Gelb": "Hinweis", "Grün": "ok"}[s_])}'
                         f'&nbsp; {txt}</span><span></span></div>' for s_, txt in checks), unsafe_allow_html=True)
     st.caption("Mehr Details (Einzeltitel, Korrelationen, Was-wäre-wenn) auf der Seite «Analyse» mit «Aktuelles Portfolio übernehmen».")
+
+
+def _cash_zins_bereich(cz: pd.DataFrame, cash: float, fred: dict, ctx):
+    """Zins auf Cash (SOFR − 0,5 %): bisher je Monat und Prognose bis Simulationsende."""
+    a = CZ.aktuell(fred)
+    with st.expander(f"Zins auf Cash (SOFR − {ui.de(CZ.MARGE, 1)} %)", icon=":material/savings:"):
+        if a is None:
+            st.warning("Kein SOFR von FRED – der Zins auf Cash wird nicht gerechnet (FRED-Schlüssel prüfen).")
+            return
+        bisher = float(cz["zins_total"].iloc[-1]) if len(cz) else 0.0
+        offen = float(cz["aufgelaufen"].iloc[-1]) if len(cz) else 0.0
+        pg = CZ.prognose(cash, a["sofr"], ctx.szdef, ctx.szen, von=pd.Timestamp.today().normalize() + pd.Timedelta(days=1))
+        ui.kopf_kpis([
+            ("Satz heute", f"{ui.de(a['netto'], 2)} %", f"{a['quelle']} {ui.de(a['sofr'], 2)} % ({a['datum']:%d.%m.%Y}) − "
+                                                        f"{ui.de(CZ.MARGE, 1)} % Marge"),
+            ("Zins seit erstem Trade", _usd(bisher), f"davon {_usd(offen)} aufgelaufen, Gutschrift Ende Monat"),
+            ("Erwartet bis 28.02.", _usd(pg["total"]), f"auf {_usd(cash)} Cash · SOFR unverändert {_usd(pg.get('unveraendert'))}"),
+            ("Zins pro Monat (heute)", _usd(max(cash, 0) * a["netto"] / 100 / CZ.TAGE_BASIS * 30),
+             "30 Tage auf dem heutigen Cash"),
+        ])
+        m = CZ.monate(cz)
+        if len(m):
+            st.dataframe(pd.DataFrame({"Monat": m["Monat"], "Tage": m["Tage"], "Ø Cash": m["Ø Cash"].map(_usd),
+                                       "Ø Satz": m["Ø Satz"].map(lambda x: f"{ui.de(x, 2)} %"), "Zins": m["Zins"].map(lambda x: _usd(x, 2))}),
+                         hide_index=True, width="stretch")
+        st.caption(f"Regel der Simulation: Cash verzinst mit SOFR − {ui.de(CZ.MARGE, 1)} % (keine Steuern, keine Transaktionskosten). "
+                   "Gerechnet Act/360 auf dem Cash am Tagesende, Gutschrift monatlich. Prognose: SOFR folgt der Fed gemäss euren "
+                   "Szenarien (Veränderung ab dem Tag nach der Sitzung). Mehr dazu in der Analyse unter «Anleihen & Cash». "
+                   f"Quelle: [FRED SOFR]({CZ.QUELLE_URL}).")
 
 
 def _wdur(b: pd.DataFrame) -> float:
@@ -738,7 +774,7 @@ def zusammenfassung(tabellen: dict, fred: dict, lade_kurse, alloc: dict) -> dict
     kurse = lade_kurse(ticker + ("^GSPC",))[0] if ticker else {}
     pos, cash_delta, _ = positionen(tx)
     b = bewerte(pos, kurse, fred, pd.Timestamp.today().normalize())
-    cash = kapital + cash_delta
+    cash = kapital + cash_delta + CZ.zins_bis(tx, kapital, fred)
     ak = float(b.loc[b["klasse"] == "Aktie", "wert"].sum()) if len(b) else 0.0
     tr = float(b.loc[b["klasse"] == "Treasury", "wert"].sum()) if len(b) else 0.0
     total = ak + tr + cash + (float(b["zins"].sum()) if len(b) else 0.0)

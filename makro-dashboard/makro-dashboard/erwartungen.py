@@ -211,7 +211,7 @@ def seite_erwartungen(ctx, fred: dict, prog: dict | None = None):
         tab = pd.DataFrame(zeilen)
         st.dataframe(tab, hide_index=True, width="stretch")
         st.caption("Markt = Forward-Rendite in einem Monat aus der heutigen Kurve minus heutige Rendite. Liegt eure Erwartung tiefer, "
-                   "seid ihr bullisher als der Markt (längere Duration lohnt). Details: «Anleihen & Duration». Quellen: " + _q("DGS2", "DGS10"))
+                   "seid ihr bullisher als der Markt (längere Duration lohnt). Details: «Analyse → Anleihen & Cash». Quellen: " + _q("DGS2", "DGS10"))
         R.tabelle(tab)
 
     # --- Inflation ---------------------------------------------------------

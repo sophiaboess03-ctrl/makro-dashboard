@@ -365,7 +365,9 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
     perf = P.performance_daten(tx, kurse, fred, kapital, ctx.alloc["neutral"]) if len(tx) else None
     pos, cash_delta, _ = P.positionen(tx) if len(tx) else ({}, 0.0, 0.0)
     b = P.bewerte(pos, kurse, fred, pd.Timestamp.today().normalize()) if pos else pd.DataFrame()
-    cash = kapital + cash_delta
+    import cashzins as CZ
+
+    cash = kapital + cash_delta + (CZ.zins_bis(tx, kapital, fred) if len(tx) else 0.0)
     total = (float(b["wert"].sum() + b["zins"].sum()) if len(b) else 0.0) + cash
     if perf:
         pdf.ln(18)
