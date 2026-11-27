@@ -717,6 +717,15 @@ def seite_einstellungen(ctx: Ctx):
                                             for k, v in (("duration", du), ("tips", ti), ("bond_benchmark", bb))],
                           "Einstellungen gespeichert.")
     st.divider()
+    st.subheader("Benchmark des Dozenten (Titelgewichte)")
+    try:
+        import benchmark as BM
+
+        with st.container(border=True):
+            BM.bereich_import(ctx, key="einst_bm")
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Benchmark-Datei nicht verfügbar: {e}")
+    st.divider()
     st.subheader("Datenquellen")
     st.markdown(f"- **Speicher:** {st.session_state.get('store_name', '–')}\n- **FRED:** {ctx.fred_stand}")
     if ctx.fred_fehler:
