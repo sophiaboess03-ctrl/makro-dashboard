@@ -31,6 +31,7 @@ import kalender
 import export
 import ic
 import analyse
+import benchmark as benchmark_mod
 import anleihen
 import dateien
 import dozent
@@ -288,6 +289,7 @@ fred, labels = pipeline.mische_markt(fred_roh, yahoo)
 hist, hist_fehler, _ = analyse.lade_historie(pipeline.HIST_TICKER, 6)
 _r = pipeline.berechne(fred, labels, tabellen, hist, yahoo)
 analyse.setze_benchmark(_r["einst"]["bond_benchmark"])
+benchmark_mod.setze(tabellen)     # Update 16: Titelgewichte der Benchmark (Datei der Dozenten-App)
 analyse.setze_cashzins(fred)
 daten, status, kombis, szen, risiken, alloc = _r["daten"], _r["status"], _r["kombis"], _r["szen"], _r["risiken"], _r["alloc"]
 try:

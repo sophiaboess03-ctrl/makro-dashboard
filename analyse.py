@@ -83,6 +83,8 @@ def cash_rendite(index: pd.DatetimeIndex, rf: pd.Series) -> pd.Series:
         satz = ersatz
     return satz / 100 * 365 / CZ.TAGE_BASIS / TAGE
 KLUMPEN = 10.0          # % des Gesamtportfolios je Einzeltitel
+BENCH = "Benchmark (50/50)"
+BENCH_FARBE = "#B93A32"       # wie auf der Seite Portfolio   # Strategie des Dozenten: 50 % S&P 500 (SPY) / 50 % Treasuries (Treasury-ETF der Einstellungen)
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +325,47 @@ def offenes_budget(pos: pd.DataFrame, cash: float, kapital: float, pct: dict | N
     return out
 
 
+def benchmark_reihe(R: pd.DataFrame, rf: pd.Series) -> pd.Series:
+    """Tagesrendite der Benchmark des Dozenten: 50 % S&P 500 (SPY) / 50 % Treasuries (Treasury-ETF), täglich rebalanciert."""
+    return portfolio_reihe(R, rf, {SPX: C.BENCHMARK["aktien"] / 100, NEUTRAL_PROXY: C.BENCHMARK["anleihen"] / 100},
+                           C.BENCHMARK["cash"] / 100)
+
+
+def vs_benchmark(r: pd.Series, r_b: pd.Series, k_r: dict, k_b: dict) -> dict:
+    """Tracking Error, Information Ratio und Mehrrendite p.a. gegenüber der Benchmark 50/50."""
+    out = {}
+    if k_r.get("rendite") is not None and k_b.get("rendite") is not None:
+        out["mehr_bench"] = float(k_r["rendite"] - k_b["rendite"])
+    akt = (r - r_b.reindex(r.index)).dropna()
+    if len(akt) >= 20 and akt.std() > 1e-12:
+        te = float(akt.std(ddof=1) * math.sqrt(TAGE))
+        out.update(te_bench=te * 100, ir_bench=float(akt.mean() * TAGE / te))
+    return out
+
+
+def active_share_alle(aktien_usd: dict, treas_usd: float, fuell: dict, cash_usd: float, total: float, na: float, nt: float) -> dict:
+    """Active Share (in %) für Vorauswahl, Aktienteil, Benchmark, Neutral und S&P 500 – Aktien gegen den S&P 500 der
+    Benchmark-Datei, «_ges» = Gesamtportfolio gegen 50/50/0. Leeres Dict, wenn keine Benchmark-Datei geladen ist."""
+    try:
+        import benchmark as BM
+
+        if BM.aktuell() is None:
+            return {}
+        f_a = float((fuell or {}).get(SPX, 0.0))
+        f_t = float((fuell or {}).get(NEUTRAL_PROXY, 0.0)) if NEUTRAL_PROXY != SPX else 0.0
+        a = BM.active_share(aktien_usd) if aktien_usd else None
+        v = BM.active_share(aktien_usd, index_betrag=f_a) if (aktien_usd or f_a) else None
+        ab = C.BENCHMARK["aktien"] / 100
+        return dict(
+            aktien=a["active_share"] if a else None, vorauswahl=v["active_share"] if v else None, detail_aktien=a, detail_vorauswahl=v,
+            bench=0.0, neutral=0.0, sp=0.0, bench_ges=0.0,
+            vorauswahl_ges=BM.active_share_gesamt(aktien_usd, treas_usd + f_t, cash_usd, total, index_betrag=f_a),
+            neutral_ges=(abs(na - ab) + abs(1 - na - nt - (1 - ab)) + nt) / 2 * 100,
+            sp_ges=(abs(1 - ab) + (1 - ab)) / 2 * 100)
+    except Exception:  # noqa: BLE001 – Active Share darf die Analyse nie verhindern
+        return {}
+
+
 def rechne(pos: pd.DataFrame, cash: float, total: float, hist: dict, neutral: dict,
            fuell: dict[str, float] | None = None) -> dict | None:
     """Alle Kennzahlen für Vorauswahl, Aktienteil allein, neutrales IC-Portfolio und S&P 500 im gleichen Zeitfenster.
@@ -343,6 +386,7 @@ def rechne(pos: pd.DataFrame, cash: float, total: float, hist: dict, neutral: di
     na, nt = neutral["aktien"] / 100, neutral.get("cash", 5) / 100
     r_n = portfolio_reihe(R, rf, {SPX: na, NEUTRAL_PROXY: 1 - na - nt}, nt)
     r_s = R[SPX]
+    r_b = benchmark_reihe(R, rf)
     k = {"Vorauswahl": kennzahlen(r_p, rf, r_s)}
     # Aktienteil allein (Titel auf 100 % hochgerechnet, ohne Treasuries, Cash und Platzhalter)
     wa = pos[pos["klasse"] == "Aktie"].groupby("ticker")["wert"].sum() if len(pos) else pd.Series(dtype=float)
@@ -351,8 +395,22 @@ def rechne(pos: pd.DataFrame, cash: float, total: float, hist: dict, neutral: di
     r_a = portfolio_reihe(R, rf, gew_a, 0.0) if gew_a else None
     if r_a is not None:
         k["Aktienteil"] = kennzahlen(r_a, rf, r_s)
+    k[BENCH] = kennzahlen(r_b, rf, r_s)
     k["Neutral (IPS)"] = kennzahlen(r_n, rf, r_s)
     k["S&P 500"] = kennzahlen(r_s, rf, r_s)
+    for name_, rr in (("Vorauswahl", r_p), ("Aktienteil", r_a), ("Neutral (IPS)", r_n), ("S&P 500", r_s)):
+        if rr is not None and k.get(name_):
+            k[name_].update(vs_benchmark(rr, r_b, k[name_], k[BENCH]))
+    # Active Share (Update 16): Aktien gegen die Titelgewichte des S&P 500 in der Benchmark-Datei des Dozenten
+    wa_all = pos[pos["klasse"] == "Aktie"].groupby("ticker")["wert"].sum() if len(pos) else pd.Series(dtype=float)
+    as_ = active_share_alle(wa_all.to_dict(), float(pos.loc[pos["klasse"] == "Treasury", "wert"].sum()) if len(pos) else 0.0,
+                            fuell, c * total, total, na, nt)
+    for name_, key_ in (("Vorauswahl", "vorauswahl"), ("Aktienteil", "aktien"), (BENCH, "bench"), ("Neutral (IPS)", "neutral"),
+                        ("S&P 500", "sp")):
+        if k.get(name_) and as_.get(key_) is not None:
+            k[name_]["active_share"] = as_[key_]
+        if k.get(name_) and as_.get(key_ + "_ges") is not None:
+            k[name_]["active_share_ges"] = as_[key_ + "_ges"]
     akt = r_p - r_n
     if akt.std() > 0:
         te = float(akt.std(ddof=1) * math.sqrt(TAGE))
@@ -364,39 +422,123 @@ def rechne(pos: pd.DataFrame, cash: float, total: float, hist: dict, neutral: di
             einzel[t] = kennzahlen(R[t], rf, r_s)
             andere = r_p - R[t] * gew[t]
             einzel[t]["korr_rest"] = float(np.corrcoef(R[t], andere)[0, 1]) if andere.std() > 0 else np.nan
-    return dict(R=R, rf=rf, r_p=r_p, r_n=r_n, r_s=r_s, r_a=r_a, k=k, einzel=einzel, gew=gew, gew_a=gew_a, cash=c, start=start,
+    return dict(R=R, rf=rf, r_p=r_p, r_n=r_n, r_s=r_s, r_a=r_a, r_b=r_b, k=k, as_=as_, einzel=einzel, gew=gew, gew_a=gew_a, cash=c, start=start,
                 fuell=fuell, beitrag=risikobeitraege(R, gew), beitrag_a=risikobeitraege(R, gew_a) if gew_a else pd.Series(dtype=float))
 
 
-def vorschlag(R: pd.DataFrame, rf: pd.Series, gew: dict, cash: float, n: int = 4000, seed: int = 1,
-              fix: set | None = None) -> dict | None:
-    """Zufallsportfolios im Aktienteil (Treasuries, Cash und Platzhalter fix): beste Sharpe Ratio und tiefste Volatilität."""
-    aktien = [t for t in gew if t in R.columns and t not in {v[0] for v in PROXY.values()} and t not in (fix or set())]
+def _proj_box(v: np.ndarray, lo: np.ndarray, hi: np.ndarray, summe: float) -> np.ndarray:
+    """Projektion auf {lo ≤ w ≤ hi, Σw = summe} (Bisektion über die Verschiebung)."""
+    a, b = float((v - hi).min()) - 1.0, float((v - lo).max()) + 1.0
+    for _ in range(80):
+        m = (a + b) / 2
+        if np.clip(v - m, lo, hi).sum() > summe:
+            a = m
+        else:
+            b = m
+    return np.clip(v - (a + b) / 2, lo, hi)
+
+
+def optimieren(R: pd.DataFrame, rf: pd.Series, r_b: pd.Series | None, gew: dict, cash: float, fix: set | None = None,
+               sektor_von: dict | None = None, deckel: float = 0.05, mindest: float = 0.0, sektor_halten: bool = True,
+               daempfung: float = 0.5, iterationen: int = 500) -> dict | None:
+    """Gewichte des Aktienteils optimieren (Update 16, ersetzt die Zufallssuche): Treasuries, Cash und Platzhalter bleiben fix,
+    die Summe der Aktien bleibt gleich (mit «Sektorgewichte halten» auch die Summe je Sektor = Sektorallokation bleibt).
+    Grenzen je Titel: mindest ≤ Gewicht ≤ deckel (Anteil am Gesamtportfolio). Ziele:
+      max_sharpe – höchste Sharpe Ratio (Überschussrendite / ihre Schwankung)
+      min_vola   – tiefste Volatilität des Gesamtportfolios
+      max_ir     – höchste Information Ratio gegenüber der Benchmark 50/50
+    daempfung (0–1): erwartete Rendite je Titel = historische Rendite, zu diesem Anteil Richtung Durchschnitt aller Titel
+    gezogen (gegen Zufallstreffer der Vergangenheit). Projizierter Gradientenanstieg – Sharpe/IR sind auf dieser Menge
+    quasi-konkav, das Ergebnis ist also das globale Optimum unter den Grenzen."""
+    fix = fix or set()
+    aktien = [t for t in gew if t in R.columns and t not in {v[0] for v in PROXY.values()} and t not in fix]
     if len(aktien) < 2:
         return None
-    anteil = sum(gew[t] for t in aktien)
-    fix = {t: w for t, w in gew.items() if t not in aktien}
-    deckel = min(1.0, KLUMPEN / 100 / anteil) if anteil else 1.0
-    ohne_deckel = deckel * len(aktien) < 1.15     # mit so wenigen Titeln nicht einhaltbar
-    if ohne_deckel:
-        deckel = 1.0
-    rng = np.random.default_rng(seed)
-    W = rng.dirichlet(np.ones(len(aktien)), size=n * 5)
-    W = W[(W <= deckel + 1e-9).all(axis=1)][:n]
-    if len(W) < 50:
-        return None
-    Ra = R[aktien].to_numpy()
-    basis = portfolio_reihe(R, rf, fix, cash).to_numpy()
-    rfv = rf.reindex(R.index).to_numpy()
-    P = basis[:, None] + Ra @ (W.T * anteil)
-    ex = P - rfv[:, None]
-    sd = P.std(axis=0, ddof=1)
-    sharpe = ex.mean(axis=0) / sd * math.sqrt(TAGE)
-    i_s, i_v = int(np.nanargmax(sharpe)), int(np.nanargmin(sd))
-    return dict(aktien=aktien, anteil=anteil, deckel=deckel, n=len(W), ohne_deckel=ohne_deckel,
-                max_sharpe=dict(zip(aktien, W[i_s] * anteil)), min_vola=dict(zip(aktien, W[i_v] * anteil)),
-                sharpe=(float(sharpe[i_s]), float(sharpe[i_v])), vola=(float(sd[i_s] * math.sqrt(TAGE) * 100),
-                                                                        float(sd[i_v] * math.sqrt(TAGE) * 100)))
+    w0 = np.array([gew[t] for t in aktien], dtype=float)
+    anteil = float(w0.sum())
+    fest = {t: w for t, w in gew.items() if t not in aktien}
+    X = R[aktien].to_numpy()
+    y = portfolio_reihe(R, rf, fest, cash).to_numpy()
+    rfv = rf.reindex(R.index).fillna(RF_ERSATZ / TAGE).to_numpy()
+    rbv = r_b.reindex(R.index).fillna(0.0).to_numpy() if r_b is not None else None
+    mu = X.mean(axis=0)
+    mu_s = (1 - daempfung) * mu + daempfung * mu.mean()
+    S = np.cov(X, rowvar=False, ddof=1)
+    Xc = X - X.mean(axis=0)
+    # Gruppen (Sektoren) und Grenzen
+    sv = sektor_von or {}
+    if sektor_halten:
+        gruppen = {}
+        for i, t in enumerate(aktien):
+            gruppen.setdefault(sv.get(t) or "Unbekannt", []).append(i)
+    else:
+        gruppen = {"alle": list(range(len(aktien)))}
+    lo_all, hi_all, hinweise = np.full(len(aktien), mindest), np.full(len(aktien), deckel), []
+    summen = {}
+    for g, idx in gruppen.items():
+        s_g = float(w0[idx].sum())
+        summen[g] = s_g
+        n = len(idx)
+        if n * deckel < s_g - 1e-12:
+            hi_all[idx] = s_g / n
+            hinweise.append(f"{g}: {n} Titel tragen {ui.de(s_g * 100, 2)} % nicht mit höchstens {ui.de(deckel * 100, 2)} % je Titel – "
+                            f"Obergrenze dort {ui.de(s_g / n * 100, 2)} %.")
+        if n * mindest > s_g + 1e-12:
+            lo_all[idx] = s_g / n
+
+    def proj(v):
+        out = np.empty_like(v)
+        for g, idx in gruppen.items():
+            out[idx] = _proj_box(v[idx], lo_all[idx], hi_all[idx], summen[g])
+        return out
+
+    def _quoti(ziel):                      # Ziel = y − ziel (rf oder Benchmark): Mittel/Std des Überschusses
+        e = y - ziel
+        m0, v0 = float(e.mean()), float(e.var(ddof=1))
+        c = Xc.T @ (e - e.mean()) / (len(e) - 1)
+
+        def f(w):
+            m = m0 + float(mu_s @ w)
+            v = max(v0 + 2 * float(c @ w) + float(w @ S @ w), 1e-18)
+            sd = math.sqrt(v)
+            return m / sd, mu_s / sd - m * (c + S @ w) / sd ** 3
+        return f
+
+    def _minvar():
+        v0 = float(y.var(ddof=1))
+        c = Xc.T @ (y - y.mean()) / (len(y) - 1)
+
+        def f(w):
+            return -(v0 + 2 * float(c @ w) + float(w @ S @ w)), -2 * (c + S @ w)
+        return f
+
+    def _maxi(f, start):
+        w = proj(start)
+        val, g = f(w)
+        eta = 0.02 * anteil
+        for _ in range(iterationen):
+            d = g / (np.abs(g).max() + 1e-30)
+            while True:
+                w_n = proj(w + eta * d)
+                val_n, g_n = f(w_n)
+                if val_n >= val - 1e-15:
+                    break
+                eta *= 0.5
+                if eta < 1e-10:
+                    return w
+            schritt = float(np.abs(w_n - w).max())
+            w, val, g = w_n, val_n, g_n
+            eta = min(eta * 1.4, anteil)
+            if schritt < 1e-9:
+                break
+        return w
+
+    ziele = {"max_sharpe": _quoti(rfv), "min_vola": _minvar()}
+    if rbv is not None:
+        ziele["max_ir"] = _quoti(rbv)
+    erg = {k: dict(zip(aktien, _maxi(f, w0))) for k, f in ziele.items()}
+    return dict(aktien=aktien, anteil=anteil, fest=fest, deckel=deckel, mindest=mindest, gruppen={g: [aktien[i] for i in idx]
+                for g, idx in gruppen.items()}, hinweise=hinweise, daempfung=daempfung, **erg)
 
 
 def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: dict) -> list[tuple[str, str]]:
@@ -436,6 +578,10 @@ def _pct(x, d=1, vz=False):
     return "–" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{ui.de(x, d, vz)} %"
 
 
+def _pp(x, d=1):
+    return "–" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{ui.de(x, d, True)} Pp."
+
+
 def _zahl(x, d=2, vz=False):
     return "–" if x is None or (isinstance(x, float) and math.isnan(x)) else ui.de(x, d, vz)
 
@@ -450,6 +596,11 @@ ZEILEN = [  # (Schlüssel, Bezeichnung, Formatierer, Erklärung)
     ("beta", "Beta zum S&P 500", _zahl, "1 = bewegt sich wie der Markt"),
     ("alpha", "Jensen-Alpha p.a.", lambda x: _pct(x, 1, True), "Überrendite nach Beta-Risiko"),
     ("korr", "Korrelation zum S&P 500", _zahl, ""),
+    ("mehr_bench", "Mehrrendite vs. Benchmark p.a.", lambda x: _pp(x), "Rendite p.a. − Benchmark des Dozenten (50/50), in Prozentpunkten"),
+    ("te_bench", "Tracking Error vs. Benchmark", _pct, "Schwankung der Renditedifferenz zur Benchmark 50/50 – IPS-Grenze «höchster TE»"),
+    ("ir_bench", "Information Ratio vs. Benchmark", _zahl, "Mehrrendite vs. Benchmark pro Einheit Tracking Error"),
+    ("active_share", "Active Share (Aktien)", lambda x: _pct(x, 1), "½ Σ |Titelgewicht − Gewicht im S&P 500 der Benchmark| – IPS-Band"),
+    ("active_share_ges", "Active Share (gesamt)", lambda x: _pct(x, 1), "Aktien, Treasuries (als Block) und Cash gegen 50/50/0"),
     ("te_neutral", "Tracking Error vs. neutral", _pct, "Abweichung vom neutralen Portfolio (IPS)"),
     ("ir_neutral", "Information Ratio vs. neutral", _zahl, "Mehrrendite pro Einheit Tracking Error"),
     ("var95", "VaR 95 % (1 Tag)", _pct, "Verlust, der an 19 von 20 Tagen nicht überschritten wurde"),
@@ -617,83 +768,6 @@ def _aktien_neu_rechnen(df: pd.DataFrame) -> pd.DataFrame:
         if _txt(df.at[i, "Ticker"]).strip():
             _ak_rechnen(df, i, {"Ticker"}, kurse)
     return df
-
-
-def _download_leiste(ctx, fred: dict):
-    """Oben in «Portfolio bearbeiten» (Update 15): ganzes Portfolio als PDF (rechnet selbst) und Positionen als Excel."""
-    ss = st.session_state
-    with st.container(border=True):
-        c1, c2, c3 = st.columns([1.35, 1.25, 1.4])
-        if c1.button("Ganzes Portfolio als PDF", icon=":material/picture_as_pdf:", width="stretch", key="an_pdf_top",
-                     help="Rechnet alle Kennzahlen mit dem übernommenen Stand und erstellt ein PDF mit allem: Kennzahlen, Vergleich, "
-                          "Einzeltitel, Korrelation, Regeln & Sektoren, Gewichte-Vorschlag, Anleihen & Cash."):
-            ss["an_pdf_auto"] = True
-            ss.pop("pdfdata_analyse_pdf", None)
-        try:
-            daten = _excel_export(ctx, fred)
-        except Exception:  # noqa: BLE001
-            daten = None
-        name = _wert("an_pf_name", "") or (ss.get("an_pf", {}).get(ss.get("an_aktiv"), {}) or {}).get("name", "Portfolio")
-        c2.download_button("Positionen als Excel", daten or b"", f"Positionen_{re.sub(r'[^A-Za-z0-9]+', '_', str(name)).strip('_')}_"
-                                                                 f"{datetime.now():%Y-%m-%d}.xlsx",
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", icon=":material/table_view:",
-                           width="stretch", key="an_xlsx_top", disabled=not daten,
-                           help="Alle Aktien und Treasuries des übernommenen Stands mit Beträgen, Gewichten und Anleihen-Kennzahlen")
-        ph = c3.empty()
-    return ph
-
-
-def _excel_export(ctx, fred: dict) -> bytes | None:
-    """Übernommener Stand als Excel: Übersicht, Aktien, Treasuries (mit Kupons, Marchzins, Restlaufzeit, Duration, Konvexität)."""
-    import io
-
-    import anleihen as AN
-
-    ss = st.session_state
-    if "an_aktien" not in ss:
-        return None
-    b = budget(ss)
-    kap = b["kapital"] or 0.0
-    ak = ss["an_aktien"]
-    ak = ak[[bool(_txt(t).strip()) for t in ak["Ticker"]]]
-    aktien = pd.DataFrame({
-        "Ticker": ak["Ticker"].astype(str), "Name": ak["Name"].astype(str), "Sektor": ak["Sektor"].astype(str),
-        "Kurs USD": [_num(x) for x in ak["Kurs USD"]], "Stück": [_num(x) for x in ak["Menge"]],
-        "Betrag USD": [_num(x) for x in ak["Betrag USD"]],
-        "Gewicht % (Vorgabe)": [_num(x) for x in ak["Gewicht %"]], "Fix": ak["Fix"].astype(str)})
-    aktien["% Gesamtportfolio"] = [x / kap * 100 if x and kap else None for x in aktien["Betrag USD"]]
-    s_ak = float(aktien["Betrag USD"].fillna(0).sum())
-    aktien["% Aktienteil"] = [x / s_ak * 100 if x and s_ak else None for x in aktien["Betrag USD"]]
-    k = AN.kurve(fred)
-    df = AN.anleihen_tabelle(_treas_df(ss["an_treas"]), k, ctx.szdef, ctx.szen) if len(k) >= 5 else pd.DataFrame()
-    if len(df):
-        treas = pd.DataFrame({
-            "Bezeichnung": df["name"], "ISIN": df["isin"], "Band": df["band"], "Kupon %": df["kupon"],
-            "Fälligkeit": df["faellig"].dt.date if hasattr(df["faellig"], "dt") else df["faellig"], "Restlaufzeit J.": df["T"],
-            "Betrag USD": df["betrag"], "Nominal USD": df["nominal"], "Kurs %": df["kurs"], "Rendite %": df["y"],
-            "Spread bp": df["spread"], "Mod. Duration": df["D"], "Konvexität": df["konv"], "DV01 USD": df["dv01"],
-            "Kupons bis 28.02. USD": df["kupons_sim"], "Kupontermine": df["kupon_daten"], "Marchzins beim Kauf USD": df["marchzins"],
-            "% Gesamtportfolio": df["betrag"] / kap * 100 if kap else None, "% Treasury-Teil": df["gewicht"], "Berechnung": df["art"]})
-    else:
-        treas = _treas_df(ss["an_treas"])
-    kz = AN.kennzahlen_kurz(df) if len(df) else None
-    ueb = [("Portfolio", _wert("an_pf_name", "") or ""), ("Stand", datetime.now().strftime("%d.%m.%Y %H:%M")),
-           ("Kapital USD", kap), ("Aktien % (geplant)", b["pct"]["aktien"]), ("Treasuries % (geplant)", b["pct"]["treas"]),
-           ("Cash % (geplant)", b["pct"]["cash"]), ("Aktien investiert USD", b["inv_a"]), ("Treasuries investiert USD", b["inv_t"]),
-           ("Cash (Rest) USD", b["frei"]), ("Anzahl Aktien", len(aktien))]
-    if kz:
-        ueb += [("Anzahl Anleihen", kz["n"]), ("Ø Kupon %", kz["kupon"]), ("Kupons bis 28.02. USD", kz["kupons"]),
-                ("Marchzins beim Kauf USD", kz["marchzins"]), ("Ø Restlaufzeit J.", kz["restlaufzeit"]),
-                ("Mod. Duration J.", kz["duration"]), ("Konvexität", kz["konv"]), ("Ø Rendite %", kz["rendite"]), ("DV01 USD", kz["dv01"])]
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as w:
-        pd.DataFrame(ueb, columns=["Grösse", "Wert"]).to_excel(w, sheet_name="Übersicht", index=False)
-        aktien.to_excel(w, sheet_name="Aktien", index=False)
-        treas.to_excel(w, sheet_name="Treasuries", index=False)
-        for ws in w.book.worksheets:
-            for col in ws.columns:
-                ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or "")) for c in col) + 2, 45)
-    return out.getvalue()
 
 
 def _treasury_kennzahlen(ctx, fred: dict, ss):
@@ -2119,7 +2193,8 @@ def _kz_zusammenfassen(kv: dict, ka: dict, ak_w: float, tr_w: float, cash: float
               cash=round(cash / total * 100, 1), total=round(total, 0),
               von=f"{kv['von']:%Y-%m-%d}", bis=f"{kv['bis']:%Y-%m-%d}", fuellen=fuellen,
               vola_aktien=round(float(ka["vola"]), 4) if ka.get("vola") is not None else None,
-              sharpe_aktien=round(float(ka["sharpe"]), 4) if ka.get("sharpe") is not None else None)
+              sharpe_aktien=round(float(ka["sharpe"]), 4) if ka.get("sharpe") is not None else None,
+              active_share_aktien=round(float(ka["active_share"]), 2) if ka.get("active_share") is not None else None)
     return kz
 
 
@@ -2339,7 +2414,8 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
     labs = {i: namen[i] + (" · ungespeichert" if i in pf and not pf[i].get("gespeichert") else "") for i in optionen}
 
     with st.container(border=True):
-        st.markdown("**Portfolios vergleichen** · alle im gleichen Zeitfenster, gegen das neutrale Portfolio (IPS) und den S&P 500")
+        st.markdown("**Portfolios vergleichen** · alle im gleichen Zeitfenster, gegen die Benchmark des Dozenten (50/50), das "
+                    "neutrale Portfolio (IPS) und den S&P 500")
         default = [i for i in st.session_state.get("an_vgl_wahl", []) if i in optionen] or reihe[:4]
         ss["an_vgl_wahl"] = default
         wahl = st.multiselect("Portfolios", optionen, format_func=labs.get, key="an_vgl_wahl", max_selections=8,
@@ -2485,7 +2561,7 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
                          eff=eff_anzahl(ak_pos["wert"].astype(float)) if len(ak_pos) else 0.0)
 
     spalten = [vg["namen"][i] for i in erg]
-    neutral_cols = ["Neutral (IPS)", "S&P 500"]
+    neutral_cols = [BENCH, "Neutral (IPS)", "S&P 500"]
 
     def _z(name, werte: dict, bed="", neutral=None):
         z = {"Kennzahl": name}
@@ -2503,7 +2579,8 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
            "Aktien / Treasuries / Cash in % (inkl. offenes Budget)",
            {"Neutral (IPS)": f"{ctx.alloc['neutral']['aktien']:.0f} / "
                              f"{100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} / "
-                             f"{ctx.alloc['neutral'].get('cash', 5):.0f} %", "S&P 500": "100 / 0 / 0 %"}),
+                             f"{ctx.alloc['neutral'].get('cash', 5):.0f} %", "S&P 500": "100 / 0 / 0 %",
+            BENCH: f"{C.BENCHMARK['aktien']:.0f} / {C.BENCHMARK['anleihen']:.0f} / {C.BENCHMARK['cash']:.0f} %"}),
         _z("Investiert", {i: f"{zusatz[i]['ak_w'] / zusatz[i]['total'] * 100:.0f} / {zusatz[i]['tr_w'] / zusatz[i]['total'] * 100:.0f} %"
                           for i in erg}, "davon schon in Titeln bzw. Treasuries (Rest = offenes Budget / Cash)"),
         _z("Titel (effektiv)", {i: f"{zusatz[i]['n']} ({ui.de(zusatz[i]['eff'], 1)})" for i in erg},
@@ -2514,10 +2591,14 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
         werte = {i: f(erg[i]["k"]["Vorauswahl"].get(key)) for i in erg if key in erg[i]["k"]["Vorauswahl"]}
         if not werte:
             continue
-        zeilen.append(_z(name, werte, erkl, {c: f(k0[c].get(key)) if key in k0[c] else "–" for c in neutral_cols}))
-    for key, name in (("vola", "Volatilität Aktienteil"), ("sharpe", "Sharpe Aktienteil"), ("beta", "Beta Aktienteil")):
-        fmt = _pct if key == "vola" else _zahl
-        zeilen.append(_z(name, {i: fmt(erg[i]["k"].get("Aktienteil", {}).get(key)) for i in erg}, "nur eure Titel, auf 100 % hochgerechnet"))
+        zeilen.append(_z(name, werte, erkl, {c: f(k0[c].get(key)) if key in k0.get(c, {}) else "–" for c in neutral_cols}))
+    for key, name in (("vola", "Volatilität Aktienteil"), ("sharpe", "Sharpe Aktienteil"), ("beta", "Beta Aktienteil"),
+                      ("active_share", "Active Share Aktienteil")):
+        fmt = _pct if key in ("vola", "active_share") else _zahl
+        zeilen.append(_z(name, {i: fmt(erg[i]["k"].get("Aktienteil", {}).get(key)) for i in erg},
+                         "nur eure Titel, auf 100 % hochgerechnet" + (f" · IPS {ui.de(ctx.ips.get('active_share_min'), 0)}–"
+                                                                      f"{ui.de(ctx.ips.get('active_share_max'), 0)} %"
+                                                                      if key == "active_share" else "")))
     zeilen += [
         _z("Duration Treasuries", {i: f"{ui.de(zusatz[i]['dur'], 1)} J." if zusatz[i]["dur"] else "–" for i in erg},
            f"ETF-Näherung · Taktik {ui.de(ctx.alloc['duration'], 1)} J."),
@@ -2540,7 +2621,7 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
     farbe = {i: PF_FARBEN[n % len(PF_FARBEN)] for n, i in enumerate(erg)}
     R.linien([(vg["namen"][i], (1 + e_["r_p"]).cumprod() * 100, SP.rgb(farbe[i])) for i, e_ in erg.items()]
              + [(n_, (1 + rr).cumprod() * 100, SP.rgb(fb)) for n_, rr, fb in
-                (("Neutral (IPS)", erstes["r_n"], ui.GOLD), ("S&P 500", erstes["r_s"], ui.STAHL))],
+                ((BENCH, erstes["r_b"], BENCH_FARBE), ("Neutral (IPS)", erstes["r_n"], ui.GOLD), ("S&P 500", erstes["r_s"], ui.STAHL))],
              titel="Wertentwicklung (Start = 100)")
     R.h2("Rendite und Risiko")
     R.tabelle(pd.DataFrame([{"Portfolio": vg["namen"][i], "Rendite p.a.": _pct(e_["k"]["Vorauswahl"].get("rendite"), 1, True),
@@ -2553,7 +2634,7 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
                            + [{"Portfolio": n_, "Rendite p.a.": _pct(k0[n_].get("rendite"), 1, True), "Volatilität p.a.": _pct(k0[n_].get("vola")),
                                "Sharpe": _zahl(k0[n_].get("sharpe")), "Max. Drawdown": _pct(k0[n_].get("mdd")),
                                "Rendite pro Einheit Vola": _zahl((k0[n_].get("rendite") or 0) / (k0[n_].get("vola") or float("nan")))}
-                              for n_ in ("Neutral (IPS)", "S&P 500")]), breiten=[60, 35, 35, 30, 35, 40])
+                              for n_ in (BENCH, "Neutral (IPS)", "S&P 500") if n_ in k0]), breiten=[60, 35, 35, 30, 35, 40])
     R.neue_seite()
     R.h("Regeln je Portfolio")
     regel_z, regel_f = [], []
@@ -2570,7 +2651,8 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
         for i, e_ in erg.items():
             w = (1 + e_["r_p"]).cumprod() * 100
             fig.add_trace(go.Scatter(x=w.index, y=w, name=vg["namen"][i], line=dict(color=farbe[i], width=2)))
-        for name, rr, fb in (("Neutral (IPS)", erstes["r_n"], ui.GOLD), ("S&P 500", erstes["r_s"], ui.STAHL)):
+        for name, rr, fb in ((BENCH, erstes["r_b"], BENCH_FARBE), ("Neutral (IPS)", erstes["r_n"], ui.GOLD),
+                             ("S&P 500", erstes["r_s"], ui.STAHL)):
             w = (1 + rr).cumprod() * 100
             fig.add_trace(go.Scatter(x=w.index, y=w, name=name, line=dict(color=fb, width=1.6, dash="dot")))
         fig.update_layout(height=340, margin=dict(l=8, r=8, t=10, b=8), hovermode="x unified")
@@ -2583,8 +2665,8 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
             fig.add_trace(go.Scatter(x=[kv.get("vola")], y=[kv.get("rendite")], mode="markers+text", name=vg["namen"][i],
                                      text=[vg["namen"][i]], textposition="top center", marker=dict(size=13, color=farbe[i]),
                                      hovertemplate="%{text}<br>Vola %{x:.1f} %<br>Rendite %{y:.1f} %<extra></extra>"))
-        for name, fb in (("Neutral (IPS)", ui.GOLD), ("S&P 500", ui.STAHL)):
-            kv = k0[name]
+        for name, fb in ((BENCH, BENCH_FARBE), ("Neutral (IPS)", ui.GOLD), ("S&P 500", ui.STAHL)):
+            kv = k0.get(name, {})
             fig.add_trace(go.Scatter(x=[kv.get("vola")], y=[kv.get("rendite")], mode="markers+text", name=name, text=[name],
                                      textposition="bottom center", marker=dict(size=11, color=fb, symbol="diamond"),
                                      hovertemplate="%{text}<br>Vola %{x:.1f} %<br>Rendite %{y:.1f} %<extra></extra>"))
@@ -2759,8 +2841,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         return
 
     _portfolio_leiste(ctx, tab, kapital_std, ctx.alloc, gs, fred, lade_kurse)
-    gespeichert = gs
     ph_dl = _download_leiste(ctx, fred)
+    gespeichert = gs
 
     if m := ss.pop("an_meldung", None):
         st.warning(m)
@@ -2947,8 +3029,13 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         fund = o2.toggle("Bewertung laden (KGV, Dividende)", value=False, key=f"an_f{v}",
                          help="Holt pro Titel Kennzahlen von Yahoo Finance – dauert einige Sekunden.")
         los = o3.button("Kennzahlen berechnen", type="primary", icon=":material/calculate:", width="stretch")
-    pdf_auto = bool(ss.pop("an_pdf_auto", False))        # Knopf «Ganzes Portfolio als PDF» oben: rechnet selbst
-    los = los or pdf_auto
+        auto_pdf = ss.pop("an_pdf_auto", None) == ss.get("an_aktiv")     # «Ganzes Portfolio als PDF» (Update 15)
+        if auto_pdf:
+            los = True
+        if ss.pop("an_auto_rechnen", False):        # nach «Gewichte übernehmen» gleich neu rechnen (gleiche Einstellungen)
+            los = True
+            jahre = int((ss.get("an_auto_e") or {}).get("jahre") or jahre)
+            fund = bool((ss.get("an_auto_e") or {}).get("fund", fund))
     for k in WIDGET_KEYS:          # Spiegel für den nächsten Seitenbesuch
         if k in ss:
             ss["_" + k] = ss[k]
@@ -3021,23 +3108,39 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
     if erg["fuell"]:
         R.text(f"Noch nicht verteilt und als Index gerechnet: {ui.de(f_a, 0)} USD Aktienbudget → S&P 500 ({SPX}), "
                f"{ui.de(f_t, 0)} USD Treasury-Budget → {NEUTRAL_PROXY}.", klein=True)
+    kb = erg["k"].get(BENCH, {})
+    ips_ = ctx.ips
+    as_lo, as_hi = float(ips_.get("active_share_min") or 0), float(ips_.get("active_share_max") or 100)
+
+    def _ampel(wert, ok: bool, txt=None):
+        if wert is None:
+            return "–"
+        return f"<span style='color:{ui.FARBE['Grün'] if ok else ui.FARBE['Rot']}'>{txt or wert}</span>"
+    as_a = ka.get("active_share")
     kpi1 = [
-        ("Sharpe Ratio", _zahl(kv.get("sharpe")), f"Aktienteil {_zahl(ka.get('sharpe'))} · neutral {_zahl(kn.get('sharpe'))} · "
-                                                   f"S&P 500 {_zahl(ks.get('sharpe'))}"),
-        ("Rendite p.a.", _pct(kv.get("rendite"), 1, True), f"Aktienteil {_pct(ka.get('rendite'), 1, True)} · "
-                                                            f"neutral {_pct(kn.get('rendite'), 1, True)}"),
-        ("Volatilität p.a.", _pct(kv.get("vola")), f"Aktienteil {_pct(ka.get('vola'))} · neutral {_pct(kn.get('vola'))} · "
-                                                    f"S&P 500 {_pct(ks.get('vola'))}"),
-        ("Max. Drawdown", _pct(kv.get("mdd")), f"Aktienteil {_pct(ka.get('mdd'))} · neutral {_pct(kn.get('mdd'))}"),
+        ("Sharpe Ratio", _zahl(kv.get("sharpe")), f"Benchmark {_zahl(kb.get('sharpe'))} · Aktienteil {_zahl(ka.get('sharpe'))} · "
+                                                   f"neutral {_zahl(kn.get('sharpe'))} · S&P 500 {_zahl(ks.get('sharpe'))}"),
+        ("Rendite p.a.", _pct(kv.get("rendite"), 1, True), f"Benchmark {_pct(kb.get('rendite'), 1, True)} → "
+                                                            f"{_pp(kv.get('mehr_bench'))} · "
+                                                            f"Aktienteil {_pct(ka.get('rendite'), 1, True)}"),
+        ("Volatilität p.a.", _ampel(_pct(kv.get("vola")), (kv.get("vola") or 0) <= float(ips_.get("vola_max") or 99)),
+         f"IPS ≤ {ui.de(ips_.get('vola_max'), 0)} % · Benchmark {_pct(kb.get('vola'))} · Aktienteil {_pct(ka.get('vola'))}"),
+        ("Max. Drawdown", _pct(kv.get("mdd")), f"Benchmark {_pct(kb.get('mdd'))} · neutral {_pct(kn.get('mdd'))} · "
+                                               f"IPS tragbar −{ui.de(ips_.get('verlust_max'), 0)} %"),
     ]
     ui.kopf_kpis(kpi1)
     kpi2 = [
-        ("Beta zum S&P 500", _zahl(kv.get("beta")), f"Aktienteil {_zahl(ka.get('beta'))} · neutral {_zahl(kn.get('beta'))}"),
-        ("Tracking Error vs. neutral", _pct(kv.get("te_neutral")), f"Information Ratio {_zahl(kv.get('ir_neutral'))}"),
+        ("Beta zum S&P 500", _zahl(kv.get("beta")), f"Aktienteil {_zahl(ka.get('beta'))} (IPS {ui.de(ips_.get('beta_min'), 2)}–"
+                                                     f"{ui.de(ips_.get('beta_max'), 2)}) · Benchmark {_zahl(kb.get('beta'))}"),
+        ("Tracking Error vs. Benchmark", _ampel(_pct(kv.get("te_bench")), (kv.get("te_bench") or 0) <= float(ips_.get("te_max") or 99)),
+         f"IPS ≤ {ui.de(ips_.get('te_max'), 1)} % · IR {_zahl(kv.get('ir_bench'))} · vs. neutral {_pct(kv.get('te_neutral'))}"),
+        ("Active Share (Aktien)", _ampel(_pct(as_a), as_a is not None and as_lo <= as_a <= as_hi),
+         f"IPS {ui.de(as_lo, 0)}–{ui.de(as_hi, 0)} % · gesamt vs. 50/50 {_pct(kv.get('active_share_ges'))}"
+         + (f" · inkl. offenes Budget {_pct(kv.get('active_share'))}" if erg["fuell"].get(SPX) else "")),
         ("VaR 95 % · 1 Tag", f"{ui.de(kv.get('var95', 0) / 100 * total, 0)} USD",
          f"{_pct(kv.get('var95'), 2)} · 10 Tage ≈ {ui.de(kv.get('var95', 0) / 100 * total * math.sqrt(10), 0)} USD"),
         ("Aufteilung", f"{(ak_w + f_a) / total * 100:.0f} / {(tr_w + f_t) / total * 100:.0f} / {cash_eff / total * 100:.0f} %",
-         f"Aktien / Treasuries / Cash" + (f" (davon investiert {ak_w / total * 100:.0f} / {tr_w / total * 100:.0f} %)" if erg["fuell"] else "")
+         f"Aktien / Treasuries / Cash · Benchmark 50 / 50 / 0" + (f" (investiert {ak_w / total * 100:.0f} / {tr_w / total * 100:.0f} %)" if erg["fuell"] else "")
          + f" · {int((pos['klasse'] == 'Aktie').sum())} Titel, effektiv {ui.de(eff_anzahl(pos.loc[pos['klasse'] == 'Aktie', 'wert']), 1)}"),
     ]
     ui.kopf_kpis(kpi2)
@@ -3046,7 +3149,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
 
     ss["an_kz"] = dict(hash=_hash(_kern(aktien, treas, e["kapital"], e.get("pct") or {}, e.get("bezug", GESAMT))),
                        kz=_kz_zusammenfassen(kv, ka, ak_w, tr_w, cash, total, fuellen))
-    t1, t2, t3, t4, t5 = st.tabs(["Vergleich", "Einzeltitel", "Korrelation", "Regeln & Struktur", "Gewichte-Vorschlag"])
+    t1, t_bm, t_ips, t2, t3, t4, t5 = st.tabs(["Vergleich", "Benchmark & Active Share", "IPS-Abgleich", "Einzeltitel",
+                                               "Korrelation", "Regeln & Struktur", "Gewichte optimieren"])
     with t1:
         k = dict(erg["k"])
         akt = portfolio_vorlage(tab, fred, lade_kurse)
@@ -3062,20 +3166,21 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             e2 = rechne(p2, c2_, tot2, hist2, ctx.alloc["neutral"]) if tot2 > 0 else None
             if e2:
                 k = {n_: k[n_] for n_ in ("Vorauswahl", "Aktienteil") if n_ in k} | {"Aktuelles Portfolio": e2["k"]["Vorauswahl"]} | \
-                    {n_: k[n_] for n_ in ("Neutral (IPS)", "S&P 500")}
+                    {n_: k[n_] for n_ in (BENCH, "Neutral (IPS)", "S&P 500") if n_ in k}
         vgl_df = vergleichstabelle(k)
         st.dataframe(vgl_df, hide_index=True, width="stretch",
                      column_config={"Bedeutung": st.column_config.TextColumn(width="large")})
         R.h("Kennzahlen im Vergleich")
         R.text("Vorauswahl = ganzes Portfolio (Aktien, Treasuries, Cash" + (", offenes Budget als Index" if erg["fuell"] else "")
-               + ") · Aktienteil = nur eure Titel, auf 100 % hochgerechnet · Neutral = strategische Allokation laut IPS.", klein=True)
+               + ") · Aktienteil = nur eure Titel, auf 100 % hochgerechnet · Benchmark = Strategie des Dozenten 50 % S&P 500 / 50 % "
+               f"Treasuries ({NEUTRAL_PROXY}) · Neutral = strategische Allokation laut IPS.", klein=True)
         R.tabelle(vgl_df, breiten=[34] + [22] * (len(vgl_df.columns) - 2) + [80])
         R.linien([(n_, (1 + rr).cumprod() * 100, SP.rgb(fb)) for n_, rr, fb in
-                  (("Vorauswahl", erg["r_p"], ui.BLAU), ("Aktienteil", erg["r_a"], ui.PETROL),
+                  (("Vorauswahl", erg["r_p"], ui.BLAU), ("Aktienteil", erg["r_a"], ui.PETROL), (BENCH, erg["r_b"], BENCH_FARBE),
                    ("Neutral (IPS)", erg["r_n"], ui.GOLD), ("S&P 500", erg["r_s"], ui.STAHL)) if rr is not None],
                  titel="Wertentwicklung (Start = 100)")
         R.linien([(n_, ((1 + rr).cumprod() / (1 + rr).cumprod().cummax() - 1) * 100, SP.rgb(fb)) for n_, rr, fb in
-                  (("Vorauswahl", erg["r_p"], ui.BLAU), ("Neutral (IPS)", erg["r_n"], ui.GOLD))],
+                  (("Vorauswahl", erg["r_p"], ui.BLAU), (BENCH, erg["r_b"], BENCH_FARBE), ("Neutral (IPS)", erg["r_n"], ui.GOLD))],
                  einheit=" %", titel="Drawdown (Verlust vom Höchststand)")
         st.caption("Vorauswahl = ganzes Portfolio (Aktien, Treasuries, Cash" + (", offenes Budget als Index" if erg["fuell"] else "")
                    + ") · Aktienteil = nur eure Titel, auf 100 % hochgerechnet (so schwankt der Aktienteil für sich allein).")
@@ -3084,7 +3189,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             st.markdown("**Wertentwicklung (Start = 100)**")
             fig = go.Figure()
             for name, rr, farbe, breite in (("Vorauswahl", erg["r_p"], ui.BLAU, 2.4), ("Aktienteil", erg["r_a"], ui.BLAU, 1.2),
-                                            ("Neutral (IPS)", erg["r_n"], ui.GOLD, 1.8), ("S&P 500", erg["r_s"], ui.STAHL, 1.6)):
+                                            (BENCH, erg["r_b"], BENCH_FARBE, 1.8),
+                                            ("Neutral (IPS)", erg["r_n"], ui.GOLD, 1.6), ("S&P 500", erg["r_s"], ui.STAHL, 1.4)):
                 if rr is None:
                     continue
                 w = (1 + rr).cumprod() * 100
@@ -3095,7 +3201,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         with c2:
             st.markdown("**Drawdown (Verlust vom Höchststand)**")
             fig = go.Figure()
-            for name, rr, farbe in (("Vorauswahl", erg["r_p"], ui.BLAU), ("Neutral (IPS)", erg["r_n"], ui.GOLD)):
+            for name, rr, farbe in (("Vorauswahl", erg["r_p"], ui.BLAU), (BENCH, erg["r_b"], BENCH_FARBE),
+                                    ("Neutral (IPS)", erg["r_n"], ui.GOLD)):
                 w = (1 + rr).cumprod()
                 dd = (w / w.cummax() - 1) * 100
                 fig.add_trace(go.Scatter(x=dd.index, y=dd, name=name, line=dict(color=farbe, width=1.6),
@@ -3106,9 +3213,31 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             ui.zeige(fig)
         st.caption(f"Zeitraum {kv['von']:%d.%m.%Y} – {kv['bis']:%d.%m.%Y} ({kv['tage']} Handelstage) · risikofreier Zins "
                    f"Ø {ui.de(kv['rf'], 2)} % (13-Wochen-T-Bill) · Cash verzinst mit SOFR − 0,5 % wie in der Simulation · dividendenbereinigte Kurse, konstante Gewichte · "
+                   f"Benchmark = 50 % S&P 500 (SPY) / 50 % Treasuries ({NEUTRAL_PROXY}) · "
                    f"Neutral = {ctx.alloc['neutral']['aktien']:.0f} % S&P 500 / "
                    f"{100 - ctx.alloc['neutral']['aktien'] - ctx.alloc['neutral'].get('cash', 5):.0f} % Treasuries ({NEUTRAL_PROXY}) / "
                    f"{ctx.alloc['neutral'].get('cash', 5):.0f} % Cash. Vergangene Werte sind keine Prognose. Kurse {zeit}.")
+
+    with t_bm:
+        _bereich_benchmark(ctx, erg, pos, info, total, cash, ak_w, tr_w, f_a, f_t, cash_eff, R)
+
+    with t_ips:
+        import ips_abgleich as IA
+
+        dur_t = None
+        try:                  # Duration aus den einzelnen Anleihen (genauer als die ETF-Näherung), sonst ETF-Näherung
+            import anleihen as AN
+
+            k_ = AN.kurve(fred)
+            df_a = AN.anleihen_tabelle(_treas_df(e["treas"]), k_, ctx.szdef, ctx.szen) if len(k_) >= 5 else None
+            if df_a is not None and len(df_a) and f_t <= 0.5:
+                dur_t = float(AN.mix_anleihen(df_a, ctx.szdef)["duration"])
+        except Exception:  # noqa: BLE001
+            dur_t = None
+        m_ips = IA.messwerte_portfolio(ctx, erg, pos, total, cash, info, f_a, f_t, duration=dur_t)
+        R.neue_seite()
+        IA.anzeigen(IA.gap_analyse(ctx.ips, ctx.alloc, m_ips), R=R,
+                    erklaerung="Gemessen am Analyseportfolio" + (" (offenes Budget als Index gerechnet)" if erg["fuell"] else "") + ".")
 
     with t2:
         fd = lade_fundamentaldaten(list(info)) if e["fund"] else {}
@@ -3230,6 +3359,15 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             (sek_p["quote_stufe"], f"Aktienquote {ui.de(sek_p['quote'], 1)} % – Soll {ui.de(float(ctx.alloc['aktien']), 1)} % ±2 Pp."),
             (L.ROT if sek_p["n"][L.ROT] else L.GELB if sek_p["n"][L.GELB] else L.GRUEN,
              f"Sektorallokation: {sek_p['n'][L.GRUEN]} von 11 Sektoren eingehalten" + (f", {n_aus} ausserhalb – Details unten" if n_aus else ""))]
+        if ka.get("active_share") is not None:
+            lo_, hi_ = float(ctx.ips.get("active_share_min") or 0), float(ctx.ips.get("active_share_max") or 100)
+            checks.append((L.GRUEN if lo_ <= ka["active_share"] <= hi_ else L.ROT,
+                           f"Active Share Aktien {ui.de(ka['active_share'], 1)} % – IPS {ui.de(lo_, 0)}–{ui.de(hi_, 0)} % "
+                           "(Details: Reiter «Benchmark & Active Share»)"))
+        if kv.get("te_bench") is not None:
+            checks.append((L.GRUEN if kv["te_bench"] <= float(ctx.ips.get("te_max") or 99) else L.GELB,
+                           f"Tracking Error vs. Benchmark {ui.de(kv['te_bench'], 2)} % (historisch) – IPS höchstens "
+                           f"{ui.de(ctx.ips.get('te_max'), 1)} %"))
         n_rot = sum(1 for s_, _ in checks if s_ == L.ROT)
         st.markdown(f"**Prüfung gegen eure Regeln** · {ui.badge(L.ROT if n_rot else L.GRUEN, f'{n_rot} Verstösse' if n_rot else 'alles im Rahmen')}",
                     unsafe_allow_html=True)
@@ -3272,36 +3410,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             ui.zeige(fig)
 
     with t5:
-        vs = vorschlag(erg["R"], erg["rf"], erg["gew"], erg["cash"], fix=set(erg["fuell"]) - set(pos["ticker"]))
-        if vs is None:
-            st.caption("Für einen Vorschlag mindestens zwei Aktien eingeben.")
-        else:
-            regel = ("ohne Klumpen-Grenze, weil sie mit so wenigen Titeln nicht einhaltbar ist" if vs["ohne_deckel"]
-                     else f"kein Titel über {KLUMPEN:.0f} % des Portfolios")
-            st.markdown(f"Aus {ui.de(vs['n'], 0)} zufälligen Gewichtungen des Aktienteils (Treasuries, Cash"
-                        f"{' und offenes Budget' if erg['fuell'] else ''} bleiben fix, {regel}): "
-                        "Welche hätte im gewählten Zeitraum die beste Sharpe Ratio bzw. die tiefste Volatilität gehabt?")
-            zeilen = []
-            for t in vs["aktien"]:
-                kurs = letzte.get(t)
-                zeilen.append({"Titel": t, "Heute": _pct(erg["gew"][t] * 100),
-                               "Max. Sharpe": _pct(vs["max_sharpe"][t] * 100),
-                               "Stück (Max. Sharpe)": ui.de(vs["max_sharpe"][t] * total / kurs, 0) if kurs else "–",
-                               "Min. Volatilität": _pct(vs["min_vola"][t] * 100),
-                               "Stück (Min. Vola)": ui.de(vs["min_vola"][t] * total / kurs, 0) if kurs else "–"})
-            st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
-            kpi_v = [("Sharpe heute", _zahl(kv.get("sharpe")), f"Vola {_pct(kv.get('vola'))}"),
-                     ("Sharpe mit Max.-Sharpe-Gewichten", _zahl(vs["sharpe"][0]), f"Vola {_pct(vs['vola'][0])}"),
-                     ("Sharpe mit Min.-Vola-Gewichten", _zahl(vs["sharpe"][1]), f"Vola {_pct(vs['vola'][1])}")]
-            ui.kopf_kpis(kpi_v)
-            R.neue_seite()
-            R.h("Gewichte-Vorschlag (historisch optimiert, nur Denkanstoss)")
-            R.text(f"Aus {ui.de(vs['n'], 0)} zufälligen Gewichtungen des Aktienteils ({regel}); Treasuries, Cash und offenes Budget fix. "
-                   "Auf die Vergangenheit optimiert – keine Handelsanweisung.", klein=True)
-            R.kpis(kpi_v)
-            R.tabelle(pd.DataFrame(zeilen), max_zeilen=400)
-            st.caption("Achtung: Die Gewichte sind auf die Vergangenheit optimiert und reagieren stark auf den Zeitraum. "
-                       "Als Denkanstoss nutzen, nicht als Handelsanweisung – Entscheid im Team mit Begründung erfassen.")
+        _gewichte_bereich(ctx, erg, pos, info, total, letzte, R, (tab, kapital_std, ctx.alloc))
 
     _anleihen_pdf(R, ctx, fred, e, cash_eff)
     R.h("Methodik")
@@ -3311,17 +3420,403 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
            "Laufzeitband (Näherung); Anleihen-Teil mit den einzelnen Anleihen auf der FRED-Zinskurve. Vergangene Werte sind keine "
            "Prognose.", klein=True)
     pf_name = _wert("an_pf_name", "") or (ss.get("an_pf", {}).get(ss.get("an_aktiv"), {}) or {}).get("name", "Analyse")
-    datei = f"Analyse_{re.sub(r'[^A-Za-z0-9]+', '_', str(pf_name)).strip('_') or 'Portfolio'}_{datetime.now():%Y-%m-%d}.pdf"
-    if pdf_auto:
+    dname = f"Analyse_{re.sub(r'[^A-Za-z0-9]+', '_', str(pf_name)).strip('_') or 'Portfolio'}_{datetime.now():%Y-%m-%d}.pdf"
+    if auto_pdf:
         try:
             ss["pdfdata_analyse_pdf"] = R.pdf()
-            ss["an_pdf_pid"] = ss.get("an_aktiv")
+            ss.update(an_pdf_pid=ss.get("an_aktiv"), an_pdf_name=dname)
+            ph_dl.download_button("PDF herunterladen", ss["pdfdata_analyse_pdf"], dname, "application/pdf", icon=":material/download:",
+                                  key="an_dl_pdf_neu", width="stretch", type="primary")
         except Exception as ex:  # noqa: BLE001
             ph_dl.error(f"PDF konnte nicht erstellt werden: {ex}")
-    SP.knopf(ph_pdf, R, "analyse_pdf", dateiname=datei)
-    if ss.get("pdfdata_analyse_pdf") and ss.get("an_pdf_pid", ss.get("an_aktiv")) == ss.get("an_aktiv"):
-        ph_dl.download_button("PDF herunterladen", ss["pdfdata_analyse_pdf"], datei, "application/pdf", icon=":material/download:",
-                              key="an_dl_top", width="stretch", type="primary")
+    SP.knopf(ph_pdf, R, "analyse_pdf", dateiname=dname)
+
+
+# ---------------------------------------------------------------------------
+# Download-Leiste oben in «Portfolio bearbeiten & analysieren» (Update 15, in Update 16 enthalten)
+# ---------------------------------------------------------------------------
+def _excel_export(ctx, fred: dict) -> bytes:
+    """Positionen des aktiven Analyseportfolios als Excel (übernommener Stand, ohne Yahoo-Abruf): Übersicht, Aktien
+    (inkl. Benchmark-Gewicht und Aktiv), Treasuries (alle Kennzahlen je Anleihe)."""
+    import io
+
+    ss = st.session_state
+    b = budget(ss)
+    kap = b["kapital"] or 0.0
+    ak = _aktien_df(ss.get("an_aktien"), 0)
+    ak = ak[[bool(_txt(t).strip()) for t in ak["Ticker"]]]
+    betr = [_num(x) or 0.0 for x in ak["Betrag USD"]]
+    summe_a = sum(betr)
+    try:
+        import benchmark as BM
+
+        bm = BM.gewichte() * 100
+        werte = {BM.norm_ticker(t): v for t, v in zip(ak["Ticker"], betr)}
+        as_ = BM.active_share(werte) if werte else None
+    except Exception:  # noqa: BLE001
+        bm, as_ = pd.Series(dtype=float), None
+    aktien = pd.DataFrame({
+        "Ticker": ak["Ticker"].values, "Name": ak["Name"].values, "Sektor": ak["Sektor"].values,
+        "Kurs USD": [_num(x) for x in ak["Kurs USD"]], "Stück": [_num(x) for x in ak["Menge"]], "Betrag USD": betr,
+        "Gewicht-Vorgabe %": [_num(x) for x in ak["Gewicht %"]], "Fix": ak["Fix"].values,
+        "% Gesamt": [v / kap * 100 if kap else None for v in betr],
+        "% Aktienteil": [v / summe_a * 100 if summe_a else None for v in betr],
+        "% Benchmark (S&P 500, gültig)": [float(bm.get(str(t).upper().replace(".", "-"), 0.0)) for t in ak["Ticker"]]})
+    aktien["Aktiv vs. Benchmark Pp."] = aktien["% Aktienteil"].fillna(0) - aktien["% Benchmark (S&P 500, gültig)"]
+    tr_df = pd.DataFrame()
+    kz = None
+    try:
+        import anleihen as AN
+
+        k = AN.kurve(fred)
+        if len(k) >= 5:
+            tr_df = AN.anleihen_tabelle(_treas_df(ss.get("an_treas", _leer_treas())), k, ctx.szdef, ctx.szen)
+            kz = AN.kennzahlen_kurz(tr_df)
+    except Exception:  # noqa: BLE001
+        pass
+    if len(tr_df):
+        tr_out = pd.DataFrame({
+            "Bezeichnung": tr_df["name"], "ISIN": tr_df["isin"], "Laufzeitband": tr_df["band"], "Kupon %": tr_df["kupon"],
+            "Fälligkeit": tr_df["faellig"].map(lambda d: d.date() if pd.notna(d) else None), "Restlaufzeit J.": tr_df["T"],
+            "Betrag USD": tr_df["betrag"], "Nominal USD": tr_df["nominal"], "Gewicht %": tr_df["gewicht"], "Kurs %": tr_df["kurs"],
+            "Rendite %": tr_df["y"], "Spread bp": tr_df["spread"], "Mod. Duration": tr_df["D"], "Konvexität": tr_df["konv"],
+            "DV01 USD": tr_df["dv01"], "Kupons bis 28.02. USD": tr_df["kupons_sim"], "Kupontermine": tr_df["kupon_daten"],
+            "Marchzins USD": tr_df["marchzins"]})
+    else:
+        t0 = _treas_df(ss.get("an_treas", _leer_treas()))
+        tr_out = t0[[bool(_txt(x).strip()) or bool(_num(y)) for x, y in zip(t0["Laufzeit"], t0["Betrag USD"])]]
+    inv_t = b["inv_t"]
+    ueb = [("Analyseportfolio", str(_wert("an_pf_name", "") or "")), ("Stand", datetime.now().strftime("%d.%m.%Y %H:%M")),
+           ("Kapital USD", kap), ("Aktien % (geplant)", b["pct"]["aktien"]), ("Treasuries % (geplant)", b["pct"]["treas"]),
+           ("Cash % (geplant)", b["pct"]["cash"]), ("Aktien investiert USD", summe_a), ("Treasuries investiert USD", inv_t),
+           ("Cash (Rest) USD", kap - summe_a - inv_t), ("Anzahl Aktien", len(aktien)),
+           ("Benchmark", "50 % S&P 500 / 50 % US-Treasuries (Dozent)"),
+           ("Active Share Aktien %", round(as_["active_share"], 2) if as_ else None)]
+    if kz:
+        ueb += [("Treasuries: Ø Kupon %", kz["kupon"]), ("Treasuries: Ø Rendite %", kz["rendite"]),
+                ("Treasuries: Mod. Duration", kz["duration"]), ("Treasuries: Konvexität", kz["konv"]),
+                ("Treasuries: Ø Restlaufzeit J.", kz["restlaufzeit"]), ("Treasuries: Kupons bis 28.02. USD", kz["kupons"]),
+                ("Treasuries: Marchzins USD", kz["marchzins"]), ("Treasuries: DV01 USD", kz["dv01"])]
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as xw:
+        pd.DataFrame(ueb, columns=["Grösse", "Wert"]).to_excel(xw, sheet_name="Übersicht", index=False)
+        aktien.to_excel(xw, sheet_name="Aktien", index=False)
+        tr_out.to_excel(xw, sheet_name="Treasuries", index=False)
+        for ws in xw.book.worksheets:
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = min(45, max(10, max(len(str(c.value or "")) for c in col) + 2))
+    return bio.getvalue()
+
+
+def _download_leiste(ctx, fred: dict):
+    """Ganz oben: «Ganzes Portfolio als PDF» (rechnet und baut das Analyse-PDF in einem Lauf) und «Positionen als Excel».
+    Gibt den Platzhalter für «PDF herunterladen» zurück (wird am Ende des Laufs gefüllt)."""
+    ss = st.session_state
+    pid = ss.get("an_aktiv")
+    with st.container(border=True):
+        c0, c1, c2, c3 = st.columns([1.5, 1.3, 1.2, 1.3])
+        c0.markdown("**Herunterladen** · ganzes Analyseportfolio")
+        c1.button("Ganzes Portfolio als PDF", icon=":material/picture_as_pdf:", key="an_dl_pdf", width="stretch",
+                  on_click=lambda: ss.__setitem__("an_pdf_auto", pid),
+                  help="Rechnet die Kennzahlen (Zeitraum und Optionen wie unten eingestellt, übernommener Stand) und erstellt das "
+                       "PDF mit allen Reitern – auch ohne vorher «Kennzahlen berechnen» zu klicken.")
+        ph = c2.empty()
+        if ss.get("pdfdata_analyse_pdf") and ss.get("an_pdf_pid") == pid and ss.get("an_pdf_auto") != pid:
+            ph.download_button("PDF herunterladen", ss["pdfdata_analyse_pdf"], ss.get("an_pdf_name") or "Analyse.pdf", "application/pdf",
+                               icon=":material/download:", key="an_dl_pdf_fertig", width="stretch")
+        try:
+            name = re.sub(r"[^A-Za-z0-9]+", "_", str(_wert("an_pf_name", "") or "Portfolio")).strip("_") or "Portfolio"
+            c3.download_button("Positionen als Excel", _excel_export(ctx, fred), f"Positionen_{name}_{datetime.now():%Y-%m-%d}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", icon=":material/table:",
+                               key="an_dl_xlsx", width="stretch",
+                               help="Aktien (mit Benchmark-Gewicht) und Treasuries mit allen Kennzahlen, sofort, ohne Kursabruf")
+        except Exception as ex:  # noqa: BLE001
+            c3.caption(f"Excel nicht möglich: {type(ex).__name__}")
+    return ph
+
+
+# ---------------------------------------------------------------------------
+# Benchmark & Active Share (Update 16)
+# ---------------------------------------------------------------------------
+def _bereich_benchmark(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: float, cash: float, ak_w: float, tr_w: float,
+                       f_a: float, f_t: float, cash_eff: float, R):
+    """Reiter «Benchmark & Active Share»: Anlageklassen, Sektoren und Titel gegen die Benchmark des Dozenten."""
+    import benchmark as BM
+
+    ss = st.session_state
+    ips_ = ctx.ips
+    d = BM.aktuell()
+    if d is None:
+        st.warning("Keine Benchmark-Datei geladen – unten die CSV der Dozenten-App hochladen.")
+        with st.container(border=True):
+            BM.bereich_import(ctx, key="an_bm")
+        return
+    basis = st.segmented_control("Titelgewichte der Benchmark", ["gueltig", "aktuell"], default="gueltig", key="an_bm_basis",
+                                 format_func=lambda x: {"gueltig": "gültig im Benchmark", "aktuell": "aktuell (mit Kursen fortgeschrieben)"}[x],
+                                 help="«Gültig im Benchmark» = die Gewichte, gegen die die Dozenten-App misst (Monatsende). «Aktuell» = "
+                                      "mit den Kursen seither fortgeschrieben.") or "gueltig"
+    ak = pos[pos["klasse"] == "Aktie"]
+    werte = ak.groupby("ticker")["wert"].sum().to_dict()
+    sektor_von = {t: (info.get(t) or {}).get("sektor") for t in werte}
+    a = BM.active_share(werte, basis, sektor_von) if werte else None
+    a_inkl = BM.active_share(werte, basis, sektor_von, index_betrag=f_a) if f_a else None
+    a_anders = BM.active_share(werte, "aktuell" if basis == "gueltig" else "gueltig", sektor_von) if werte else None
+    as_ges = BM.active_share_gesamt(werte, tr_w + f_t, cash_eff, total, basis, index_betrag=f_a)
+    lo, hi = float(ips_.get("active_share_min") or 0), float(ips_.get("active_share_max") or 100)
+    kv, kb = erg["k"]["Vorauswahl"], erg["k"].get(BENCH, {})
+    st.caption(f"Benchmark des Dozenten = 50 % S&P 500 / 50 % US-Treasuries. Aktienteil: {BM.beschreibung(d)}. Rendite und Risiko "
+               f"der Benchmark über SPY und {NEUTRAL_PROXY} (Treasury-Proxy aus den Einstellungen), täglich auf 50/50 rebalanciert.")
+
+    def _f(x, ok):
+        return f"<span style='color:{ui.FARBE['Grün'] if ok else ui.FARBE['Rot']}'>{_pct(x, 1)}</span>" if x is not None else "–"
+    kp = [
+        ("Active Share Aktienteil", _f(a and a["active_share"], bool(a) and lo <= a["active_share"] <= hi),
+         f"IPS {ui.de(lo, 0)}–{ui.de(hi, 0)} % · {'aktuell' if basis == 'gueltig' else 'gültig'}: {_pct(a_anders and a_anders['active_share'], 1)}"
+         + (f" · inkl. offenes Budget als Index {_pct(a_inkl['active_share'], 1)}" if a_inkl else "")),
+        ("davon Sektorwetten", _pct(a and a["as_sektor"], 1), f"Titelauswahl innerhalb der Sektoren {_pct(a and a['as_titel_in_sektor'], 1)}"),
+        ("Titel im Index", f"{a['n_gemeinsam']} / {a['n_portfolio']}" if a else "–",
+         (f"decken {ui.de(a['abdeckung'], 1)} % des S&P 500 ab · {a['n_benchmark']} Indextitel"
+          + (f" · <b style='color:{ui.FARBE['Rot']}'>nicht im Index: {', '.join(a['nicht_im_index'])}</b>" if a["nicht_im_index"] else ""))
+         if a else ""),
+        ("Active Share gesamt", _pct(as_ges, 1), "Aktien, Treasuries (als Block) und Cash gegen 50 / 50 / 0 – Untergrenze"),
+    ]
+    ui.kopf_kpis(kp)
+    ui.kopf_kpis([
+        ("Mehrrendite vs. Benchmark p.a.", _pp(kv.get("mehr_bench")), f"Portfolio {_pct(kv.get('rendite'), 1, True)} · "
+                                                                               f"Benchmark {_pct(kb.get('rendite'), 1, True)}"),
+        ("Tracking Error vs. Benchmark", _pct(kv.get("te_bench")), f"IPS ≤ {ui.de(ips_.get('te_max'), 1)} % · Information Ratio "
+                                                                     f"{_zahl(kv.get('ir_bench'))}"),
+        ("Volatilität", _pct(kv.get("vola")), f"Benchmark {_pct(kb.get('vola'))}"),
+        ("Sharpe Ratio", _zahl(kv.get("sharpe")), f"Benchmark {_zahl(kb.get('sharpe'))}"),
+    ])
+    R.neue_seite()
+    R.h("Benchmark & Active Share")
+    R.text(f"Benchmark des Dozenten: 50 % S&P 500 / 50 % Treasuries. Titelgewichte: {BM.beschreibung(d)} (Basis: "
+           f"{BM.BASIS_NAME[basis]}).", klein=True)
+    R.kpis(kp)
+
+    # Anlageklassen
+    st.markdown("**Anlageklassen** · Portfolio gegen Benchmark, neutrales Portfolio (IPS) und Taktik")
+    nt = ctx.alloc["neutral"]
+    ist = [(ak_w + f_a) / total * 100, (tr_w + f_t) / total * 100, cash_eff / total * 100]
+    bm_ = [C.BENCHMARK["aktien"], C.BENCHMARK["anleihen"], C.BENCHMARK["cash"]]
+    neu_ = [nt["aktien"], 100 - nt["aktien"] - nt.get("cash", 5), nt.get("cash", 5)]
+    tak = [ctx.alloc["aktien"], ctx.alloc["anleihen"], ctx.alloc["cash"]]
+    baend = [ctx.alloc["baender"]["aktien"], ctx.alloc["baender"]["treasuries"], ctx.alloc["baender"]["cash"]]
+    kl = pd.DataFrame({"Klasse": ["Aktien", "Treasuries", "Cash"], "Portfolio": [_pct(x) for x in ist],
+                       "Benchmark": [_pct(x) for x in bm_], "Aktiv vs. Benchmark": [f"{ui.de(i - b, 1, True)} Pp." for i, b in zip(ist, bm_)],
+                       "Neutral (IPS)": [_pct(x) for x in neu_], "Taktik": [_pct(x) for x in tak],
+                       "IPS-Band": [f"{lo_:g}–{hi_:g} %" for lo_, hi_ in baend]})
+    st.dataframe(kl, hide_index=True, width="stretch")
+    R.h2("Anlageklassen")
+    R.tabelle(kl, breiten=[30, 30, 30, 40, 35, 30, 35])
+    if not a:
+        st.caption("Noch keine Aktien im Analyseportfolio.")
+        return
+
+    # Sektoren
+    g_max = float(ips_.get("sektor_abw_max") or 5)
+    sk = a["sektoren"].copy()
+    sk["_st"] = [L.GRUEN if abs(x) <= g_max * 0.8 else L.GELB if abs(x) <= g_max else L.ROT for x in sk["aktiv"]]
+    sek_df = pd.DataFrame({"Sektor": sk["sektor"], f"Benchmark ({BM.BASIS_NAME[basis]})": sk["benchmark"].map(lambda x: f"{ui.de(x, 2)} %"),
+                           "Portfolio (Aktienteil)": sk["portfolio"].map(lambda x: f"{ui.de(x, 2)} %"),
+                           "Aktiv": sk["aktiv"].map(lambda x: f"{ui.de(x, 2, True)} Pp."),
+                           "IPS ±": f"{ui.de(g_max, 1)} Pp.", "Prüfung": [f"● {x}" for x in sk["_st"]],
+                           "Beitrag Active Share": sk["beitrag_as"].map(lambda x: f"{ui.de(x, 1)} Pp."),
+                           "Titel Portfolio / Index": [f"{p} / {b}" for p, b in zip(sk["titel_p"], sk["titel_b"])]})
+    st.markdown("**Sektoren** · Anteil am Aktienteil gegen die Benchmark, Grenze = IPS «Maximale Abweichung je Sektor»")
+    st.dataframe(ui.ampel_stil(sek_df, ["Prüfung"]), hide_index=True, width="stretch")
+    st.caption("Beitrag Active Share = halbe Summe der Titelabweichungen im Sektor (Sektorwette + Titelauswahl). Die Sektorziele "
+               "eurer Sektorallokation (Index + geplante Abweichung) prüft der Reiter «Regeln & Struktur».")
+    R.h2("Sektoren gegen die Benchmark")
+    R.tabelle(sek_df.assign(Prüfung=[x.replace("● ", "") for x in sek_df["Prüfung"]]),
+              farben=[[None] * 5 + [_HELL_RGB.get(x)] + [None] * 2 for x in sk["_st"]])
+
+    # Über- und Untergewichte
+    tabl = a["tabelle"]
+    ueber = tabl[tabl["aktiv"] > 0].head(15)
+    unter = tabl[tabl["aktiv"] < 0].head(15)
+    fmt = lambda df_: pd.DataFrame({"Titel": df_["ticker"], "Name": df_["name"], "Sektor": df_["sektor"],  # noqa: E731
+                                    "Portfolio": df_["portfolio"].map(lambda x: f"{ui.de(x, 2)} %"),
+                                    "Benchmark": df_["benchmark"].map(lambda x: f"{ui.de(x, 2)} %"),
+                                    "Aktiv": df_["aktiv"].map(lambda x: f"{ui.de(x, 2, True)} Pp.")})
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Grösste Übergewichte** (Anteil am Aktienteil)")
+        st.dataframe(fmt(ueber), hide_index=True, width="stretch")
+    with c2:
+        st.markdown("**Grösste Untergewichte** (auch nicht gehaltene Indextitel)")
+        st.dataframe(fmt(unter), hide_index=True, width="stretch")
+    zz = pd.concat([ueber.head(12), unter.head(12)]).sort_values("aktiv")
+    fig = go.Figure(go.Bar(y=zz["ticker"], x=zz["aktiv"], orientation="h",
+                           marker_color=[ui.BLAU if x > 0 else BENCH_FARBE for x in zz["aktiv"]],
+                           hovertemplate="%{y}: %{x:.2f} Pp.<extra></extra>"))
+    fig.update_layout(height=max(300, 22 * len(zz) + 60), margin=dict(l=8, r=8, t=10, b=8))
+    fig.update_xaxes(ticksuffix=" Pp.", title="Aktiv gegenüber der Benchmark (Anteil am Aktienteil)")
+    ui.zeige(fig)
+    R.h2("Grösste Über- und Untergewichte")
+    R.tabelle(fmt(pd.concat([ueber, unter])), max_zeilen=30, breiten=[25, 60, 30, 25, 25, 25])
+    with st.expander(f"Alle Titel des Portfolios mit Benchmark-Gewicht ({a['n_portfolio']})", icon=":material/table_view:"):
+        alle = tabl[tabl["portfolio"] > 0].sort_values("portfolio", ascending=False)
+        st.dataframe(fmt(alle), hide_index=True, width="stretch")
+        st.download_button("Als CSV herunterladen", fmt(tabl).to_csv(index=False, sep=";").encode("utf-8-sig"),
+                           "active_share_titel.csv", "text/csv", icon=":material/download:", key="an_bm_csv")
+    with st.expander("Benchmark-Datei der Dozenten-App aktualisieren", icon=":material/upload_file:"):
+        BM.bereich_import(ctx, key="an_bm")
+
+
+# ---------------------------------------------------------------------------
+# Gewichte optimieren und ins Analyseportfolio übernehmen (Update 16)
+# ---------------------------------------------------------------------------
+VARIANTEN = {"heute": "Heute", "max_sharpe": "Max. Sharpe", "min_vola": "Min. Volatilität", "max_ir": "Max. IR vs. Benchmark"}
+
+
+def _gewichte_uebernehmen(neu: dict, total: float, als_kopie: bool, speichern: bool, label: str, grad: int, args: tuple):
+    """Callback: Gewichte (Anteil am Gesamtportfolio je Ticker) als fixes «Gewicht %» ins aktive Analyseportfolio bzw. in eine
+    Kopie schreiben, in ganze Stücke umrechnen und gleich neu rechnen lassen."""
+    ss = st.session_state
+    e_alt = ss.get("an_eingabe") or {}
+    if als_kopie:
+        alt_name = str(_wert("an_pf_name", "") or "Portfolio")
+        _pf_neu("kopie", *args)
+        name = f"{alt_name} – {label}"
+        ss["an_pf"][ss["an_aktiv"]]["name"] = name
+        ss["an_pf_name"] = ss["_an_pf_name"] = name
+    kap = _num(ss.get("an_kap_txt")) or 0.0
+    if kap <= 0 or "an_aktien" not in ss:
+        _meldung("Kapital fehlt – Gewichte nicht übernommen.")
+        return
+    p_ak = float(ss.get("an_p_ak") or 0)
+    df = _aktien_df(ss["an_aktien"], 0).reset_index(drop=True)
+    n = 0
+    for i in df.index:
+        t = _txt(df.at[i, "Ticker"]).strip().upper().replace(".", "-")
+        if t in neu:
+            pct_g = float(neu[t]) * total / kap * 100
+            pct = pct_g if ss.get("an_bezug") != AKTIENTEIL else (pct_g / (p_ak / 100) if p_ak > 0 else pct_g)
+            df.at[i, "Gewicht %"] = _fz_pct(round(pct, 4))
+            df.at[i, "Fix"] = "%"
+            n += 1
+    df = _prozent_verteilen(df)
+    if ss.get("an_sort") in ("sektor", "ticker", "name"):
+        df = _sortieren(df, ss["an_sort"])
+    ss["an_aktien"] = _aktien_df(df)
+    ss["an_ak_ver"] = ss.get("an_ak_ver", 0) + 1
+    ss["an_form_ver"] = ss.get("an_form_ver", 0) + 1
+    ss["an_auto_rechnen"] = True
+    ss["an_auto_e"] = dict(jahre=e_alt.get("jahre"), fund=e_alt.get("fund", False))
+    if speichern:
+        ss["an_pf_save_req"] = True
+    ss["an_meldung_info"] = (f"«{label}» übernommen ({grad} % umgesetzt): {n} Titel stehen jetzt mit fixem Gewicht % in der Tabelle "
+                             "und sind in ganze Stücke umgerechnet, die Kennzahlen unten sind neu gerechnet. "
+                             + ("Gespeichert wird mit der Leiste oben. " if speichern else
+                                "Noch nicht gespeichert – oben «Speichern» (oder «Verwerfen», um zurückzugehen). ")
+                             + "Ins echte Portfolio kommt es wie immer über «Analyseportfolio ins Portfolio übernehmen».")
+
+
+def _gewichte_bereich(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: float, letzte: dict, R, args: tuple):
+    import benchmark as BM
+
+    ips_ = ctx.ips
+    st.markdown("Optimiert die Gewichte **eurer Aktien** auf die gewählte Kennzahl – Treasuries, Cash und offenes Budget bleiben "
+                "fix, die Aktienquote auch. Mit «Sektorgewichte halten» bleibt zusätzlich die Summe je Sektor gleich, eure "
+                "Sektorallokation wird also nicht verändert – optimiert wird nur die Titelauswahl innerhalb der Sektoren.")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1.3])
+        deckel = c1.number_input("Höchstgewicht je Titel (% Gesamt)", min_value=0.1, max_value=100.0, step=0.25, format="%.2f",
+                                 value=float(ips_.get("titel_max") or KLUMPEN), key="an_opt_deckel",
+                                 help="Standard = IPS «Maximales Gewicht je Titel»")
+        mindest = c2.number_input("Mindestgewicht je Titel (% Gesamt)", min_value=0.0, max_value=5.0, step=0.05, format="%.2f",
+                                  value=0.05, key="an_opt_min",
+                                  help="> 0 = jeder Titel bleibt im Portfolio (IPS-Mindestzahl Aktien, Sektorplan). 0 = Titel dürfen "
+                                       "wegfallen.")
+        halten = c3.toggle("Sektorgewichte halten", value=True, key="an_opt_sek",
+                           help="Summe je Sektor bleibt wie heute – die Sektorallokation bleibt eingehalten.")
+        daempf = c4.slider("Renditen dämpfen", 0, 100, 50, step=10, format="%d %%", key="an_opt_d",
+                           help="Historische Renditen sind ein schwacher Schätzer. 50 % = je Titel halb eigene Rendite, halb "
+                                "Durchschnitt aller Titel. 100 % = nur Risiko zählt (Max. Sharpe ≈ Risiko-Optimierung).")
+    fix_ = set(erg["fuell"]) - set(pos["ticker"])
+    sektor_von = {t: (info.get(t) or {}).get("sektor") or "Unbekannt" for t in pos["ticker"]}
+    o = optimieren(erg["R"], erg["rf"], erg.get("r_b"), erg["gew"], erg["cash"], fix=fix_, sektor_von=sektor_von,
+                   deckel=deckel / 100, mindest=mindest / 100, sektor_halten=halten, daempfung=daempf / 100)
+    if o is None:
+        st.caption("Für eine Optimierung mindestens zwei Aktien mit Kursgeschichte eingeben.")
+        return
+    for h in o["hinweise"]:
+        st.caption(h)
+    ohne = [t for t in pos.loc[pos["klasse"] == "Aktie", "ticker"] if t not in o["aktien"]]
+    if ohne:
+        st.caption("Ohne Kursgeschichte nicht optimiert (Gewicht bleibt): " + ", ".join(ohne))
+    gew_v = {"heute": {t: erg["gew"][t] for t in o["aktien"]}}
+    gew_v.update({k_: o[k_] for k_ in ("max_sharpe", "min_vola", "max_ir") if k_ in o})
+    stats = {}
+    for k_, w_ in gew_v.items():
+        r_ = portfolio_reihe(erg["R"], erg["rf"], {**o["fest"], **w_}, erg["cash"])
+        kk = kennzahlen(r_, erg["rf"], erg["r_s"])
+        if kk:
+            kk.update(vs_benchmark(r_, erg["r_b"], kk, erg["k"].get(BENCH, {})))
+            ad = BM.active_share({t: w for t, w in w_.items()}) if BM.aktuell() is not None else None
+            kk["active_share"] = ad["active_share"] if ad else None
+            kk["max_w"] = max(w_.values()) * 100
+            kk["n"] = sum(1 for v in w_.values() if v > 1e-5)
+            kk["umschlag"] = sum(abs(w_[t] - gew_v["heute"][t]) for t in w_) / 2 * 100
+        stats[k_] = kk
+    zeilen = []
+    for key, name, f in (("sharpe", "Sharpe Ratio", _zahl), ("rendite", "Rendite p.a.", lambda x: _pct(x, 1, True)),
+                         ("vola", "Volatilität p.a.", _pct), ("mdd", "Max. Drawdown", _pct), ("beta", "Beta zum S&P 500", _zahl),
+                         ("te_bench", "Tracking Error vs. Benchmark", _pct), ("ir_bench", "Information Ratio vs. Benchmark", _zahl),
+                         ("active_share", "Active Share Aktien", _pct), ("max_w", "Grösstes Titelgewicht", lambda x: _pct(x, 2)),
+                         ("n", "Titel mit Gewicht", lambda x: str(int(x)) if x is not None else "–"),
+                         ("umschlag", "Umschichtung (einfach)", lambda x: _pct(x, 1))):
+        zeilen.append({"Kennzahl": name, **{VARIANTEN[k_]: f(stats[k_].get(key)) if stats.get(k_) else "–" for k_ in gew_v}})
+    vgl = pd.DataFrame(zeilen)
+    st.dataframe(vgl, hide_index=True, width="stretch")
+    st.caption(f"Historisch im gewählten Zeitraum mit konstanten Gewichten (inkl. Treasuries und Cash). IPS: Vola ≤ "
+               f"{ui.de(ips_.get('vola_max'), 0)} %, TE ≤ {ui.de(ips_.get('te_max'), 1)} %, Active Share "
+               f"{ui.de(ips_.get('active_share_min'), 0)}–{ui.de(ips_.get('active_share_max'), 0)} %. Optimierte Gewichte passen "
+               "perfekt zur Vergangenheit – die Dämpfung und die Grenzen halten sie vernünftig. Umschichtung = halbe Summe der "
+               "Gewichtsänderungen.")
+    tz = []
+    for t in o["aktien"]:
+        z = {"Titel": t, "Name": (info.get(t) or {}).get("name", ""), "Sektor": sektor_von.get(t, "")}
+        for k_ in gew_v:
+            z[VARIANTEN[k_]] = _pct(gew_v[k_][t] * 100, 2)
+        tz.append(z)
+    tdf = pd.DataFrame(tz)
+    if halten:
+        tdf = tdf.sort_values(["Sektor", "Titel"])
+    with st.expander(f"Gewichte je Titel ({len(tdf)}) · Anteil am Gesamtportfolio", icon=":material/table_view:"):
+        st.dataframe(tdf, hide_index=True, width="stretch")
+
+    # --- Übernehmen ----------------------------------------------------------------
+    st.markdown("**In das Analyseportfolio übernehmen**")
+    vor = [k_ for k_ in gew_v if k_ != "heute"]
+    a1, a2, a3 = st.columns([1.6, 1.2, 1.4])
+    wahl = a1.radio("Vorschlag", vor, format_func=VARIANTEN.get, horizontal=True, key="an_opt_wahl")
+    grad = a2.slider("Umsetzung", 0, 100, 100, step=10, format="%d %%", key="an_opt_grad",
+                     help="100 % = Vorschlag ganz. 50 % = Mitte zwischen heute und Vorschlag (schrittweise umschichten). "
+                          "Grenzen und Sektorsummen bleiben auch bei der Mischung eingehalten.")
+    ziel = a3.radio("Wohin", ["aktiv", "kopie"], horizontal=True, key="an_opt_ziel",
+                    format_func=lambda x: "dieses Portfolio" if x == "aktiv" else "neue Kopie (Original bleibt)")
+    g = grad / 100
+    neu = {t: (1 - g) * gew_v["heute"][t] + g * gew_v[wahl][t] for t in o["aktien"]}
+    diff = sorted(((t, (neu[t] - gew_v["heute"][t]) * 100) for t in o["aktien"]), key=lambda x: -abs(x[1]))
+    st.caption("Grösste Änderungen (Pp. des Gesamtportfolios): " + " · ".join(f"{t} {ui.de(v, 2, True)}" for t, v in diff[:8] if abs(v) >= 0.005))
+    b1, b2, b3 = st.columns([1.2, 1.4, 2.4])
+    label = VARIANTEN[wahl] + ("" if grad == 100 else f" {grad} %")
+    b1.button(f"«{VARIANTEN[wahl]}» übernehmen", type="primary", icon=":material/move_down:", width="stretch",
+              on_click=_gewichte_uebernehmen, args=(neu, total, ziel == "kopie", False, label, grad, args), key="an_opt_los",
+              help="Schreibt die Gewichte als fixes «Gewicht %» in die Aktien-Tabelle (ganze Stücke) und rechnet neu")
+    b2.button("Übernehmen & speichern", icon=":material/save:", width="stretch", disabled=ctx.nur_lesen,
+              on_click=_gewichte_uebernehmen, args=(neu, total, ziel == "kopie", True, label, grad, args), key="an_opt_los_s")
+    b3.caption("Danach steht das Portfolio mit den neuen Gewichten oben in der Eingabe (Fix = %). Ins echte Portfolio (Transaktionen) "
+               "geht es wie gewohnt über «Analyseportfolio ins Portfolio übernehmen» – übernommen wird der gespeicherte Stand.")
+    R.neue_seite()
+    R.h("Gewichte optimieren (historisch, nur Denkanstoss)")
+    R.text(f"Höchstgewicht je Titel {ui.de(deckel, 2)} %, Mindestgewicht {ui.de(mindest, 2)} %, Sektorgewichte "
+           f"{'gehalten' if halten else 'frei'}, Renditen zu {daempf} % gedämpft. Treasuries, Cash und offenes Budget fix.", klein=True)
+    R.tabelle(vgl)
+    R.tabelle(tdf, max_zeilen=400)
 
 
 _HELL_RGB = {L.ROT: (253, 241, 240), L.GELB: (253, 246, 231), L.GRUEN: (237, 247, 241)}

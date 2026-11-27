@@ -411,13 +411,31 @@ def material(ctx, qid: str, fred: dict, lade_kurse) -> dict | None:
     if erg:
         k = erg["k"]
         sp = [("Portfolio", k.get("Vorauswahl", {})), ("Nur Aktienteil", k.get("Aktienteil", {})),
-              ("Neutral (IPS)", k.get("Neutral (IPS)", {})), ("S&P 500", k.get("S&P 500", {}))]
+              ("Benchmark 50/50 (Dozent)", k.get(A.BENCH, {})), ("Neutral (IPS)", k.get("Neutral (IPS)", {})), ("S&P 500", k.get("S&P 500", {}))]
         zeilen = ["| Kennzahl (1 Jahr, Tagesdaten) | " + " | ".join(n for n, _ in sp) + " |", "|---|" + "---|" * len(sp)]
         for key, name, d in (("rendite", "Rendite p.a. %", 1), ("vola", "Volatilität p.a. %", 1), ("sharpe", "Sharpe", 2),
                              ("mdd", "Max. Drawdown %", 1), ("beta", "Beta zum S&P 500", 2), ("var95", "VaR 95 % 1 Tag %", 2),
                              ("cvar95", "CVaR 95 % 1 Tag %", 2)):
             zeilen.append(f"| {name} | " + " | ".join(_f(x.get(key), d) for _, x in sp) + " |")
         kv = k.get("Vorauswahl", {})
+        ka_ = k.get("Aktienteil", {})
+        zeilen.append(f"Gegenüber der Benchmark des Dozenten (50/50): Mehrrendite p.a. {_f(kv.get('mehr_bench'), 2)} Pp., Tracking Error "
+                      f"{_f(kv.get('te_bench'), 2)} % p.a. (IPS höchstens {_f(ips.get('te_max'), 1)} %), Information Ratio "
+                      f"{_f(kv.get('ir_bench'), 2)} · Active Share der Aktien gegen den S&P 500 der Benchmark {_f(ka_.get('active_share'), 1)} % "
+                      f"(IPS {_f(ips.get('active_share_min'), 0)}–{_f(ips.get('active_share_max'), 0)} %), gesamt gegen 50/50/0 "
+                      f"{_f(kv.get('active_share_ges'), 1)} %")
+        try:
+            import benchmark as BM
+
+            ad = BM.active_share({t: float(w) for t, w in ak.groupby("ticker")["wert"].sum().items()}) if len(ak) else None
+            if ad:
+                tb = ad["tabelle"]
+                zeilen.append("Grösste Übergewichte vs. Benchmark (Pp. des Aktienteils): " + ", ".join(
+                    f"{r.ticker} {_f(r.aktiv, 2)}" for r in tb[tb["aktiv"] > 0].head(8).itertuples()))
+                zeilen.append("Grösste Untergewichte vs. Benchmark (auch nicht gehaltene Indextitel): " + ", ".join(
+                    f"{r.ticker} {_f(r.aktiv, 2)}" for r in tb[tb["aktiv"] < 0].head(8).itertuples()))
+        except Exception:  # noqa: BLE001
+            pass
         zeilen.append(f"Tracking Error vs. neutral {_f(kv.get('te_neutral'), 2)} % p.a., Information Ratio {_f(kv.get('ir_neutral'), 2)} · "
                       f"Zeitfenster {kv.get('von'):%d.%m.%Y} – {kv.get('bis'):%d.%m.%Y}" if kv.get("von") is not None else "")
         teile.append("## Kennzahlen aus der Kursgeschichte\n" + "\n".join(zeilen))
