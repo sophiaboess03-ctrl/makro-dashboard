@@ -37,6 +37,7 @@ SEITEN_BEREICHE = {
     "risiko": "Risiko & Risikobudget",
     "anleihen": "Anleihen & Cash (früher Anleihen & Duration)",
     "entscheide": "Entscheide",
+    "rebalancing": "Rebalancing-Reports",
     "monitoring": "Monitoring",
     "bericht": "Berichte",
     "eintragen": "Daten eintragen",

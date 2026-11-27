@@ -12,7 +12,7 @@ from makro import config as C
 from makro import ui
 from storage import jetzt
 
-KATEGORIEN = ["Asset-Allokation", "Duration / Treasuries", "Sektor", "Einzeltitel", "Szenario / These", "Risiko / Absicherung", "Sonstiges"]
+KATEGORIEN = ["Asset-Allokation", "Rebalancing", "Duration / Treasuries", "Sektor", "Einzeltitel", "Szenario / These", "Risiko / Absicherung", "Sonstiges"]
 STATUS = ["Vorgeschlagen", "Beschlossen", "Umgesetzt", "Verworfen"]
 STATUS_FARBE = {"Vorgeschlagen": "#B7791F", "Beschlossen": "#1F4E8C", "Umgesetzt": "#2F855A", "Verworfen": "#6B7685"}
 

@@ -41,6 +41,7 @@ import taktik
 import risiko
 import sektoren
 import monitoring_seite
+import rebalancing
 import ki
 import sektor_news_seite
 import unternehmen_seite
@@ -481,6 +482,8 @@ seiten = {
         st.Page(_doks(lambda: entscheide.seite_entscheide(ctx, TEAM), "entscheide"), title="Entscheide", icon=M("fact_check"), url_path="entscheide"),
         st.Page(_doks(lambda: monitoring_seite.seite_monitoring(ctx, TEAM, markt.lade_yahoo), "monitoring"), title="Monitoring",
                 icon=M("notifications_active"), url_path="monitoring"),
+        st.Page(lambda: rebalancing.seite_rebalancing(ctx, fred, markt.lade_yahoo, TEAM), title="Rebalancing", icon=M("balance"),
+                url_path="rebalancing"),
         st.Page(_doks(_seite_bericht, "bericht"), title="Berichte", icon=M("description"), url_path="bericht"),
     ],
     "Team": [

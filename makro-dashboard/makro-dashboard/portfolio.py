@@ -257,7 +257,8 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                                                    ("Cash", cash / total * 100, ctx.alloc["cash"])) if abs(ist - soll) > tol]
         if abw and ctx.alloc.get("quelle") == "Team":
             st.error("Rebalancing nötig (IPS-Toleranz ±" + ui.de(tol, 0) + " PP): " +
-                     "; ".join(f"{n} Ist {ui.de(i, 1)} % vs. Taktik {ui.de(s_, 1)} %" for n, i, s_ in abw))
+                     "; ".join(f"{n} Ist {ui.de(i, 1)} % vs. Taktik {ui.de(s_, 1)} %" for n, i, s_ in abw)
+                     + " → Seite «Rebalancing» (Entscheiden & Abgabe)")
 
     t1, t2, t3, t5, t6, t4 = st.tabs(["Positionen", "Struktur & Abweichungen", "Verlauf", "Performance & Risiko", "KI-Analyse",
                                       "Transaktionen"])

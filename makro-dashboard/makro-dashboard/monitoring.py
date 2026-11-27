@@ -102,7 +102,7 @@ HINWEIS = {
     "band": "IPS-Grenze verletzt – sofort zurückführen oder Abweichung begründen.",
     "nah": "Kurz vor einer IPS-Grenze – Spielraum prüfen, bevor sie verletzt wird.",
     "taktik": "Ist weicht von der beschlossenen Taktik ab – rebalancieren oder Taktik anpassen.",
-    "rebal": "Rebalancing-Toleranz laut IPS überschritten – rebalancieren.",
+    "rebal": "Rebalancing-Toleranz laut IPS überschritten – rebalancieren (Seite «Rebalancing»).",
     "sektor_ziel": "Sektor weicht vom Ziel ab – Titel zu- oder verkaufen oder Ziel anpassen.",
     "sektor_ips": "Maximale Sektorabweichung laut IPS überschritten – zurückführen.",
     "trigger": "Vorab festgelegter Ausstiegs-Trigger ausgelöst – Gewichtung des Sektors überprüfen.",
