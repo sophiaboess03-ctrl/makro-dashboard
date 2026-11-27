@@ -38,6 +38,9 @@ def lage_laden(store, api_key: str | None) -> dict:
     tabellen = store.alle()
     r = pipeline.berechne(fred, labels, tabellen, hist, yahoo)
     analyse.setze_benchmark(r["einst"]["bond_benchmark"])
+    import benchmark
+
+    benchmark.setze(tabellen)
     analyse.setze_cashzins(fred)
     kurse_t, fehlt, _ = markt.lade_yahoo(M.ticker_benoetigt(tabellen))
     kurse = {**yahoo, **kurse_t}

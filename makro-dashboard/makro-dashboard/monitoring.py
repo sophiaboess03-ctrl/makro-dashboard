@@ -107,6 +107,7 @@ HINWEIS = {
     "sektor_ips": "Maximale Sektorabweichung laut IPS überschritten – zurückführen.",
     "trigger": "Vorab festgelegter Ausstiegs-Trigger ausgelöst – Gewichtung des Sektors überprüfen.",
     "titel_max": "Maximales Gewicht je Titel laut IPS überschritten – Position reduzieren.",
+    "active_share": "Active Share ausserhalb des IPS-Bands – Gewichte näher an den Index bzw. aktiver ausrichten oder IPS begründet anpassen.",
     "titel_nah": "Titel nahe am IPS-Maximum – weiteres Wachstum beobachten.",
     "anzahl": "Mindestzahl Aktien laut IPS unterschritten – Titel ergänzen.",
     "mandat": "Titel nicht im S&P 500 – Mandat prüfen und verkaufen.",
@@ -584,6 +585,27 @@ def signale_einhaltung(lage: dict, s: dict, bekannt: set) -> list[dict]:
         if nmin and len(a) < nmin:
             out.append(_sig("ips:anzahl", "Einhaltung", "Allokation", f"Nur {len(a)} Aktien (IPS: mindestens {de(nmin, 0)})",
                             "Mindestzahl Aktien laut IPS unterschritten.", "Handeln", "anzahl", len(a), "Titel", "unten"))
+        # Active Share (Update 16): Aktien gegen die Titelgewichte des S&P 500 in der Benchmark-Datei des Dozenten
+        try:
+            import benchmark as BM
+
+            as_lo, as_hi = ips.get("active_share_min"), ips.get("active_share_max")
+            ad = BM.active_share(a.groupby("ticker")["wert"].sum().to_dict()) if BM.aktuell() is not None else None
+            if ad and as_lo is not None and as_hi is not None:
+                v = ad["active_share"]
+                txt_ = (f"Active Share der Aktien {de(v, 1)} % gegen den S&P 500 der Benchmark (IPS {de(as_lo, 0)}–{de(as_hi, 0)} %). "
+                        f"Davon Sektorwetten {de(ad['as_sektor'], 1)} Pp.")
+                if _aktiv(v, as_hi + 1e-6, "oben", "ips:active_share:hoch", bekannt, 1.0):
+                    out.append(_sig("ips:active_share:hoch", "Einhaltung", "Allokation", f"Active Share {de(v, 1)} % über dem IPS-Maximum",
+                                    txt_, "Handeln", "active_share", v, "%", "oben"))
+                elif _aktiv(v, as_lo - 1e-6, "unten", "ips:active_share:tief", bekannt, 1.0):
+                    out.append(_sig("ips:active_share:tief", "Einhaltung", "Allokation", f"Active Share {de(v, 1)} % unter dem IPS-Minimum",
+                                    txt_, "Handeln", "active_share", v, "%", "unten"))
+                elif _aktiv(v, as_hi - 3, "oben", "ips:active_share:nah", bekannt, 1.0):
+                    out.append(_sig("ips:active_share:nah", "Einhaltung", "Allokation", f"Active Share {de(v, 1)} % nahe am IPS-Maximum",
+                                    txt_, "Prüfen", "nah", v, "%", "oben"))
+        except Exception:  # noqa: BLE001
+            pass
         # Sektoren: Ist vs. Ziel und IPS-Grenze
         sa = SK.lade_allokation(lage["tabellen"].get("sektor_allokation"))["sektoren"]
         idx = lage["sek_index"]["gewichte"]

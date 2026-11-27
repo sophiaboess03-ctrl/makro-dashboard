@@ -497,7 +497,31 @@ def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
     checks = A.pruefungen(pos, cash, total, info, ctx.alloc)
     st.markdown("".join(f'<div class="karte-zeile"><span>{ui.badge(s_, {"Rot": "Verstoss", "Gelb": "Hinweis", "Grün": "ok"}[s_])}'
                         f'&nbsp; {txt}</span><span></span></div>' for s_, txt in checks), unsafe_allow_html=True)
-    st.caption("Mehr Details (Einzeltitel, Korrelationen, Was-wäre-wenn) auf der Seite «Analyse» mit «Aktuelles Portfolio übernehmen».")
+    ka = erg["k"].get("Aktienteil", {})
+    lo, hi = float(ctx.ips.get("active_share_min") or 0), float(ctx.ips.get("active_share_max") or 100)
+    if ka.get("active_share") is not None:
+        ok = lo <= ka["active_share"] <= hi
+        ui.kopf_kpis([
+            ("Active Share (Aktien)", f"<span style='color:{ui.FARBE['Grün'] if ok else ui.FARBE['Rot']}'>{A._pct(ka['active_share'])}</span>",
+             f"gegen den S&P 500 der Benchmark · IPS {ui.de(lo, 0)}–{ui.de(hi, 0)} %"),
+            ("Active Share gesamt", A._pct(kv.get("active_share_ges")), "gegen 50 / 50 / 0 (Treasuries als Block)"),
+            ("Tracking Error vs. Benchmark (12 Mt.)", A._pct(kv.get("te_bench")),
+             f"heutige Gewichte, letzte 12 Monate · IPS ≤ {ui.de(ctx.ips['te_max'], 1)} %"),
+            ("Beta Aktienteil", A._zahl(ka.get("beta")), f"IPS {ui.de(ctx.ips['beta_min'], 2)}–{ui.de(ctx.ips['beta_max'], 2)}"),
+        ])
+    try:
+        import ips_abgleich as IA
+
+        with st.expander("IPS-Abgleich des Bestands (Gap-Analyse: darf ↔ tatsächlich)", icon=":material/policy:"):
+            m = IA.messwerte_portfolio(ctx, erg, pos, total, cash, info)
+            if d.get("kp", {}).get("te_bench") is not None and d.get("tage", 0) >= 20:
+                m["te_hist"] = d["kp"]["te_bench"]       # realisierter TE seit dem ersten Trade
+                m["quelle_hist"] = "realisiert seit dem ersten Trade (TE) bzw. heutige Gewichte 12 Mt."
+            IA.anzeigen(IA.gap_analyse(ctx.ips, ctx.alloc, m), titel="IPS gegen Bestand: Risiko-Abgleich")
+    except Exception as ex:  # noqa: BLE001
+        st.caption(f"IPS-Abgleich nicht möglich: {type(ex).__name__}")
+    st.caption("Mehr Details (Einzeltitel, Korrelationen, Benchmark & Active Share, Was-wäre-wenn) auf der Seite «Analyse» mit "
+               "«Neu → Aus dem aktuellen Bestand».")
 
 
 def _cash_zins_bereich(cz: pd.DataFrame, cash: float, fred: dict, ctx):

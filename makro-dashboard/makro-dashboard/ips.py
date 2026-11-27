@@ -352,6 +352,18 @@ def seite_ips(ctx, hist: dict, gew: dict, defs: dict, bond: dict):
     R.h("Prüfung")
     R.tabelle(pdf_pr, [8, 45, 127])
 
+    # Update 16: IPS ↔ Portfolio aus Risikosicht (Gap-Analyse) – mit der Taktik des Monats, ex ante
+    with st.expander("IPS ↔ Portfolio aus Risikosicht: Gap-Analyse mit der Taktik (ex ante)", icon=":material/compare_arrows:"):
+        try:
+            import ips_abgleich as IA
+
+            st.caption("Jede IPS-Aussage als messbare Kennzahl mit Grenze, hier gemessen an der Taktik des Monats (Aufteilung, "
+                       "Sektoren, Duration) mit der Szenario-Simulation bis Saisonende. Dieselbe Prüfung mit den echten Titeln: "
+                       "Analyse → Reiter «IPS-Abgleich» (Analyseportfolio) und Portfolio → «Performance & Risiko» (Bestand).")
+            IA.anzeigen(IA.gap_analyse(ips, ctx.alloc, IA.messwerte_taktik(ctx)), titel="IPS gegen Taktik: Risiko-Abgleich", R=R)
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"Gap-Analyse nicht möglich: {type(e).__name__}: {e}")
+
     tabs = st.tabs([t for t, _ in TABS])
     aenderungen = {}
     for (tab_name, abschnitte), tab in zip(TABS, tabs):
