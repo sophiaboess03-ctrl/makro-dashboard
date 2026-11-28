@@ -15,7 +15,23 @@ import pandas as pd
 from . import config as C
 from .storage import zahl
 
-TEXTFELDER = ("name", "kurz", "narrativ", "annahmen", "folge", "aktion")
+TEXTFELDER = ("name", "kurz", "narrativ", "annahmen", "folge", "aktion", "signposts", "gegenargument", "horizont", "portfolio")
+TEXT_LABEL = {"name": "Name", "kurz": "Kurzname (eindeutig, z. B. Base)", "narrativ": "Narrativ (was passiert?)",
+              "annahmen": "Annahmen", "folge": "Folgen für Märkte", "aktion": "Aktion (was tun wir?)",
+              "signposts": "Auslöser / Frühindikatoren (woran merken wir, dass es eintritt?)",
+              "gegenargument": "Gegenargument (was spricht dagegen?)", "horizont": "Zeithorizont",
+              "portfolio": "Gewinner / Verlierer im Portfolio"}
+
+# Risiken & Chancen: Felder, die das Team bearbeiten kann (Tabelle «definitionen», bereich = risiko)
+RISIKO_TEXT = ("name", "art", "richtung", "kapitel", "warnsignal", "reaktion", "quelle", "status", "p_text", "horizont",
+               "verantwortlich", "auto")
+RISIKO_ZAHL = ("p", "impact", "wirkung_aktien", "wirkung_duration")
+RISIKO_STATUS = ("aktiv", "eingetreten", "archiviert")
+RISIKO_STATUS_TEXT = {"aktiv": "aktiv (beobachten)", "eingetreten": "eingetreten (zählt als Warnsignal)",
+                      "archiviert": "archiviert (ausgeblendet, zählt nirgends)"}
+AUTO_SIGNALE = {"": "kein automatisches Signal", "fms_cash": "Fondsmanager-Cash < 4 %",
+                "konsum": "Konsum: Sparquote < 3,5 %, Realkonsum 2 Mt. ≤ 0, ISM-Stagflation oder NFIB < 95",
+                "oel_hoch": "Brent > 110 USD", "oel_tief": "Brent < 85 USD"}
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +48,8 @@ def szenario_defs(defs_tab: pd.DataFrame | None) -> dict:
     out = {s["id"]: copy.deepcopy(s) for s in C.SZENARIEN}
     for s in out.values():
         s["geaendert"] = {}
+        for f in TEXTFELDER:
+            s.setdefault(f, "")
     for _, r in _neuste(defs_tab, "szenario").iterrows():
         s = out.get(r["objekt"])
         if s is None:
@@ -39,6 +57,8 @@ def szenario_defs(defs_tab: pd.DataFrame | None) -> dict:
         feld, wert = str(r["feld"]), r["wert"]
         try:
             if feld in TEXTFELDER:
+                if feld in ("name", "kurz") and not str(wert).strip():
+                    continue
                 s[feld] = str(wert)
             elif feld.startswith("param:"):
                 v = zahl(wert)
@@ -59,21 +79,128 @@ def szenario_defs(defs_tab: pd.DataFrame | None) -> dict:
             s["geaendert"][feld] = (r["person"], str(r["zeit"])[:10])
         except (ValueError, TypeError):
             continue
+    # «geändert» nur, wenn der Wert wirklich vom Startwert abweicht (nach «Auf Startwerte zurücksetzen» wieder leer)
+    for sid, s in out.items():
+        for feld in list(s["geaendert"]):
+            if _gleich_start(s, sid, feld):
+                del s["geaendert"][feld]
+    # Kurznamen sind Spaltennamen im ganzen Dashboard: doppelt oder leer → Startwert
+    gesehen = set()
+    for sid, s in out.items():
+        k = str(s["kurz"]).strip()
+        if not k or k in gesehen:
+            s["kurz"] = C.SZEN_BY_ID[sid]["kurz"]
+            s["geaendert"].pop("kurz", None)
+        gesehen.add(s["kurz"])
     return out
 
 
+def _gleich_start(s: dict, sid: str, feld: str) -> bool:
+    start = szenario_startwert(sid, feld)
+    if feld in TEXTFELDER:
+        return str(s.get(feld, "")).strip() == str(start).strip()
+    if feld == "indizien":
+        return s["indizien"] == C.SZEN_BY_ID[sid]["indizien"]
+    teil, _, key = feld.partition(":")
+    ist = {"param": s["param"], "alloc": s["alloc"], "sektor": s["sektoren"]}.get(teil, {}).get(key, 0) or 0
+    return abs(float(ist) - float(start)) < 1e-12
+
+
+def szenario_startwert(sid: str, feld: str):
+    """Startwert (config.py) eines Szenario-Felds im Format der Tabelle «definitionen»."""
+    s = C.SZEN_BY_ID[sid]
+    if feld in TEXTFELDER:
+        return s.get(feld, "")
+    if feld == "indizien":
+        return json.dumps(s["indizien"], ensure_ascii=False)
+    teil, _, key = feld.partition(":")
+    quelle = {"param": s["param"], "alloc": s["alloc"], "sektor": s["sektoren"]}.get(teil, {})
+    return float(quelle.get(key, 0) or 0)
+
+
+def _neue_risiko_id(name: str, vorhanden: set) -> str:
+    import re
+
+    t = str(name).lower()
+    for x, y in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss"), ("é", "e"), ("è", "e"), ("à", "a")):
+        t = t.replace(x, y)
+    basis = "r_" + (re.sub(r"[^a-z0-9]+", "_", t).strip("_")[:30] or "neu")
+    rid, i = basis, 2
+    while rid in vorhanden:
+        rid, i = f"{basis}_{i}", i + 1
+    return rid
+
+
 def risiko_defs(defs_tab: pd.DataFrame | None, neue: pd.DataFrame | None) -> list[dict]:
+    """Risiken/Chancen: Startwerte aus config.py + neu angelegte (Tabelle «risiken_neu») + Team-Änderungen je Feld."""
     risiken = [copy.deepcopy(r) for r in C.RISIKEN]
+    for r in risiken:
+        r["herkunft"] = "Start"
     if neue is not None and not neue.empty:
         for _, r in neue.sort_values("zeit").drop_duplicates("id", keep="last").iterrows():
+            if r["id"] in {x["id"] for x in risiken if x["herkunft"] == "Start"}:
+                continue
+            risiken = [x for x in risiken if x["id"] != r["id"]]
             risiken.append(dict(id=r["id"], name=r["name"], kapitel=r["kapitel"] or "geopolitik", p=None, p_text="neu",
                                 impact=None, warnsignal=r["warnsignal"], reaktion=r["reaktion"], auto=None,
-                                quelle=f"Team ({r['person']})", richtung="ic_bear", art="Risiko"))
+                                quelle=f"Team ({r['person']})", richtung="ic_bear", art="Risiko", herkunft="Team",
+                                angelegt=(r["person"], str(r["zeit"])[:10])))
+    kapitel = {k["id"] for k in C.KAPITEL}
+    for r in risiken:
+        r.setdefault("status", "aktiv")
+        r.setdefault("horizont", "")
+        r.setdefault("verantwortlich", "")
+        r.setdefault("wirkung_aktien", None)
+        r.setdefault("wirkung_duration", None)
+        r.setdefault("wirkung_sektoren", {})
+        r["geaendert"] = {}
     by = {r["id"]: r for r in risiken}
     for _, r in _neuste(defs_tab, "risiko").iterrows():
-        if r["objekt"] in by and r["feld"] in ("richtung", "art", "warnsignal", "reaktion", "name"):
-            by[r["objekt"]][r["feld"]] = str(r["wert"])
+        x, feld, wert = by.get(r["objekt"]), str(r["feld"]), r["wert"]
+        if x is None:
+            continue
+        if feld in RISIKO_TEXT:
+            w = "" if wert is None else str(wert).strip()
+            if (feld == "richtung" and w not in C.SZEN_IDS) or (feld == "art" and w not in ("Risiko", "Chance")) \
+                    or (feld == "status" and w not in RISIKO_STATUS) or (feld == "kapitel" and w not in kapitel) \
+                    or (feld == "auto" and w not in AUTO_SIGNALE) or (feld == "name" and not w):
+                continue
+            x[feld] = (w or None) if feld == "auto" else w
+        elif feld in RISIKO_ZAHL:
+            x[feld] = zahl(wert)          # leer = kein Wert (z. B. keine Duration-Vorgabe)
+        elif feld == "wirkung_sektoren":
+            try:
+                d = json.loads(wert) if str(wert).strip() else {}
+                x[feld] = {k: float(v) for k, v in d.items() if k in C.SEKTOREN and float(v) != 0}
+            except (ValueError, TypeError, AttributeError):
+                continue
+        else:
+            continue
+        x["geaendert"][feld] = (r["person"], str(r["zeit"])[:10])
+    start = {r["id"]: r for r in C.RISIKEN}
+    for x in risiken:
+        s0 = start.get(x["id"])
+        if s0 is None:
+            continue
+        for feld in list(x["geaendert"]):
+            a, b = x.get(feld), s0.get(feld, {"status": "aktiv", "wirkung_sektoren": {}}.get(feld, ""))
+            if feld in RISIKO_ZAHL:
+                gleich = (a is None and b in (None, "")) or (a is not None and b not in (None, "") and abs(float(a) - float(b)) < 1e-12)
+            else:
+                gleich = (a or "") == (b or "")
+            if gleich:
+                del x["geaendert"][feld]
     return risiken
+
+
+def risiko_startwert(rid: str, feld: str):
+    """Startwert eines Risiko-Felds (config.py); neu angelegte Risiken haben keinen."""
+    r = next((x for x in C.RISIKEN if x["id"] == rid), None)
+    if r is None:
+        return None
+    if feld == "wirkung_sektoren":
+        return "{}"
+    return r.get(feld, {"status": "aktiv"}.get(feld, ""))
 
 
 # ---------------------------------------------------------------------------

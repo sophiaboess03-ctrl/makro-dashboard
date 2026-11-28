@@ -97,7 +97,8 @@ def _signale(ctx: Ctx, kap_id: str | None = None) -> list[dict]:
     for _, r in ctx.risiken.iterrows():
         if r["signal"] and (kap_id is None or r["kapitel"] == kap_id):
             wer = " · ".join(x for x in (f"automatisch: {r['signal_auto']}" if r["signal_auto"] else "",
-                                         f"gemeldet von {r['signal_team']}" if r["signal_team"] else "") if x)
+                                         (r["signal_team"] if "Status" in r["signal_team"] and "," not in r["signal_team"] else
+                                          f"gemeldet von {r['signal_team']}") if r["signal_team"] else "") if x)
             out.append(dict(stufe="rot", titel=f"Warnsignal Risiko: {r['name']}", text=f"{wer} → {r['reaktion']}",
                             kapitel=r["kapitel"]))
     return out

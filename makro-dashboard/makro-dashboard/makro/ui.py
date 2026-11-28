@@ -372,7 +372,8 @@ def risiko_matrix(ris: pd.DataFrame, hoehe=360):
                       "<br>Warnsignal: %{customdata[1]}<extra></extra>"))
     _layout(fig, hoehe)
     fig.update_layout(hovermode="closest")
-    fig.update_xaxes(range=[0, 70], title="Wahrscheinlichkeit bis 28.02.2027 (%)", ticksuffix=" %")
+    fig.update_xaxes(range=[0, max(70, float(d["px"].max()) + 6) if len(d) else 70], title="Wahrscheinlichkeit bis 28.02.2027 (%)",
+                     ticksuffix=" %")
     fig.update_yaxes(range=[0.5, 5.5], title="Auswirkung (1–5)", dtick=1)
     st.plotly_chart(fig, width="stretch", config=PLOT_CFG)
     legende = " · ".join(f"**{i + 1}** {n}" for i, n in enumerate(d["name"]))

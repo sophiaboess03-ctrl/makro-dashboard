@@ -272,30 +272,52 @@ def _neuste_pro_person(df: pd.DataFrame, schluessel: str) -> pd.DataFrame:
     return df.sort_values("zeit").drop_duplicates(["person", schluessel], keep="last")
 
 
+RISIKO_SPALTEN = ["id", "name", "kapitel", "p", "impact", "p_min", "p_max", "n", "p_text", "warnsignal", "reaktion", "signal",
+                  "signal_team", "signal_auto", "basis", "quelle", "richtung", "art", "status", "horizont", "verantwortlich",
+                  "wirkung_aktien", "wirkung_duration", "wirkung_sektoren", "auto", "herkunft", "kommentare", "geaendert"]
+
+
 def risiko_bewertung(votes: pd.DataFrame, risiken: list[dict], st: pd.DataFrame, kombis) -> pd.DataFrame:
+    """Team-Bewertung je Risiko (Mittel der neusten Einschätzung je Person). Archivierte Risiken zählen nirgends:
+    sie stehen nur in df.attrs["archiv"] (für die Seite «Risiken & Chancen»). Status «eingetreten» = Warnsignal aktiv."""
     v = _neuste_pro_person(votes, "risiko")
     if not v.empty:
         v = v.copy()
         v["p"] = v["p"].map(zahl)
         v["impact"] = v["impact"].map(zahl)
         v["signal"] = v["signal"].map(lambda x: str(x).strip().lower() in ("1", "true", "ja", "1.0"))
+    alle_v = votes if votes is not None else pd.DataFrame()
     auto = auto_warnsignale(st, kombis)
     zeilen = []
     for r in risiken:
         d = v[v["risiko"] == r["id"]] if not v.empty else pd.DataFrame()
         team_signal = bool(d["signal"].any()) if len(d) else False
         wer_signal = ", ".join(d.loc[d["signal"], "person"]) if len(d) else ""
+        status = r.get("status") or "aktiv"
+        if status == "eingetreten":
+            team_signal, wer_signal = True, ", ".join(x for x in (wer_signal, "Status «eingetreten»") if x)
         auto_aktiv, auto_grund = auto.get(r.get("auto"), (False, "")) if r.get("auto") else (False, "")
         p = d["p"].mean() if len(d) and d["p"].notna().any() else r["p"]
         imp = d["impact"].mean() if len(d) and d["impact"].notna().any() else r["impact"]
+        kom = []
+        if len(alle_v) and "kommentar" in alle_v:
+            k_ = alle_v[(alle_v["risiko"] == r["id"]) & (alle_v["kommentar"].astype(str).str.strip() != "")]
+            kom = [(x["person"], str(x["zeit"])[:10], str(x["kommentar"])) for _, x in k_.sort_values("zeit").iterrows()]
         zeilen.append(dict(id=r["id"], name=r["name"], kapitel=r["kapitel"], p=p, impact=imp,
                            p_min=d["p"].min() if len(d) else np.nan, p_max=d["p"].max() if len(d) else np.nan,
                            n=len(d), p_text=r["p_text"], warnsignal=r["warnsignal"], reaktion=r["reaktion"],
-                           signal=team_signal or auto_aktiv, signal_team=wer_signal, signal_auto=auto_grund,
-                           basis="Team" if len(d) else "Startwert", quelle=r["quelle"],
-                           richtung=r.get("richtung", "ic_bear"), art=r.get("art", "Risiko")))
-    df = pd.DataFrame(zeilen).set_index("id", drop=False)
-    df["score"] = df["p"].fillna(0) / 100 * df["impact"].fillna(0)
+                           signal=(team_signal or auto_aktiv) and status != "archiviert", signal_team=wer_signal,
+                           signal_auto=auto_grund, basis="Team" if len(d) else "Startwert", quelle=r["quelle"],
+                           richtung=r.get("richtung", "ic_bear"), art=r.get("art", "Risiko"), status=status,
+                           horizont=r.get("horizont", ""), verantwortlich=r.get("verantwortlich", ""),
+                           wirkung_aktien=r.get("wirkung_aktien"), wirkung_duration=r.get("wirkung_duration"),
+                           wirkung_sektoren=r.get("wirkung_sektoren") or {}, auto=r.get("auto") or "",
+                           herkunft=r.get("herkunft", "Start"), kommentare=kom, geaendert=r.get("geaendert", {})))
+    df = pd.DataFrame(zeilen, columns=RISIKO_SPALTEN).set_index("id", drop=False)
+    df["score"] = df["p"].astype(float).fillna(0) / 100 * df["impact"].astype(float).fillna(0)
+    archiv = df[df["status"] == "archiviert"].copy()
+    df = df[df["status"] != "archiviert"].copy()
+    df.attrs["archiv"] = archiv
     return df
 
 
@@ -375,7 +397,20 @@ def signal_regeln(st: pd.DataFrame, risiken: pd.DataFrame, kombis: list[dict]) -
     def w(i):
         return wert(st, i)
 
-    def regel(name, aktiv, grund, aktien=0.0, duration=None, tips=None, sektoren=None, herkunft="Eure Aktion"):
+    def _z(v):
+        return None if v is None or (isinstance(v, float) and np.isnan(v)) else float(v)
+
+    def team_wirkung(rid):
+        if rid not in risiken.index:
+            return False
+        x = risiken.loc[rid]
+        return bool(x.get("wirkung_sektoren")) or _z(x.get("wirkung_aktien")) is not None or _z(x.get("wirkung_duration")) is not None
+
+    def regel(name, aktiv, grund, aktien=0.0, duration=None, tips=None, sektoren=None, herkunft="Eure Aktion", rid=None):
+        if rid and team_wirkung(rid):
+            return                      # das Team hat für dieses Risiko eine eigene Wirkung festgelegt (siehe unten)
+        if rid and rid not in risiken.index:
+            return                      # archiviert
         regeln.append(dict(name=name, aktiv=bool(aktiv), grund=grund, aktien=aktien, duration=duration, tips=tips,
                            sektoren=sektoren or {}, herkunft=herkunft))
 
@@ -398,18 +433,25 @@ def signal_regeln(st: pd.DataFrame, risiken: pd.DataFrame, kombis: list[dict]) -
     regel("Finanzstress", a("nfci") == ROT or a("stlfsi") == ROT, "NFCI oder St. Louis-Index > 0 → Risk-off höher gewichten",
           aktien=-5, herkunft="Eure Aktion · Grösse: Vorschlag")
     regel("Warnsignal Konsumrückgang", sig("r_konsum"), "Sparquote < 3,5 %, Realkonsum 2 Mt. ≤ 0, ISM-Stagflation oder NFIB < 95",
-          sektoren={"Zykl. Konsum": -1, "Basiskonsum": 1, "Gesundheit": 1})
+          sektoren={"Zykl. Konsum": -1, "Basiskonsum": 1, "Gesundheit": 1}, rid="r_konsum")
     regel("Warnsignal KI-/Tech-Korrektur", sig("r_ki"), "Fondsmanager-Cash < 4 % oder vom Team gemeldet",
-          sektoren={"IT": -1}, herkunft="Eure Aktion · Grösse: Vorschlag")
+          sektoren={"IT": -1}, herkunft="Eure Aktion · Grösse: Vorschlag", rid="r_ki")
     regel("Warnsignal Protektionismus", sig("r_protekt"), "Vom Team gemeldet: Autos untergewichten",
-          sektoren={"Zykl. Konsum": -1})
+          sektoren={"Zykl. Konsum": -1}, rid="r_protekt")
     regel("Warnsignal Iran-Eskalation", sig("r_iran_esk"), "Brent > 110 USD oder vom Team gemeldet",
-          aktien=-5, sektoren={"Energie": 1, "Zykl. Konsum": -1, "Industrie": -1}, duration=2.5)
+          aktien=-5, sektoren={"Energie": 1, "Zykl. Konsum": -1, "Industrie": -1}, duration=2.5, rid="r_iran_esk")
     regel("Warnsignal China-Eskalation", sig("r_china_esk"), "Vom Team gemeldet: Halbleiter/IT und Industrie meiden",
-          sektoren={"IT": -1, "Industrie": -1, "Versorger": 1})
+          sektoren={"IT": -1, "Industrie": -1, "Versorger": 1}, rid="r_china_esk")
     regel("Chance Iran-Deal", sig("r_iran_deal"), "Brent < 85 USD oder vom Team gemeldet",
-          sektoren={"Energie": -1, "Industrie": 1, "Zykl. Konsum": 1})
-    regel("Chance China-Deal", sig("r_china_deal"), "Vom Team gemeldet", sektoren={"IT": 1, "Industrie": 1})
+          sektoren={"Energie": -1, "Industrie": 1, "Zykl. Konsum": 1}, rid="r_iran_deal")
+    regel("Chance China-Deal", sig("r_china_deal"), "Vom Team gemeldet", sektoren={"IT": 1, "Industrie": 1}, rid="r_china_deal")
     regel("Warnsignal Tail Risk", sig("r_tail"), "Vom Team gemeldet: Aktienquote senken, Cash und kurze Treasuries ↑",
-          aktien=-10, duration=2.0, herkunft="Eure Aktion · Grösse: Vorschlag")
+          aktien=-10, duration=2.0, herkunft="Eure Aktion · Grösse: Vorschlag", rid="r_tail")
+    # Vom Team festgelegte Wirkung eines Risikos/einer Chance (Seite «Risiken & Chancen» → Bearbeiten)
+    for rid, x in risiken.iterrows():
+        if team_wirkung(rid):
+            regeln.append(dict(name=f"{'Chance' if x['art'] == 'Chance' else 'Warnsignal'} {x['name']}", aktiv=bool(x["signal"]),
+                               grund=(x["warnsignal"] or "Warnsignal")[:120], aktien=_z(x["wirkung_aktien"]) or 0.0,
+                               duration=_z(x["wirkung_duration"]), tips=None, sektoren=dict(x["wirkung_sektoren"] or {}),
+                               herkunft="Team (Risiken & Chancen)"))
     return regeln
