@@ -262,7 +262,9 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
         _text(pdf, f"- {s['titel']}: {s['text']}")
 
     _titel(pdf, "3. Szenarien")
-    rows = [[ctx.szdef[s]["name"], f"{ctx.szen.loc[s, 'p']:.0f} %", ctx.szdef[s]["narrativ"][:150]] for s in ctx.szdef]
+    rows = [[ctx.szdef[s]["name"], f"{ctx.szen.loc[s, 'p']:.0f} %",
+             ctx.szdef[s]["narrativ"][:150] + (f" Auslöser: {ctx.szdef[s]['signposts'][:90]}" if ctx.szdef[s].get("signposts") else "")]
+            for s in ctx.szdef]
     _tabelle(pdf, ["Szenario", "W.", "Kurzbeschreibung"], rows, (55, 15, 120))
     _text(pdf, ctx.szen["basis"].iloc[0], gross=7.5, farbe=MUTED)
 

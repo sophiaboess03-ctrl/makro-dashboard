@@ -236,8 +236,9 @@ def lade_fred(series: tuple[str, ...], api_key: str | None):
 TEAM_MODUS = bool(secret("app_password") or secret("script_url"))
 
 
-def speichern(tabelle: str, zeilen: list[dict], meldung: str = "Gespeichert."):
-    """Speichert, liest zur Kontrolle zurück und meldet erst dann Erfolg."""
+def speichern(tabelle: str, zeilen: list[dict], meldung: str = "Gespeichert.", weitere: list | None = None):
+    """Speichert, liest zur Kontrolle zurück und meldet erst dann Erfolg.
+    weitere: [(tabelle, zeilen), …] werden vorher mitgespeichert (z. B. neues Risiko + seine Felder in «definitionen»)."""
     if NUR_LESEN:
         st.error("Nur Lesezugriff – mit diesem Zugang können keine Änderungen gespeichert werden.")
         return
@@ -250,6 +251,9 @@ def speichern(tabelle: str, zeilen: list[dict], meldung: str = "Gespeichert."):
         return
     with st.spinner("Speichere und prüfe …"):
         try:
+            for t_, z_ in weitere or []:
+                if z_:
+                    store.anhaengen(t_, z_)
             store.anhaengen(tabelle, zeilen)
         except Exception as e:  # noqa: BLE001
             st.error(f"**Nicht gespeichert:** {e}")
@@ -471,9 +475,9 @@ seiten = {
     "Kapitel": [st.Page(partial(views.seite_kapitel, ctx, k["id"]), title=k["name"], icon=k["icon"], url_path=k["id"])
                 for k in C.KAPITEL],
     "Szenarien": [
-        st.Page(_doks(lambda: szenarien_seite.seite_szenarien(ctx), "szenarien"), title="Szenarien", icon=M("alt_route"), url_path="szenarien"),
+        st.Page(_doks(lambda: szenarien_seite.seite_szenarien(ctx, TEAM), "szenarien"), title="Szenarien", icon=M("alt_route"), url_path="szenarien"),
         st.Page(_doks(_seite_eingepreist, "eingepreist"), title="Was ist eingepreist?", icon=M("query_stats"), url_path="erwartungen"),
-        st.Page(_doks(lambda: szenarien_seite.seite_risiken(ctx), "risiken"), title="Risiken & Chancen", icon=M("warning"), url_path="risiken"),
+        st.Page(_doks(lambda: szenarien_seite.seite_risiken(ctx, TEAM), "risiken"), title="Risiken & Chancen", icon=M("warning"), url_path="risiken"),
     ],
     "Entscheiden & Abgabe": [
         st.Page(_doks(lambda: ips_mod.seite_ips(ctx, hist, ctx.gew, ctx.szdef, ctx.bond), "ips"), title="IPS", icon=M("policy"), url_path="ips"),
