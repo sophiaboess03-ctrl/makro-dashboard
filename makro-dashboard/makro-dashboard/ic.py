@@ -230,7 +230,7 @@ def seite_ic(ctx, markt_tab: pd.DataFrame | None, team: list[str]):
         ren, wer = _renditen(tab.get("einstellungen"), ctx.szdef, ctx.bond)
         st.caption(f"Renditeannahmen: {wer}")
         ed = st.data_editor(ren.drop(columns="id"), hide_index=True, width="stretch", disabled=["Szenario"], key="ren_edit",
-                            column_config={k: st.column_config.NumberColumn(k, format="%.1f", step=0.5)
+                            column_config={k: st.column_config.NumberColumn(k, format="%.3f", step=0.001)
                                            for k in ("Aktien %", "Treasuries %", "Cash %")})
         c1, c2 = st.columns([1, 2])
         cash = c1.slider("Cash-Anteil (%)", 0, 10, int(round(ctx.alloc["cash"])), 1, help="IC-Korridor 0–10 %")
@@ -406,7 +406,7 @@ def _sektordaten(ctx, tab):
             z[label] = (v if feld == "quelle" else zahl(v)) if v not in (None, "") else (None if feld != "quelle" else "")
         zeilen.append(z)
     df = pd.DataFrame(zeilen)
-    cfg = {label: st.column_config.NumberColumn(label, format="%.1f") for feld, label in SEKTOR_FELDER if feld != "quelle"}
+    cfg = {label: st.column_config.NumberColumn(label, format="%.3f", step=0.001) for feld, label in SEKTOR_FELDER if feld != "quelle"}
     cfg["Quelle / Stand"] = st.column_config.TextColumn("Quelle / Stand", width="medium")
     ed = st.data_editor(df, hide_index=True, width="stretch", disabled=["Sektor"], column_config=cfg, key="sektordaten_edit")
     c1, c2 = st.columns([1, 3])

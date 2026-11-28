@@ -273,7 +273,7 @@ def abschnitt(ctx, r: dict, werte: dict, R=None, kurz: bool = False):
         return
     with st.popover("Geplante Aufteilung des Risikobudgets ändern", icon=":material/tune:", disabled=ctx.nur_lesen):
         with st.form("budget"):
-            neu = {k: st.number_input(k, 0.0, 100.0, float(budget.get(k, 0)), 5.0) for k in TEILE}
+            neu = {k: st.number_input(k, 0.0, 100.0, float(budget.get(k, 0)), 5.0, format="%.3f") for k in TEILE}
             if st.form_submit_button("Speichern"):
                 tot = sum(neu.values()) or 1
                 ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel="risikobudget",

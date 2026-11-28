@@ -297,11 +297,11 @@ def seite_erwartungen(ctx, fred: dict, prog: dict | None = None):
     gk = grinold_kroner_eingaben(ctx)
     with st.form("gk"):
         cc = st.columns(5)
-        dp = cc[0].number_input("Dividendenrendite D/P (%)", 0.0, 5.0, gk["dp"], 0.1)
-        i_ = cc[1].number_input("Inflation i (%)", 0.0, 6.0, gk["i"], 0.1, help="Standard: 10-J.-Breakeven (FRED T10YIE)")
-        g = cc[2].number_input("Reales Gewinnwachstum g (%)", -2.0, 6.0, gk["g"], 0.1)
-        ds = cc[3].number_input("Veränderung Aktienzahl ΔS (%)", -4.0, 4.0, gk["ds"], 0.1, help="negativ = Netto-Aktienrückkäufe")
-        dpe = cc[4].number_input("Bewertungsänderung ΔP/E p.a. (%)", -5.0, 5.0, gk["dpe"], 0.1)
+        dp = cc[0].number_input("Dividendenrendite D/P (%)", 0.0, 5.0, gk["dp"], 0.1, format="%.3f")
+        i_ = cc[1].number_input("Inflation i (%)", 0.0, 6.0, gk["i"], 0.1, format="%.3f", help="Standard: 10-J.-Breakeven (FRED T10YIE)")
+        g = cc[2].number_input("Reales Gewinnwachstum g (%)", -2.0, 6.0, gk["g"], 0.1, format="%.3f")
+        ds = cc[3].number_input("Veränderung Aktienzahl ΔS (%)", -4.0, 4.0, gk["ds"], 0.1, format="%.3f", help="negativ = Netto-Aktienrückkäufe")
+        dpe = cc[4].number_input("Bewertungsänderung ΔP/E p.a. (%)", -5.0, 5.0, gk["dpe"], 0.1, format="%.3f")
         if st.form_submit_button("Annahmen fürs Team speichern", disabled=ctx.nur_lesen):
             ctx.speichern("einstellungen", [dict(zeit=jetzt(), person=ctx.person, schluessel=f"gk_{k}", wert=v)
                                             for k, v in (("dp", dp), ("i", i_), ("g", g), ("ds", ds), ("dpe", dpe))],

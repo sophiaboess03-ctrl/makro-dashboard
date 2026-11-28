@@ -23,7 +23,7 @@ def excel(tabellen: dict, status: pd.DataFrame, alloc: dict, szen: pd.DataFrame,
         uebersicht = pd.DataFrame([
             ("Stand", datetime.now().strftime("%d.%m.%Y %H:%M")),
             ("Exportiert von", person),
-            ("Taktik Aktien / Anleihen / Cash", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %"),
+            ("Taktik Aktien / Anleihen / Cash", f"{ui.de(a['aktien'], 3)} / {ui.de(a['anleihen'], 3)} / {ui.de(a['cash'], 3)} %"),
             ("Taktik Duration", f"{ui.de(a['duration'], 1)} J."),
             ("Taktik TIPS-Anteil", f"{a['tips']:.0f} %"),
             ("Übergewichtet", ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "–"),

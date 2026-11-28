@@ -222,8 +222,8 @@ def pruefungen(ips: dict, risiko: dict | None = None) -> list[tuple[str, str, st
     """(Status ok/warnung/fehler, Thema, Text)."""
     out = []
     s = ips["saa_aktien"] + ips["saa_anleihen"] + ips["saa_cash"]
-    out.append(("ok" if abs(s - 100) < 0.01 else "fehler", "Strategische Allokation",
-                f"Summe der Zielgewichte {ui.de(s, 2)} % (muss 100 % sein)."))
+    out.append(("ok" if abs(s - 100) < 0.0005 else "fehler", "Strategische Allokation",
+                f"Summe der Zielgewichte {ui.de(s, 3)} % (muss 100 % sein)."))
     for k, name in (("aktien", "Aktien"), ("anleihen", "Anleihen"), ("cash", "Cash")):
         lo, hi = ips[f"{k}_min"], ips[f"{k}_max"]
         dlo, dhi = C.DOZENT_BAND[k]
@@ -381,13 +381,14 @@ def seite_ips(ctx, hist: dict, gew: dict, defs: dict, bond: dict):
                             c1.markdown(f"**{f['titel']}**")
                             if f["typ"] == "zahl":
                                 neu = c2.number_input(f["titel"], value=float(alt), step=0.5 if f.get("einheit") != "" else 0.05,
+                                                      format="%.0f" if f.get("einheit") == "Titel" else "%.3f",
                                                       key=key, label_visibility="collapsed", disabled=ctx.nur_lesen)
                             else:
                                 neu = c2.selectbox(f["titel"], f["optionen"], index=f["optionen"].index(alt) if alt in f["optionen"] else 0,
                                                    key=key, label_visibility="collapsed", disabled=ctx.nur_lesen)
                             c3.markdown(f"<span class='klein'>{html.escape(f.get('einheit', ''))} · {html.escape(f['hilfe'])}</span>",
                                         unsafe_allow_html=True)
-                            pdf_zeilen.append((f["titel"], f"{ui.de(neu, 2) if f['typ'] == 'zahl' else neu} {f.get('einheit', '')}".strip(),
+                            pdf_zeilen.append((f["titel"], f"{ui.de(neu, 0 if f.get('einheit') == 'Titel' else 3) if f['typ'] == 'zahl' else neu} {f.get('einheit', '')}".strip(),
                                                f["hilfe"]))
                         else:
                             st.markdown(f"<div style='font-weight:600; margin-top:6px'>{html.escape(f['titel'])}</div>"
@@ -414,8 +415,8 @@ def seite_ips(ctx, hist: dict, gew: dict, defs: dict, bond: dict):
                         R.tabelle(pd.DataFrame(pdf_zeilen, columns=["Vorgabe", "Wert", "Erläuterung"]), [55, 30, 95])
                     if titel == "Strategische Allokation":
                         s = sum(st.session_state.get(f"ips_saa_{k}", ips[f"saa_{k}"]) for k in ("aktien", "anleihen", "cash"))
-                        farbe = ui.FARBE["Grün"] if abs(s - 100) < 0.01 else ui.FARBE["Rot"]
-                        st.markdown(f"<span style='color:{farbe}; font-weight:600'>Summe Zielgewichte: {ui.de(s, 2)} %</span>",
+                        farbe = ui.FARBE["Grün"] if abs(s - 100) < 0.0005 else ui.FARBE["Rot"]
+                        st.markdown(f"<span style='color:{farbe}; font-weight:600'>Summe Zielgewichte: {ui.de(s, 3)} %</span>",
                                     unsafe_allow_html=True)
 
     st.divider()
@@ -433,7 +434,7 @@ def seite_ips(ctx, hist: dict, gew: dict, defs: dict, bond: dict):
             for titel, _, felder in abschnitte:
                 for f in felder:
                     v = ips[f["id"]]
-                    v = ", ".join(v) if isinstance(v, list) else (ui.de(v, 2) if f["typ"] == "zahl" else v)
+                    v = ", ".join(v) if isinstance(v, list) else (ui.de(v, 0 if f.get("einheit") == "Titel" else 3) if f["typ"] == "zahl" else v)
                     teile.append(f"{f['titel']}: {v}")
         st.code("\n".join(teile), language=None)
     SP.knopf(ph, R, "ips", f"IPS_Team_{datetime.now():%Y-%m-%d}.pdf")

@@ -504,18 +504,18 @@ def signale_einhaltung(lage: dict, s: dict, bekannt: set) -> list[dict]:
         lo, hi = ips[f"{k_}_min"], ips[f"{k_}_max"]
         w = ist[k_]
         if _aktiv(w, hi + 1e-6, "oben", f"ips:band:{k_}:oben", bekannt, pp):
-            out.append(_sig(f"ips:band:{k_}:oben", "Einhaltung", "Allokation", f"{name} {de(w, 1)} % über dem IPS-Maximum {de(hi, 0)} %",
+            out.append(_sig(f"ips:band:{k_}:oben", "Einhaltung", "Allokation", f"{name} {de(w, 3)} % über dem IPS-Maximum {de(hi, 0)} %",
                             f"IPS-Band {de(lo, 0)}–{de(hi, 0)} %.", "Handeln", "band", w, "%", "oben"))
         elif _aktiv(w, lo - 1e-6, "unten", f"ips:band:{k_}:unten", bekannt, pp):
-            out.append(_sig(f"ips:band:{k_}:unten", "Einhaltung", "Allokation", f"{name} {de(w, 1)} % unter dem IPS-Minimum {de(lo, 0)} %",
+            out.append(_sig(f"ips:band:{k_}:unten", "Einhaltung", "Allokation", f"{name} {de(w, 3)} % unter dem IPS-Minimum {de(lo, 0)} %",
                             f"IPS-Band {de(lo, 0)}–{de(hi, 0)} %.", "Handeln", "band", w, "%", "unten"))
         elif hi - lo > 2 * s["band_nah"]:
             if _aktiv(w, hi - s["band_nah"], "oben", f"ips:nah:{k_}:oben", bekannt, pp):
-                out.append(_sig(f"ips:nah:{k_}:oben", "Einhaltung", "Allokation", f"{name} {de(w, 1)} % – nahe am IPS-Maximum {de(hi, 0)} %",
-                                f"Abstand {de(hi - w, 1)} Pp. (Frühwarnung ab {de(s['band_nah'], 1)} Pp.).", "Prüfen", "nah", w, "%", "oben"))
+                out.append(_sig(f"ips:nah:{k_}:oben", "Einhaltung", "Allokation", f"{name} {de(w, 3)} % – nahe am IPS-Maximum {de(hi, 0)} %",
+                                f"Abstand {de(hi - w, 3)} Pp. (Frühwarnung ab {de(s['band_nah'], 1)} Pp.).", "Prüfen", "nah", w, "%", "oben"))
             elif _aktiv(w, lo + s["band_nah"], "unten", f"ips:nah:{k_}:unten", bekannt, pp) and not (k_ == "cash" and lo <= 0):
-                out.append(_sig(f"ips:nah:{k_}:unten", "Einhaltung", "Allokation", f"{name} {de(w, 1)} % – nahe am IPS-Minimum {de(lo, 0)} %",
-                                f"Abstand {de(w - lo, 1)} Pp. (Frühwarnung ab {de(s['band_nah'], 1)} Pp.).", "Prüfen", "nah", w, "%", "unten"))
+                out.append(_sig(f"ips:nah:{k_}:unten", "Einhaltung", "Allokation", f"{name} {de(w, 3)} % – nahe am IPS-Minimum {de(lo, 0)} %",
+                                f"Abstand {de(w - lo, 3)} Pp. (Frühwarnung ab {de(s['band_nah'], 1)} Pp.).", "Prüfen", "nah", w, "%", "unten"))
     if cash < -1:
         out.append(_sig("ips:cash_negativ", "Einhaltung", "Allokation", f"Cash negativ ({de(cash, 0)} USD)",
                         "Es wurde mehr gekauft als Kapital vorhanden ist.", "Handeln", "cash", cash, "USD", "unten"))
@@ -528,8 +528,8 @@ def signale_einhaltung(lage: dict, s: dict, bekannt: set) -> list[dict]:
             k = f"taktik:abw:{k_}"
             if _aktiv(abs(d), s["taktik_tol"], "oben", k, bekannt, pp):
                 stufe = "Handeln" if abs(d) >= tol_ips - 1e-9 else "Prüfen"
-                out.append(_sig(k, "Einhaltung", "Allokation", f"{name}: Ist {de(ist[k_], 1)} % vs. Taktik {de(soll, 1)} %",
-                                f"Abweichung {de(d, 1, True)} Pp. (Prüfen ab ±{de(s['taktik_tol'], 1)} Pp., Rebalancing laut IPS ab "
+                out.append(_sig(k, "Einhaltung", "Allokation", f"{name}: Ist {de(ist[k_], 3)} % vs. Taktik {de(soll, 3)} %",
+                                f"Abweichung {de(d, 3, True)} Pp. (Prüfen ab ±{de(s['taktik_tol'], 1)} Pp., Rebalancing laut IPS ab "
                                 f"±{de(tol_ips, 1)} Pp.).", stufe, "rebal" if stufe == "Handeln" else "taktik", abs(d), "Pp.", "oben"))
     # Duration und Laufzeiten
     t = b[b["klasse"] == "Treasury"]
@@ -564,12 +564,12 @@ def signale_einhaltung(lage: dict, s: dict, bekannt: set) -> list[dict]:
             if tmax:
                 k = f"ips:titel_max:{z['ticker']}"
                 if _aktiv(g, tmax + 1e-6, "oben", k, bekannt, pp / 2):
-                    out.append(_sig(k, "Einhaltung", bereich, f"{z['ticker']}: {de(g, 2)} % über dem IPS-Maximum je Titel",
+                    out.append(_sig(k, "Einhaltung", bereich, f"{z['ticker']}: {de(g, 3)} % über dem IPS-Maximum je Titel",
                                     f"Maximales Gewicht je Titel {de(tmax, 1)} % des Vermögens.", "Handeln", "titel_max", g, "%", "oben",
                                     ticker=z["ticker"]))
                 elif _aktiv(g, tmax - s["titel_nah"], "oben", f"ips:titel_nah:{z['ticker']}", bekannt, pp / 2):
                     out.append(_sig(f"ips:titel_nah:{z['ticker']}", "Einhaltung", bereich,
-                                    f"{z['ticker']}: {de(g, 2)} % – nahe am Titel-Maximum {de(tmax, 1)} %",
+                                    f"{z['ticker']}: {de(g, 3)} % – nahe am Titel-Maximum {de(tmax, 1)} %",
                                     f"Abstand {de(tmax - g, 2)} Pp.", "Prüfen", "titel_nah", g, "%", "oben", ticker=z["ticker"]))
             if sp and z["ticker"] not in sp:
                 out.append(_sig(f"ips:mandat:{z['ticker']}", "Einhaltung", bereich, f"{z['ticker']}: nicht im S&P 500",
@@ -616,23 +616,23 @@ def signale_einhaltung(lage: dict, s: dict, bekannt: set) -> list[dict]:
             aktiv = z["_ist"] - z["_index"]
             k = f"sektor:{sek}:abw"
             ips_verletzt = bool(smax) and _aktiv(abs(aktiv), smax + 1e-6, "oben", k, bekannt, pp)
-            ziel_txt = (f"Ist {de(z['_ist'], 2)} %, Ziel {de(z['_ziel'], 2)} %, Index {de(z['_index'], 2)} % des Aktienteils"
+            ziel_txt = (f"Ist {de(z['_ist'], 3)} %, Ziel {de(z['_ziel'], 3)} %, Index {de(z['_index'], 3)} % des Aktienteils"
                         if z["_ziel"] is not None and not pd.isna(z["_ziel"]) else
-                        f"Ist {de(z['_ist'], 2)} %, Index {de(z['_index'], 2)} % des Aktienteils (Richtung «{z['Richtung']}», noch ohne Zahl)")
-            ips_txt = f" IPS: höchstens ±{de(smax, 1)} Pp. gegenüber Index (aktuell {de(aktiv, 1, True)} Pp.)." if smax else ""
+                        f"Ist {de(z['_ist'], 3)} %, Index {de(z['_index'], 3)} % des Aktienteils (Richtung «{z['Richtung']}», noch ohne Zahl)")
+            ips_txt = f" IPS: höchstens ±{de(smax, 1)} Pp. gegenüber Index (aktuell {de(aktiv, 3, True)} Pp.)." if smax else ""
             hat_ziel = z["_diff"] is not None and not pd.isna(z["_diff"])
             if hat_ziel:
                 wert = abs(z["_diff"])
                 abw = _aktiv(wert, s["sektor_tol"], "oben", k, bekannt, pp / 2)
-                kurz = f"Ist − Ziel {de(z['_diff'], 2, True)} Pp."
+                kurz = f"Ist − Ziel {de(z['_diff'], 3, True)} Pp."
                 txt = (f"{ziel_txt}; Prüfen ab ±{de(s['sektor_tol'], 1)} Pp. Betrag bis zum Ziel: {z['Fehlt (+) / zu viel (−)']}."
                        + ips_txt)
             else:
                 wert, abw = abs(aktiv), z["_stufe"] == L.ROT
-                kurz = f"Richtung «{z['Richtung']}» nicht umgesetzt ({de(aktiv, 2, True)} Pp.)"
+                kurz = f"Richtung «{z['Richtung']}» nicht umgesetzt ({de(aktiv, 3, True)} Pp.)"
                 txt = ziel_txt + "." + ips_txt
             if ips_verletzt:
-                out.append(_sig(k, "Einhaltung", sek, f"{sek}: {de(aktiv, 1, True)} Pp. gegenüber Index – über der IPS-Grenze",
+                out.append(_sig(k, "Einhaltung", sek, f"{sek}: {de(aktiv, 3, True)} Pp. gegenüber Index – über der IPS-Grenze",
                                 txt, "Handeln", "sektor_ips", wert, "Pp.", "oben"))
             elif abw:
                 out.append(_sig(k, "Einhaltung", sek, f"{sek}: {kurz}", txt, "Prüfen", "sektor_ziel", wert, "Pp.", "oben"))
@@ -788,11 +788,11 @@ def lage_bauen(tabellen: dict, fred: dict, kurse: dict, hist: dict, r: dict, sp5
 
 def snapshot(lage: dict) -> dict:
     a, r = lage["alloc"], lage["r"]
-    out = {"stand": jetzt(), "taktik": f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} (Duration {a['duration']:.1f} J.)"}
+    out = {"stand": jetzt(), "taktik": f"{de(a['aktien'], 3)} / {de(a['anleihen'], 3)} / {de(a['cash'], 3)} (Duration {de(a['duration'], 1)} J.)"}
     if lage.get("hat_tx") and lage.get("total"):
         b, t = lage["b"], lage["total"]
-        out["ist"] = (f"{b.loc[b['klasse'] == 'Aktie', 'wert'].sum() / t * 100:.1f} / "
-                      f"{b.loc[b['klasse'] == 'Treasury', 'wert'].sum() / t * 100:.1f} / {lage['cash'] / t * 100:.1f}")
+        out["ist"] = (f"{de(b.loc[b['klasse'] == 'Aktie', 'wert'].sum() / t * 100, 3)} / "
+                      f"{de(b.loc[b['klasse'] == 'Treasury', 'wert'].sum() / t * 100, 3)} / {de(lage['cash'] / t * 100, 3)}")
         out["portfoliowert"] = round(t, 0)
     try:
         out["rote_indikatoren"] = int((r["status"]["ampel"] == L.ROT).sum())

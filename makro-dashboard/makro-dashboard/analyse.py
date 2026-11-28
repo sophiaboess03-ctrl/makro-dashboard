@@ -481,8 +481,8 @@ def optimieren(R: pd.DataFrame, rf: pd.Series, r_b: pd.Series | None, gew: dict,
         n = len(idx)
         if n * deckel < s_g - 1e-12:
             hi_all[idx] = s_g / n
-            hinweise.append(f"{g}: {n} Titel tragen {ui.de(s_g * 100, 2)} % nicht mit höchstens {ui.de(deckel * 100, 2)} % je Titel – "
-                            f"Obergrenze dort {ui.de(s_g / n * 100, 2)} %.")
+            hinweise.append(f"{g}: {n} Titel tragen {ui.de(s_g * 100, 3)} % nicht mit höchstens {ui.de(deckel * 100, 3)} % je Titel – "
+                            f"Obergrenze dort {ui.de(s_g / n * 100, 3)} %.")
         if n * mindest > s_g + 1e-12:
             lo_all[idx] = s_g / n
 
@@ -551,11 +551,11 @@ def pruefungen(pos: pd.DataFrame, cash: float, total: float, info: dict, alloc: 
     for name, wert, (lo, hi) in (("Aktien", ak, alloc["baender"]["aktien"]), ("Treasuries", tr, alloc["baender"]["treasuries"]),
                                  ("Cash", ca, alloc["baender"]["cash"])):
         out.append((L.GRUEN if lo <= wert <= hi else L.ROT,
-                    f"{name} {ui.de(wert, 1)} % – IPS-Band {lo:g}–{hi:g} %"))
+                    f"{name} {ui.de(wert, 3)} % – IPS-Band {lo:g}–{hi:g} %"))
     for _, z in pos[pos["klasse"] == "Aktie"].iterrows():
         g = z["wert"] / total * 100
         if g > KLUMPEN:
-            out.append((L.ROT, f"Klumpenrisiko: {z['ticker']} {ui.de(g, 1)} % (> {KLUMPEN:.0f} % des Portfolios)"))
+            out.append((L.ROT, f"Klumpenrisiko: {z['ticker']} {ui.de(g, 3)} % (> {KLUMPEN:.0f} % des Portfolios)"))
         i = info.get(z["ticker"], {})
         if i.get("im_index") is False:
             out.append((L.ROT, f"{z['ticker']} ist nicht im S&P 500 – Mandat: nur S&P-500-Aktien"))
@@ -648,12 +648,12 @@ def _fz(x, d: int = 0) -> str:
 
 
 def _fz_pct(x) -> str:
-    """Gewicht % mit 2–4 Nachkommastellen (0,5466 bleibt 0,5466, 2 wird 2,00) – eingetippte Gewichte gehen nicht verloren."""
+    """Gewicht % mit 3–4 Nachkommastellen (0,5466 bleibt 0,5466, 2 wird 2,000) – eingetippte Gewichte gehen nicht verloren."""
     v = _num(x)
     if v is None:
         return ""
     ganz, _, dez = ui.de(v, 4).partition(",")
-    return f"{ganz},{dez.rstrip('0').ljust(2, '0')}"
+    return f"{ganz},{dez.rstrip('0').ljust(3, '0')}"
 
 
 def _fz_menge(x) -> str:
@@ -684,7 +684,7 @@ def _editor_ansicht(df: pd.DataFrame) -> pd.DataFrame:
     «Gewicht %») und die Löschen-Spalte. «Ist %» ist nur Anzeige und wird nicht gespeichert."""
     basis = _basis(st.session_state)
     d = df.copy()
-    ist = [_fz(_num(b_) / basis * 100, 2) if _num(b_) is not None and basis > 0 and _txt(t).strip() else ""
+    ist = [_fz(_num(b_) / basis * 100, 3) if _num(b_) is not None and basis > 0 and _txt(t).strip() else ""
            for t, b_ in zip(d["Ticker"], d["Betrag USD"])]
     d.insert(d.columns.get_loc("Gewicht %") + 1, "Ist %", pd.Series(ist, index=d.index, dtype="string"))
     return d.assign(Löschen=False)
@@ -842,7 +842,7 @@ def _ak_deckeln(df: pd.DataFrame, i: int, offen: set | None = None):
         menge = math.floor(rest / kurs)
         df.at[i, "Menge"] = _fz_menge(menge)
         df.at[i, "Betrag USD"] = _fz(menge * kurs)
-        _meldung(f"{t}: auf {ui.de(menge, 0)} Stück gekürzt – Aktienbudget ({ui.de(b['pct']['aktien'], 1)} % = "
+        _meldung(f"{t}: auf {ui.de(menge, 0)} Stück gekürzt – Aktienbudget ({ui.de(b['pct']['aktien'], 3)} % = "
                  f"{ui.de(b['budget_a'], 0)} USD) wäre sonst überschritten.")
     else:
         df.at[i, "Betrag USD"] = _fz(rest)
@@ -875,7 +875,7 @@ def _prozent_verteilen(df: pd.DataFrame) -> pd.DataFrame:
         f = frei / total
         ziel = {i: v * f for i, v in ziel.items()}
         _meldung(f"Die Titel mit fixem Gewicht % brauchen zusammen {ui.de(total, 0)} USD, im Aktienbudget sind noch "
-                 f"{ui.de(frei, 0)} USD frei (Aktien {ui.de(b['pct']['aktien'], 2)} % = {ui.de(b['budget_a'], 0)} USD) – "
+                 f"{ui.de(frei, 0)} USD frei (Aktien {ui.de(b['pct']['aktien'], 3)} % = {ui.de(b['budget_a'], 0)} USD) – "
                  f"alle wurden im gleichen Verhältnis auf {ui.de(f * 100, 1)} % gekürzt. Stimmt «Aktien %» mit eurem Modell überein?")
     grenze = min(sum(ziel.values()), frei)
     menge = {i: math.floor(ziel[i] / kurs[i] + 1e-9) for i in zeilen}
@@ -1020,7 +1020,7 @@ def sektor_anteile(ist: dict, neu: dict, ausgleich: bool = True) -> dict:
     """Neue Sektoranteile (% des Aktienteils). Geänderte Sektoren gelten wie eingegeben. Mit ausgleich werden die übrigen
     proportional angepasst, damit die Summe 100 % bleibt (geht nicht, wenn die geänderten schon > 100 % ergeben)."""
     out = {s: max(0.0, float(neu[s])) if neu.get(s) is not None else ist[s] for s in ist}
-    geaendert = {s for s in ist if abs(out[s] - ist[s]) > 0.006}        # 0,006: gerundete Anzeige gilt als unverändert
+    geaendert = {s for s in ist if abs(out[s] - ist[s]) > 0.0006}       # 0,0006: auf 3 Stellen gerundete Anzeige gilt als unverändert
     uebrig = [s for s in ist if s not in geaendert]
     rest = 100.0 - sum(out[s] for s in geaendert)
     u = sum(ist[s] for s in uebrig)
@@ -1070,7 +1070,7 @@ def _sek_form(sfx: str, aktion: str, ziele: dict):
         z = {s: ziele.get(s) for s in ist if s in ziele and ziele.get(s) is not None}
         tot = sum(z.values())
         if tot > 0:
-            ss["an_sek_vorschlag"] = dict(ver=ss.get("an_ak_ver", 0), werte={s: round(v / tot * 100, 2) for s, v in z.items()},
+            ss["an_sek_vorschlag"] = dict(ver=ss.get("an_ak_ver", 0), werte={s: round(v / tot * 100, 3) for s, v in z.items()},
                                           roh=z)
         return
     zeilen = ss.get("an_sek_zeilen") or []
@@ -1085,8 +1085,8 @@ def _sek_form(sfx: str, aktion: str, ziele: dict):
     ziel_summe = b["budget_a"] if ss.get(f"an_sek_summe{sfx}") == "budget" and b["budget_a"] > 0 else summe
     ausgleich = bool(ss.get(f"an_sek_ausgl{sfx}", True))
     anteile = sektor_anteile(ist, neu, ausgleich)
-    if ausgleich and abs(sum(anteile.values()) - 100) > 0.05:
-        _meldung(f"Die Sektoranteile ergeben {ui.de(sum(anteile.values()), 1)} % – die geänderten Sektoren allein sind schon über "
+    if ausgleich and abs(sum(anteile.values()) - 100) > 0.0005:
+        _meldung(f"Die Sektoranteile ergeben {ui.de(sum(anteile.values()), 3)} % – die geänderten Sektoren allein sind schon über "
                  "100 % (oder alle wurden geändert), darum konnte nicht ausgeglichen werden. Die Aktiensumme ändert sich entsprechend.")
     total = ziel_summe * sum(anteile.values()) / 100
     if b["kapital"] > 0 and total > b["budget_a"] + 0.5:     # nie übers Aktienbudget: alles im gleichen Verhältnis kürzen
@@ -1222,8 +1222,8 @@ def _scoring_uebernehmen():
                                 summe=float(d.get("summe_akt") or 0), uebersprungen=list(d.get("uebersprungen") or []))
     ohne = [_txt(t) for t, k in zip(ss["an_aktien"]["Ticker"], ss["an_aktien"]["Kurs USD"]) if _txt(t).strip() and not _num(k)]
     n_t = sum(1 for x in d["titel"] if x["akt"])
-    _meldung(f"{n_t} Titel aus dem Scoring-Modell übernommen · Bezug «Aktienteil» · Aktien {ui.de(q, 2)} % · Treasuries "
-             f"{ui.de(max(0.0, 100 - q - ca), 2)} % · Cash {ui.de(ca, 2)} %."
+    _meldung(f"{n_t} Titel aus dem Scoring-Modell übernommen · Bezug «Aktienteil» · Aktien {ui.de(q, 3)} % · Treasuries "
+             f"{ui.de(max(0.0, 100 - q - ca), 3)} % · Cash {ui.de(ca, 3)} %."
              + (f" Ohne Kurs (Ticker prüfen): {', '.join(ohne)}." if ohne else ""))
 
 
@@ -1302,23 +1302,23 @@ def _abgleich_anzeigen(ab: dict):
     ok = abs(ab["diff"]) < 0.05 and not ab["ohne_kurs"]
     st.markdown(f"**Abgleich mit dem Scoring-Modell** · Import {ab['zeit']}"
                 + (f" · {ab['datei']}" if ab.get("datei") else ""))
-    ui.kopf_kpis([("Excel: Summe Aktienteil", f"{ui.de(ab['s_soll'], 2)} %", f"{len(ab['tab'])} Titel"),
-                  ("App: Summe Ist", f"{ui.de(ab['s_ist'], 2)} %", "Beträge / (Kapital × Aktienquote Modell)"),
-                  ("Differenz", f"{ui.de(ab['diff'], 2, True)} Pp.", "ok" if ok else "siehe Ursachen"),
-                  ("Σ |Ist − Excel|", f"{ui.de(ab['abw'], 2)} Pp.", "über alle Titel")])
+    ui.kopf_kpis([("Excel: Summe Aktienteil", f"{ui.de(ab['s_soll'], 3)} %", f"{len(ab['tab'])} Titel"),
+                  ("App: Summe Ist", f"{ui.de(ab['s_ist'], 3)} %", "Beträge / (Kapital × Aktienquote Modell)"),
+                  ("Differenz", f"{ui.de(ab['diff'], 3, True)} Pp.", "ok" if ok else "siehe Ursachen"),
+                  ("Σ |Ist − Excel|", f"{ui.de(ab['abw'], 3)} Pp.", "über alle Titel")])
     teile = []
     if ab["kein_kurs"] > 0.0001:
         teile.append(f"**{ui.de(ab['kein_kurs'], 2)} Pp.** fehlen, weil Yahoo für {len(ab['ohne_kurs'])} Titel keinen Kurs geliefert "
                      f"hat ({', '.join(ab['ohne_kurs'][:12])}{' …' if len(ab['ohne_kurs']) > 12 else ''}) – ohne Kurs kann die App "
                      "keine Stücke rechnen.")
     if ab["fehlt"] > 0.0001:
-        teile.append(f"**{ui.de(ab['fehlt'], 2)} Pp.** gehören zu Titeln, die nach dem Import aus der Tabelle entfernt wurden.")
+        teile.append(f"**{ui.de(ab['fehlt'], 3)} Pp.** gehören zu Titeln, die nach dem Import aus der Tabelle entfernt wurden.")
     if ab["extra"] > 0.0001:
-        teile.append(f"**{ui.de(ab['extra'], 2)} Pp.** kommen von zusätzlichen Titeln, die nicht im Modell sind.")
+        teile.append(f"**{ui.de(ab['extra'], 3)} Pp.** kommen von zusätzlichen Titeln, die nicht im Modell sind.")
     if abs(ab["rundung"]) >= 0.005:
-        teile.append(f"**{ui.de(ab['rundung'], 2, True)} Pp.** Rundung auf ganze Stücke (je Titel höchstens 1 Stück).")
+        teile.append(f"**{ui.de(ab['rundung'], 3, True)} Pp.** Rundung auf ganze Stücke (je Titel höchstens 1 Stück).")
     if abs(ab["quote_app"] - float(ab["quote"] or 0)) > 0.01:
-        teile.append(f"«Aktien %» steht auf {ui.de(ab['quote_app'], 2)} %, das Modell rechnet mit {ui.de(float(ab['quote']), 2)} % – "
+        teile.append(f"«Aktien %» steht auf {ui.de(ab['quote_app'], 3)} %, das Modell rechnet mit {ui.de(float(ab['quote']), 3)} % – "
                      "dadurch stimmen die Beträge nicht mit Excel überein. «Aktien %» oben auf den Wert des Modells setzen.")
     for t in teile:
         st.markdown(f"- {t}")
@@ -1366,9 +1366,9 @@ def _scoring_bereich():
         if d.get("uebersprungen"):
             st.warning("Beim Lesen aufgefallen:\n" + "\n".join(f"- {u}" for u in d["uebersprungen"]), icon=":material/rule:")
         ui.kopf_kpis([("Titel", f"{len(d['titel'])}", "aus dem Blatt «Portfolio»"),
-                      ("Summe Aktienteil", f"{ui.de(d['summe_akt'], 2)} %", "soll 100 %"),
-                      ("Summe Gesamtportfolio", f"{ui.de(d['summe_ges'], 2)} %", "= Aktienquote"),
-                      ("Aktienquote", f"{ui.de(d['quote'], 2)} %" if d.get("quote") is not None else "–", "wird «Aktien %»")])
+                      ("Summe Aktienteil", f"{ui.de(d['summe_akt'], 3)} %", "soll 100 %"),
+                      ("Summe Gesamtportfolio", f"{ui.de(d['summe_ges'], 3)} %", "= Aktienquote"),
+                      ("Aktienquote", f"{ui.de(d['quote'], 3)} %" if d.get("quote") is not None else "–", "wird «Aktien %»")])
         st.dataframe(pd.DataFrame([{"Sektor": x["sektor"], "Ticker": x["ticker"], "Name": x["name"],
                                     "Gewicht Aktienteil %": round(x["akt"], 4) if x["akt"] is not None else None,
                                     "Gewicht Gesamt %": round(x["ges"], 4) if x["ges"] is not None else None} for x in d["titel"]]),
@@ -1666,7 +1666,7 @@ def _treasury_bereich():
             vorschlag = gb or ("teil" if abs(s_w - 100) < 1.5 else "gesamt" if abs(s_w - b["pct"]["treas"]) < 1.5 else "teil")
             gb = o2.radio("Gewicht bezogen auf", ["teil", "gesamt"], index=0 if vorschlag == "teil" else 1, horizontal=True,
                           key=f"an_tri_gb{sig}", format_func=lambda x: "Treasury-Teil" if x == "teil" else "Gesamtportfolio",
-                          help=f"Summe der Gewichte in der Liste: {ui.de(s_w, 2)} %")
+                          help=f"Summe der Gewichte in der Liste: {ui.de(s_w, 3)} %")
         o3, o4 = st.columns(2)
         ersetzen = o3.checkbox("Bisherige Treasury-Zeilen ersetzen", value=True, key=f"an_tri_ers{sig}")
         kurs_ueb = o4.checkbox("Kurs aus der Liste auch für die Übernahme ins Portfolio verwenden", value=False,
@@ -1686,8 +1686,8 @@ def _treasury_bereich():
                             for x, bt in zip(z, betraege)])
         ui.kopf_kpis([("Anleihen", f"{len(z)}", f"Reiter «{d['blatt']}»"),
                       ("Summe", f"{ui.de(s, 0)} USD", f"Treasury-Budget {ui.de(b['budget_t'], 0)} USD"),
-                      ("Anteil am Budget", f"{ui.de(s / b['budget_t'] * 100 if b['budget_t'] else 0, 2)} %",
-                       f"Treasuries {ui.de(b['pct']['treas'], 2)} % des Kapitals"),
+                      ("Anteil am Budget", f"{ui.de(s / b['budget_t'] * 100 if b['budget_t'] else 0, 3)} %",
+                       f"Treasuries {ui.de(b['pct']['treas'], 3)} % des Kapitals"),
                       ("Ø Restlaufzeit", f"{ui.de(sum(bt * (x['faellig'] - heute).days / 365.25 for x, bt in zip(z, betraege)) / s, 1) if s else '–'} J.",
                        "betragsgewichtet")])
         st.dataframe(vor.drop(columns=[c for c in ("Kurs %", "Rendite %") if vor[c].isna().all()]), hide_index=True,
@@ -1742,12 +1742,12 @@ def _sektor_bereich(ctx, eigene_ansicht: bool = False):
         for s, p in ist.items():
             tt = sorted(titel.get(s, []), key=lambda x: -x[1])
             ws = sum(w for _, w in tt)
-            neu = (vs["werte"].get(s, 0.0) if vs else round(p, 2))
+            neu = (vs["werte"].get(s, 0.0) if vs else round(p, 3))
             start.append((s, neu))
             zeilen.append({"Sektor": s, "Titel (Anteil im Sektor)": " · ".join(f"{t} {ui.de(w / ws * 100, 0)} %" for t, w in tt),
-                           "Ist %": round(p, 2), "Index %": round(index.get(s), 2) if index.get(s) is not None else None,
-                           "Ziel %": round(ziele_sa[s], 2) if ziele_sa.get(s) is not None else None,
-                           "Ist − Ziel (Pp.)": round(p - ziele_sa[s], 2) if ziele_sa.get(s) is not None else None, "Neu %": neu})
+                           "Ist %": round(p, 3), "Index %": round(index.get(s), 3) if index.get(s) is not None else None,
+                           "Ziel %": round(ziele_sa[s], 3) if ziele_sa.get(s) is not None else None,
+                           "Ist − Ziel (Pp.)": round(p - ziele_sa[s], 3) if ziele_sa.get(s) is not None else None, "Neu %": neu})
         ss["an_sek_zeilen"] = start
         fehlen = [s for s in C.SEKTOREN if s not in ist and (ziele.get(s) or 0) > 0]
         b = budget(ss)
@@ -1764,13 +1764,13 @@ def _sektor_bereich(ctx, eigene_ansicht: bool = False):
                            disabled=["Sektor", "Titel (Anteil im Sektor)", "Ist %", "Index %", "Ziel %", "Ist − Ziel (Pp.)"],
                            column_config={
                                "Titel (Anteil im Sektor)": st.column_config.TextColumn(width="large"),
-                               "Ist %": st.column_config.NumberColumn(format="%.2f %%"),
-                               "Index %": st.column_config.NumberColumn(format="%.2f %%", help="S&P-500-Gewicht (Sektorallokation)"),
-                               "Ziel %": st.column_config.NumberColumn(format="%.2f %%",
+                               "Ist %": st.column_config.NumberColumn(format="%.3f %%"),
+                               "Index %": st.column_config.NumberColumn(format="%.3f %%", help="S&P-500-Gewicht (Sektorallokation)"),
+                               "Ziel %": st.column_config.NumberColumn(format="%.3f %%",
                                                                        help="Index + geplante Abweichung (Seite Sektorallokation); "
                                                                             "leer = nur Richtung festgelegt"),
-                               "Ist − Ziel (Pp.)": st.column_config.NumberColumn(format="%.2f"),
-                               "Neu %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.2f",
+                               "Ist − Ziel (Pp.)": st.column_config.NumberColumn(format="%.3f"),
+                               "Neu %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.001, format="%.3f",
                                                                       help="Gewünschter Anteil am Aktienteil")})
             o1, o2 = st.columns([1.3, 1])
             o1.checkbox("Übrige Sektoren gleichen aus (Summe bleibt 100 %)", value=True, key=f"an_sek_ausgl{skey}",
@@ -1790,7 +1790,7 @@ def _sektor_bereich(ctx, eigene_ansicht: bool = False):
             k3.form_submit_button("Auf Ist zurücksetzen", icon=":material/restart_alt:", width="stretch",
                                   on_click=_sek_form, args=(skey, "ist", ziele))
         st.caption("Wirkt auf die übernommene Eingabe oben – offene Änderungen in der Aktien-Tabelle zuerst übernehmen. "
-                   + (f"Ohne Titel: {', '.join(f'{s} (Ziel {ui.de(ziele[s], 1)} %)' for s in fehlen)} – dafür oben Titel "
+                   + (f"Ohne Titel: {', '.join(f'{s} (Ziel {ui.de(ziele[s], 3)} %)' for s in fehlen)} – dafür oben Titel "
                       "hinzufügen." if fehlen else "Alle Sektoren mit Zielgewicht sind vertreten."))
     if eigene_ansicht:
         _sektor_ansicht_extra(ctx, df, ist, summe, index, ziele_sa)
@@ -1808,7 +1808,7 @@ def _sektor_ansicht_extra(ctx, df: pd.DataFrame, ist: dict, summe: float, index:
     sek = [s for s in C.SEKTOREN if s in ist or (ziele_sa.get(s) or 0) > 0 or (bm.get(s) or 0) > 0]
     fig = go.Figure([
         go.Bar(name="Ist (dieses Portfolio)", x=sek, y=[ist.get(s, 0.0) for s in sek], marker_color=ui.BLAU,
-               text=[ui.de(ist.get(s, 0.0), 1) for s in sek], textposition="outside"),
+               text=[ui.de(ist.get(s, 0.0), 3) for s in sek], textposition="outside"),
         go.Bar(name="Ziel (Sektorallokation)", x=sek, y=[ziele_sa.get(s) for s in sek], marker_color="#94A3B8"),
         go.Bar(name="Benchmark (Dozent)", x=sek, y=[bm.get(s) if bm else index.get(s) for s in sek], marker_color=BENCH_FARBE)])
     fig.update_layout(barmode="group", height=330, margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", y=-0.2))
@@ -1818,9 +1818,9 @@ def _sektor_ansicht_extra(ctx, df: pd.DataFrame, ist: dict, summe: float, index:
         ("Aktien investiert", f"{ui.de(summe, 0)} USD", f"Aktienbudget {ui.de(b['budget_a'], 0)} USD · Rest {ui.de(b['rest_a'], 0)} USD"),
         ("Sektoren vertreten", f"{len([s for s in ist if s in C.SEKTOREN])} / {len(C.SEKTOREN)}",
          "fehlt: " + (", ".join(s for s in C.SEKTOREN if s not in ist) or "keiner")),
-        ("Σ |Ist − Ziel|", f"{ui.de(sum(abs(ist.get(s, 0.0) - ziele_sa[s]) for s in C.SEKTOREN if ziele_sa.get(s) is not None), 1)} Pp.",
+        ("Σ |Ist − Ziel|", f"{ui.de(sum(abs(ist.get(s, 0.0) - ziele_sa[s]) for s in C.SEKTOREN if ziele_sa.get(s) is not None), 3)} Pp.",
          "über alle Sektoren mit Zielzahl"),
-        ("Sektor-Active-Share", f"{ui.de(sum(abs(ist.get(s, 0.0) - (bm.get(s) or 0)) for s in C.SEKTOREN) / 2, 1)} %" if bm else "–",
+        ("Sektor-Active-Share", f"{ui.de(sum(abs(ist.get(s, 0.0) - (bm.get(s) or 0)) for s in C.SEKTOREN) / 2, 3)} %" if bm else "–",
          "½ Σ |Ist − Benchmark| – Untergrenze des Active Share"),
     ])
     st.markdown("**Titel je Sektor** · so sieht der Aktienteil aus (ändert sich mit «Sektorgewichte anwenden»)")
@@ -1838,7 +1838,7 @@ def _sektor_ansicht_extra(ctx, df: pd.DataFrame, ist: dict, summe: float, index:
         st.dataframe(t_df.drop(columns="_o"), hide_index=True, width="stretch", height=420, column_config={
             "Stück": st.column_config.NumberColumn(format="%,.0f"), "Kurs USD": st.column_config.NumberColumn(format="%.2f"),
             "Betrag USD": st.column_config.NumberColumn(format="%,.0f"),
-            "% Aktienteil": st.column_config.NumberColumn(format="%.2f %%"), "% Gesamt": st.column_config.NumberColumn(format="%.2f %%")})
+            "% Aktienteil": st.column_config.NumberColumn(format="%.3f %%"), "% Gesamt": st.column_config.NumberColumn(format="%.3f %%")})
     st.caption("Titel hinzufügen oder entfernen in «Portfolio bearbeiten & analysieren». Änderungen bleiben beim Wechsel der Ansicht "
                "erhalten; gespeichert wird mit «Speichern» oben (neue Version des Analyseportfolios). Für eine Variante zuerst "
                "«Neu → Kopie des aktiven Portfolios».")
@@ -2669,7 +2669,7 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
            "IPS-Bänder, Klumpen > 10 %, Mandat S&P 500, Duration (wie Reiter «Regeln & Struktur»)"),
         _z("Sektoren eingehalten", {i: f"{zusatz[i]['sek']['n'][L.GRUEN]} von 11" for i in erg},
            "gegen die Seite «Sektorallokation» (Ziel bzw. Richtung)"),
-        _z("Σ |Ist − Ziel| Sektoren", {i: f"{ui.de(zusatz[i]['sek']['summe_abw'], 1)} Pp." for i in erg},
+        _z("Σ |Ist − Ziel| Sektoren", {i: f"{ui.de(zusatz[i]['sek']['summe_abw'], 3)} Pp." for i in erg},
            "Summe der Abweichungen der Sektoren mit Zielzahl (kleiner = näher am Plan)"),
     ]
     st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch",
@@ -2742,14 +2742,14 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
     erste_sek = zusatz[next(iter(erg))]["sek"]["sektoren"].set_index("Sektor")
     sek_zeilen, stufen = [], []
     for s in C.SEKTOREN:
-        z = {"Sektor": s, "Richtung": erste_sek.loc[s, "Richtung"], "Index": f"{ui.de(erste_sek.loc[s, '_index'], 2)} %",
+        z = {"Sektor": s, "Richtung": erste_sek.loc[s, "Richtung"], "Index": f"{ui.de(erste_sek.loc[s, '_index'], 3)} %",
              "Ziel": erste_sek.loc[s, "Ziel"]}
         st_z = {}
         for i in erg:
             r_ = zusatz[i]["sek"]["sektoren"].set_index("Sektor").loc[s]
             diff = r_["_diff"]
-            z[vg["namen"][i]] = (f"{ui.de(r_['_ist'], 1)} % ({ui.de(diff, 1, True)})" if diff is not None and pd.notna(diff)
-                                 else f"{ui.de(r_['_ist'], 1)} % (aktiv {ui.de(r_['_ist'] - r_['_index'], 1, True)})")
+            z[vg["namen"][i]] = (f"{ui.de(r_['_ist'], 3)} % ({ui.de(diff, 3, True)})" if diff is not None and pd.notna(diff)
+                                 else f"{ui.de(r_['_ist'], 3)} % (aktiv {ui.de(r_['_ist'] - r_['_index'], 3, True)})")
             st_z[vg["namen"][i]] = r_["_stufe"]
         sek_zeilen.append(z)
         stufen.append(st_z)
@@ -2778,7 +2778,7 @@ def _seite_vergleich(ctx, tab: dict, gs: pd.DataFrame, fred: dict, lade_kurse):
             tz.setdefault(t, {})[vg["namen"][i]] = w / zusatz[i]["total"] * 100
     if tz:
         tdf = pd.DataFrame([{"Titel": t, "Name": info_all.get(t, {}).get("name", ""), "Sektor": info_all.get(t, {}).get("sektor", ""),
-                             **{c: (f"{ui.de(w[c], 2)} %" if c in w else "") for c in spalten},
+                             **{c: (f"{ui.de(w[c], 3)} %" if c in w else "") for c in spalten},
                              "In Portfolios": f"{len(w)} von {len(spalten)}", "_n": len(w), "_w": sum(w.values())}
                             for t, w in tz.items()])
         tdf = tdf.sort_values(["_n", "_w"], ascending=False).drop(columns=["_n", "_w"])
@@ -2950,13 +2950,13 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             ("Aktien verfügbar", _rest(b["rest_a"]), f"Budget {ui.de(b['budget_a'], 0)} · investiert {ui.de(b['inv_a'], 0)} USD"),
             ("Treasuries verfügbar", _rest(b["rest_t"]), f"Budget {ui.de(b['budget_t'], 0)} · investiert {ui.de(b['inv_t'], 0)} USD"),
             ("Cash (Rest)", f"{ui.de(b['frei'], 0)} USD",
-             f"{ui.de(b['frei'] / b['kapital'] * 100 if b['kapital'] else 0, 1)} % · Ziel mind. {ui.de(b['cash_ziel'], 0)} USD"
+             f"{ui.de(b['frei'] / b['kapital'] * 100 if b['kapital'] else 0, 3)} % · Ziel mind. {ui.de(b['cash_ziel'], 0)} USD"
              + _cash_zins_txt(b["frei"], fred, ctx)),
             ("Verfügbares Kapital", f"{ui.de(max(b['frei'] - b['cash_ziel'], 0), 0)} USD",
              f"von {ui.de(b['kapital'], 0)} USD · noch investierbar ohne Cash-Ziel zu unterschreiten"),
         ])
-        if abs(b["summe_pct"] - 100) > 0.01:
-            st.warning(f"Die Prozentsätze ergeben {ui.de(b['summe_pct'], 1)} % statt 100 %.", icon=":material/percent:")
+        if abs(b["summe_pct"] - 100) > 0.0005:
+            st.warning(f"Die Prozentsätze ergeben {ui.de(b['summe_pct'], 3)} % statt 100 %.", icon=":material/percent:")
         aus = [n for n, w, (lo, hi) in (("Aktien", b["pct"]["aktien"], (lo_a, hi_a)), ("Treasuries", b["pct"]["treas"], (lo_t, hi_t)),
                                         ("Cash", b["pct"]["cash"], (lo_c, hi_c))) if not lo <= w <= hi]
         if aus:
@@ -2970,13 +2970,13 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
             a1, a2, a3, a4 = st.columns([1.3, 1, 1, 1])
             a1.text_input("Kapital (USD)", value=_txt(ss.get("an_kap_txt")), key=f"an_f_kap{sfx}",
                           help="Zeilen mit fixem Gewicht % passen ihre Stückzahl beim Übernehmen automatisch an")
-            a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=float(ss.get("an_p_ak") or 0),
-                            key=f"an_f_pak{sfx}", help=f"IPS-Band {lo_a:g}–{hi_a:g} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} %")
-            a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
+            a2.number_input("Aktien %", min_value=0.0, max_value=100.0, step=0.5, format="%.3f", value=float(ss.get("an_p_ak") or 0),
+                            key=f"an_f_pak{sfx}", help=f"IPS-Band {lo_a:g}–{hi_a:g} % · Taktik {ui.de(ctx.alloc['aktien'], 3)} %")
+            a3.number_input("Treasuries %", min_value=0.0, max_value=100.0, step=0.5, format="%.3f",
                             value=float(ss.get("an_p_tr") or 0), key=f"an_f_ptr{sfx}",
-                            help=f"IPS-Band {lo_t:g}–{hi_t:g} % · Taktik {ui.de(ctx.alloc['anleihen'], 1)} %")
-            a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=float(ss.get("an_p_ca") or 0),
-                            key=f"an_f_pca{sfx}", help=f"IPS-Band {lo_c:g}–{hi_c:g} % · Taktik {ui.de(ctx.alloc['cash'], 1)} %")
+                            help=f"IPS-Band {lo_t:g}–{hi_t:g} % · Taktik {ui.de(ctx.alloc['anleihen'], 3)} %")
+            a4.number_input("Cash %", min_value=0.0, max_value=100.0, step=0.5, format="%.3f", value=float(ss.get("an_p_ca") or 0),
+                            key=f"an_f_pca{sfx}", help=f"IPS-Band {lo_c:g}–{hi_c:g} % · Taktik {ui.de(ctx.alloc['cash'], 3)} %")
             l, r = st.columns([1.35, 1])
             with l:
                 st.markdown("**Aktien** · Ticker oder Firmenname eintippen, dann Stück, Betrag *oder* Gewicht % – der Rest rechnet "
@@ -2995,7 +2995,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                                  format_func=lambda t: f"{t} – {liste[t][0]} · {liste[t][1]}", label_visibility="collapsed")
                     c2.number_input("Stück", min_value=0, step=10, value=0, key=f"an_f_stk{sfx}", label_visibility="collapsed",
                                     help="Stückzahl für den gewählten Titel")
-                    c2b.number_input("%", min_value=0.0, max_value=100.0, step=0.5, format="%.2f", value=0.0, key=f"an_f_pct{sfx}",
+                    c2b.number_input("%", min_value=0.0, max_value=100.0, step=0.5, format="%.3f", value=0.0, key=f"an_f_pct{sfx}",
                                      label_visibility="collapsed", help="oder Gewicht % (hat Vorrang vor Stück)")
                     c3.form_submit_button("Hinzufügen", icon=":material/add:", type="primary", width="stretch",
                                           on_click=_form_anwenden, args=(sfx, "uebernehmen"),
@@ -3069,22 +3069,22 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         teil = ss.get("an_bezug") == AKTIENTEIL
         ziel_pct = 100.0 if teil else float(ss.get("an_p_ak") or 0)
         if s_pct > ziel_pct + 0.01:
-            st.warning(f"Die eingegebenen Gewichte ergeben {ui.de(s_pct, 2)} % "
+            st.warning(f"Die eingegebenen Gewichte ergeben {ui.de(s_pct, 3)} % "
                        + (f"des Aktienteils – mehr als 100 %." if teil else
-                          f"des Gesamtportfolios, «Aktien %» steht aber auf {ui.de(ziel_pct, 2)} %. Für euer Modell «Aktien %» auf "
-                          f"{ui.de(s_pct, 2)} setzen – sonst werden die Titel gekürzt."), icon=":material/warning:")
+                          f"des Gesamtportfolios, «Aktien %» steht aber auf {ui.de(ziel_pct, 3)} %. Für euer Modell «Aktien %» auf "
+                          f"{ui.de(s_pct, 3)} setzen – sonst werden die Titel gekürzt."), icon=":material/warning:")
         elif teil and n_ak and abs(float(ss.get("an_p_ak") or 0) - float(ss.get("an_modell_quote") or ss.get("an_p_ak") or 0)) > 0.01:
-            st.warning(f"Bezug «Aktienteil»: Die Gewichte gelten für Aktien {ui.de(float(ss.get('an_p_ak') or 0), 2)} % des Kapitals. "
-                       f"Das Scoring-Modell rechnet mit {ui.de(float(ss['an_modell_quote']), 2)} % – «Aktien %» anpassen, damit die "
+            st.warning(f"Bezug «Aktienteil»: Die Gewichte gelten für Aktien {ui.de(float(ss.get('an_p_ak') or 0), 3)} % des Kapitals. "
+                       f"Das Scoring-Modell rechnet mit {ui.de(float(ss['an_modell_quote']), 3)} % – «Aktien %» anpassen, damit die "
                        "Beträge übereinstimmen.", icon=":material/warning:")
         ab_ = scoring_abgleich(ss)
         if ab_ and (abs(ab_["diff"]) >= 0.05 or ab_["ohne_kurs"]):
-            st.warning(f"Abweichung zum Scoring-Modell: App {ui.de(ab_['s_ist'], 2)} % statt {ui.de(ab_['s_soll'], 2)} % des "
-                       f"Aktienteils ({ui.de(ab_['diff'], 2, True)} Pp.)"
+            st.warning(f"Abweichung zum Scoring-Modell: App {ui.de(ab_['s_ist'], 3)} % statt {ui.de(ab_['s_soll'], 3)} % des "
+                       f"Aktienteils ({ui.de(ab_['diff'], 3, True)} Pp.)"
                        + (f", {len(ab_['ohne_kurs'])} Titel ohne Kurs" if ab_["ohne_kurs"] else "")
                        + " – Ursachen und Liste oben unter «Titel aus dem Scoring-Modell übernehmen».", icon=":material/difference:")
-        st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD · Gewicht % (Ziel) {ui.de(s_pct, 2)} % · Ist "
-                   f"{ui.de(ist_pct, 2)} % von {ui.de(ziel_pct, 1)} % "
+        st.caption(f"{n_ak} Titel · Summe Aktien {ui.de(summe, 0)} USD · Gewicht % (Ziel) {ui.de(s_pct, 3)} % · Ist "
+                   f"{ui.de(ist_pct, 3)} % von {ui.de(ziel_pct, 3)} % "
                    f"({'Aktienteil' if teil else 'Aktienquote am Gesamtportfolio'}) · "
                    "Zeile entfernen: Häkchen in der Spalte ✕ (oder Ticker leeren) · Kurse = letzter Schlusskurs; "
                    "gekauft wird am 01.12. zum Eröffnungskurs.")
@@ -3336,8 +3336,8 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                 "Sektor": i.get("sektor", "") if ist_ak else "Treasury",
                 "Menge": ui.de(z["menge"], 0) if ist_ak else "–",
                 "Kurs": ui.de(z["kurs"], 2) if ist_ak else "–",
-                "Wert USD": ui.de(erg["gew"].get(t, 0) * total, 0), "Gewicht": _pct(erg["gew"].get(t, 0) * 100),
-                "Gewicht im Aktienteil": _pct(erg["gew_a"][t] * 100) if t in erg["gew_a"] else "–",
+                "Wert USD": ui.de(erg["gew"].get(t, 0) * total, 0), "Gewicht": _pct(erg["gew"].get(t, 0) * 100, 3),
+                "Gewicht im Aktienteil": _pct(erg["gew_a"][t] * 100, 3) if t in erg["gew_a"] else "–",
                 "Risikobeitrag": _pct(erg["beitrag"].get(t)),
                 "Risikobeitrag im Aktienteil": _pct(erg["beitrag_a"].get(t)) if t in erg["gew_a"] else "–",
                 "Rendite p.a.": _pct(ke.get("rendite"), 1, True), "Vola p.a.": _pct(ke.get("vola")),
@@ -3350,7 +3350,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                 continue
             ke = erg["einzel"].get(t, {})
             zeilen.append({"Titel": fuell_name.get(t, t), "Name": "Platzhalter, noch nicht verteilt", "Sektor": "–", "Menge": "–",
-                           "Kurs": "–", "Wert USD": ui.de(w, 0), "Gewicht": _pct(w / total * 100), "Gewicht im Aktienteil": "–",
+                           "Kurs": "–", "Wert USD": ui.de(w, 0), "Gewicht": _pct(w / total * 100, 3), "Gewicht im Aktienteil": "–",
                            "Risikobeitrag": _pct(erg["beitrag"].get(t)), "Risikobeitrag im Aktienteil": "–",
                            "Rendite p.a.": _pct(ke.get("rendite"), 1, True), "Vola p.a.": _pct(ke.get("vola")),
                            "Sharpe": _zahl(ke.get("sharpe")), "Beta": _zahl(ke.get("beta")), "Max. DD": _pct(ke.get("mdd")),
@@ -3430,7 +3430,7 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         sek_p = SK.pruefe_portfolio(ak_df, total, sa, ctx.sek_index["gewichte"], float(ctx.alloc["aktien"]))
         n_aus = sek_p["n"][L.ROT] + sek_p["n"][L.GELB]
         checks = pruefungen(pos, cash, total, info, ctx.alloc) + [
-            (sek_p["quote_stufe"], f"Aktienquote {ui.de(sek_p['quote'], 1)} % – Soll {ui.de(float(ctx.alloc['aktien']), 1)} % ±2 Pp."),
+            (sek_p["quote_stufe"], f"Aktienquote {ui.de(sek_p['quote'], 3)} % – Soll {ui.de(float(ctx.alloc['aktien']), 3)} % ±2 Pp."),
             (L.ROT if sek_p["n"][L.ROT] else L.GELB if sek_p["n"][L.GELB] else L.GRUEN,
              f"Sektorallokation: {sek_p['n'][L.GRUEN]} von 11 Sektoren eingehalten" + (f", {n_aus} ausserhalb – Details unten" if n_aus else ""))]
         if ka.get("active_share") is not None:
@@ -3455,16 +3455,16 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
                   farben=[[_HELL_RGB.get(s_), None] for s_, _ in checks])
         R.h2("Anlageklassen vs. Taktik")
         R.tabelle(pd.DataFrame({"Klasse": ["Aktien", "Treasuries", "Cash"],
-                                "Vorauswahl": [_pct(ak_w / total * 100), _pct(tr_w / total * 100), _pct(cash / total * 100)],
-                                "inkl. offenes Budget": [_pct((ak_w + f_a) / total * 100), _pct((tr_w + f_t) / total * 100),
-                                                         _pct(cash_eff / total * 100)],
-                                "Taktik": [_pct(ctx.alloc["aktien"]), _pct(ctx.alloc["anleihen"]), _pct(ctx.alloc["cash"])],
+                                "Vorauswahl": [_pct(ak_w / total * 100, 3), _pct(tr_w / total * 100, 3), _pct(cash / total * 100, 3)],
+                                "inkl. offenes Budget": [_pct((ak_w + f_a) / total * 100, 3), _pct((tr_w + f_t) / total * 100, 3),
+                                                         _pct(cash_eff / total * 100, 3)],
+                                "Taktik": [_pct(ctx.alloc["aktien"], 3), _pct(ctx.alloc["anleihen"], 3), _pct(ctx.alloc["cash"], 3)],
                                 "IPS-Band": [f"{lo:g}–{hi:g} %" for lo, hi in (ctx.alloc["baender"]["aktien"],
                                                                               ctx.alloc["baender"]["treasuries"],
                                                                               ctx.alloc["baender"]["cash"])]}),
                   breiten=[40, 40, 45, 40, 40])
         sek_tab = sek_p["sektoren"]
-        R.h2(f"Sektorallokation · {sek_p['n'][L.GRUEN]} von 11 eingehalten · Aktienquote {ui.de(sek_p['quote'], 1)} %")
+        R.h2(f"Sektorallokation · {sek_p['n'][L.GRUEN]} von 11 eingehalten · Aktienquote {ui.de(sek_p['quote'], 3)} %")
         spalten_s = ["Sektor", "Richtung", "Abw. geplant", "Index", "Ziel", "Ist", "Aktiv vs. Index", "Ist − Ziel",
                      "Fehlt (+) / zu viel (−)", "Anzahl Titel"]
         R.tabelle(sek_tab[[c_ for c_ in spalten_s if c_ in sek_tab.columns]],
@@ -3677,9 +3677,9 @@ def _bereich_benchmark(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: flo
     neu_ = [nt["aktien"], 100 - nt["aktien"] - nt.get("cash", 5), nt.get("cash", 5)]
     tak = [ctx.alloc["aktien"], ctx.alloc["anleihen"], ctx.alloc["cash"]]
     baend = [ctx.alloc["baender"]["aktien"], ctx.alloc["baender"]["treasuries"], ctx.alloc["baender"]["cash"]]
-    kl = pd.DataFrame({"Klasse": ["Aktien", "Treasuries", "Cash"], "Portfolio": [_pct(x) for x in ist],
-                       "Benchmark": [_pct(x) for x in bm_], "Aktiv vs. Benchmark": [f"{ui.de(i - b, 1, True)} Pp." for i, b in zip(ist, bm_)],
-                       "Neutral (IPS)": [_pct(x) for x in neu_], "Taktik": [_pct(x) for x in tak],
+    kl = pd.DataFrame({"Klasse": ["Aktien", "Treasuries", "Cash"], "Portfolio": [_pct(x, 3) for x in ist],
+                       "Benchmark": [_pct(x, 3) for x in bm_], "Aktiv vs. Benchmark": [f"{ui.de(i - b, 3, True)} Pp." for i, b in zip(ist, bm_)],
+                       "Neutral (IPS)": [_pct(x, 3) for x in neu_], "Taktik": [_pct(x, 3) for x in tak],
                        "IPS-Band": [f"{lo_:g}–{hi_:g} %" for lo_, hi_ in baend]})
     st.dataframe(kl, hide_index=True, width="stretch")
     R.h2("Anlageklassen")
@@ -3692,11 +3692,11 @@ def _bereich_benchmark(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: flo
     g_max = float(ips_.get("sektor_abw_max") or 5)
     sk = a["sektoren"].copy()
     sk["_st"] = [L.GRUEN if abs(x) <= g_max * 0.8 else L.GELB if abs(x) <= g_max else L.ROT for x in sk["aktiv"]]
-    sek_df = pd.DataFrame({"Sektor": sk["sektor"], f"Benchmark ({BM.BASIS_NAME[basis]})": sk["benchmark"].map(lambda x: f"{ui.de(x, 2)} %"),
-                           "Portfolio (Aktienteil)": sk["portfolio"].map(lambda x: f"{ui.de(x, 2)} %"),
-                           "Aktiv": sk["aktiv"].map(lambda x: f"{ui.de(x, 2, True)} Pp."),
+    sek_df = pd.DataFrame({"Sektor": sk["sektor"], f"Benchmark ({BM.BASIS_NAME[basis]})": sk["benchmark"].map(lambda x: f"{ui.de(x, 3)} %"),
+                           "Portfolio (Aktienteil)": sk["portfolio"].map(lambda x: f"{ui.de(x, 3)} %"),
+                           "Aktiv": sk["aktiv"].map(lambda x: f"{ui.de(x, 3, True)} Pp."),
                            "IPS ±": f"{ui.de(g_max, 1)} Pp.", "Prüfung": [f"● {x}" for x in sk["_st"]],
-                           "Beitrag Active Share": sk["beitrag_as"].map(lambda x: f"{ui.de(x, 1)} Pp."),
+                           "Beitrag Active Share": sk["beitrag_as"].map(lambda x: f"{ui.de(x, 3)} Pp."),
                            "Titel Portfolio / Index": [f"{p} / {b}" for p, b in zip(sk["titel_p"], sk["titel_b"])]})
     st.markdown("**Sektoren** · Anteil am Aktienteil gegen die Benchmark, Grenze = IPS «Maximale Abweichung je Sektor»")
     st.dataframe(ui.ampel_stil(sek_df, ["Prüfung"]), hide_index=True, width="stretch")
@@ -3711,9 +3711,9 @@ def _bereich_benchmark(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: flo
     ueber = tabl[tabl["aktiv"] > 0].head(15)
     unter = tabl[tabl["aktiv"] < 0].head(15)
     fmt = lambda df_: pd.DataFrame({"Titel": df_["ticker"], "Name": df_["name"], "Sektor": df_["sektor"],  # noqa: E731
-                                    "Portfolio": df_["portfolio"].map(lambda x: f"{ui.de(x, 2)} %"),
-                                    "Benchmark": df_["benchmark"].map(lambda x: f"{ui.de(x, 2)} %"),
-                                    "Aktiv": df_["aktiv"].map(lambda x: f"{ui.de(x, 2, True)} Pp.")})
+                                    "Portfolio": df_["portfolio"].map(lambda x: f"{ui.de(x, 3)} %"),
+                                    "Benchmark": df_["benchmark"].map(lambda x: f"{ui.de(x, 3)} %"),
+                                    "Aktiv": df_["aktiv"].map(lambda x: f"{ui.de(x, 3, True)} Pp.")})
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Grösste Übergewichte** (Anteil am Aktienteil)")
@@ -3797,10 +3797,10 @@ def _gewichte_bereich(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: floa
                 "Sektorallokation wird also nicht verändert – optimiert wird nur die Titelauswahl innerhalb der Sektoren.")
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns([1, 1, 1, 1.3])
-        deckel = c1.number_input("Höchstgewicht je Titel (% Gesamt)", min_value=0.1, max_value=100.0, step=0.25, format="%.2f",
+        deckel = c1.number_input("Höchstgewicht je Titel (% Gesamt)", min_value=0.1, max_value=100.0, step=0.25, format="%.3f",
                                  value=float(ips_.get("titel_max") or KLUMPEN), key="an_opt_deckel",
                                  help="Standard = IPS «Maximales Gewicht je Titel»")
-        mindest = c2.number_input("Mindestgewicht je Titel (% Gesamt)", min_value=0.0, max_value=5.0, step=0.05, format="%.2f",
+        mindest = c2.number_input("Mindestgewicht je Titel (% Gesamt)", min_value=0.0, max_value=5.0, step=0.05, format="%.3f",
                                   value=0.05, key="an_opt_min",
                                   help="> 0 = jeder Titel bleibt im Portfolio (IPS-Mindestzahl Aktien, Sektorplan). 0 = Titel dürfen "
                                        "wegfallen.")
@@ -3839,7 +3839,7 @@ def _gewichte_bereich(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: floa
     for key, name, f in (("sharpe", "Sharpe Ratio", _zahl), ("rendite", "Rendite p.a.", lambda x: _pct(x, 1, True)),
                          ("vola", "Volatilität p.a.", _pct), ("mdd", "Max. Drawdown", _pct), ("beta", "Beta zum S&P 500", _zahl),
                          ("te_bench", "Tracking Error vs. Benchmark", _pct), ("ir_bench", "Information Ratio vs. Benchmark", _zahl),
-                         ("active_share", "Active Share Aktien", _pct), ("max_w", "Grösstes Titelgewicht", lambda x: _pct(x, 2)),
+                         ("active_share", "Active Share Aktien", _pct), ("max_w", "Grösstes Titelgewicht", lambda x: _pct(x, 3)),
                          ("n", "Titel mit Gewicht", lambda x: str(int(x)) if x is not None else "–"),
                          ("umschlag", "Umschichtung (einfach)", lambda x: _pct(x, 1))):
         zeilen.append({"Kennzahl": name, **{VARIANTEN[k_]: f(stats[k_].get(key)) if stats.get(k_) else "–" for k_ in gew_v}})
@@ -3854,7 +3854,7 @@ def _gewichte_bereich(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: floa
     for t in o["aktien"]:
         z = {"Titel": t, "Name": (info.get(t) or {}).get("name", ""), "Sektor": sektor_von.get(t, "")}
         for k_ in gew_v:
-            z[VARIANTEN[k_]] = _pct(gew_v[k_][t] * 100, 2)
+            z[VARIANTEN[k_]] = _pct(gew_v[k_][t] * 100, 3)
         tz.append(z)
     tdf = pd.DataFrame(tz)
     if halten:
@@ -3875,7 +3875,7 @@ def _gewichte_bereich(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: floa
     g = grad / 100
     neu = {t: (1 - g) * gew_v["heute"][t] + g * gew_v[wahl][t] for t in o["aktien"]}
     diff = sorted(((t, (neu[t] - gew_v["heute"][t]) * 100) for t in o["aktien"]), key=lambda x: -abs(x[1]))
-    st.caption("Grösste Änderungen (Pp. des Gesamtportfolios): " + " · ".join(f"{t} {ui.de(v, 2, True)}" for t, v in diff[:8] if abs(v) >= 0.005))
+    st.caption("Grösste Änderungen (Pp. des Gesamtportfolios): " + " · ".join(f"{t} {ui.de(v, 3, True)}" for t, v in diff[:8] if abs(v) >= 0.005))
     b1, b2, b3 = st.columns([1.2, 1.4, 2.4])
     label = VARIANTEN[wahl] + ("" if grad == 100 else f" {grad} %")
     b1.button(f"«{VARIANTEN[wahl]}» übernehmen", type="primary", icon=":material/move_down:", width="stretch",
@@ -3887,7 +3887,7 @@ def _gewichte_bereich(ctx, erg: dict, pos: pd.DataFrame, info: dict, total: floa
                "geht es wie gewohnt über «Analyseportfolio ins Portfolio übernehmen» – übernommen wird der gespeicherte Stand.")
     R.neue_seite()
     R.h("Gewichte optimieren (historisch, nur Denkanstoss)")
-    R.text(f"Höchstgewicht je Titel {ui.de(deckel, 2)} %, Mindestgewicht {ui.de(mindest, 2)} %, Sektorgewichte "
+    R.text(f"Höchstgewicht je Titel {ui.de(deckel, 3)} %, Mindestgewicht {ui.de(mindest, 3)} %, Sektorgewichte "
            f"{'gehalten' if halten else 'frei'}, Renditen zu {daempf} % gedämpft. Treasuries, Cash und offenes Budget fix.", klein=True)
     R.tabelle(vgl)
     R.tabelle(tdf, max_zeilen=400)
@@ -3916,9 +3916,9 @@ def _analyse_sammler(ctx, e: dict, kv: dict, total: float, cash: float, ak_w: fl
         R.text(f"Notiz: {notiz}", klein=True)
     pct = e.get("pct") or {}
     R.text(f"Aufteilung geplant (Aktien / Treasuries / Cash): {ui.de(pct.get('aktien', 0), 2)} / {ui.de(pct.get('treas', 0), 2)} / "
-           f"{ui.de(pct.get('cash', 0), 2)} % · investiert {ui.de(ak_w / total * 100, 1)} / {ui.de(tr_w / total * 100, 1)} % · "
-           f"Cash {ui.de(cash / total * 100, 1)} % · Taktik {ui.de(ctx.alloc['aktien'], 1)} / {ui.de(ctx.alloc['anleihen'], 1)} / "
-           f"{ui.de(ctx.alloc['cash'], 1)} % · Bezug «Gewicht %»: {e.get('bezug', GESAMT)}.", klein=True)
+           f"{ui.de(pct.get('cash', 0), 3)} % · investiert {ui.de(ak_w / total * 100, 3)} / {ui.de(tr_w / total * 100, 3)} % · "
+           f"Cash {ui.de(cash / total * 100, 3)} % · Taktik {ui.de(ctx.alloc['aktien'], 3)} / {ui.de(ctx.alloc['anleihen'], 3)} / "
+           f"{ui.de(ctx.alloc['cash'], 3)} % · Bezug «Gewicht %»: {e.get('bezug', GESAMT)}.", klein=True)
     return R
 
 
@@ -3957,7 +3957,7 @@ def _anleihen_pdf(R, ctx, fred: dict, e: dict, cash: float):
             R.tabelle(pd.DataFrame({
                 "Anleihe": df["name"], "ISIN": df["isin"], "Kupon": df["kupon"].map(lambda x: f"{ui.de(x, 3)} %"),
                 "Fälligkeit": df["faellig"].map(lambda d: f"{d:%d.%m.%Y}" if pd.notna(d) else "–"),
-                "Betrag USD": df["betrag"].map(lambda x: ui.de(x, 0)), "Gewicht": df["gewicht"].map(lambda x: f"{ui.de(x, 1)} %"),
+                "Betrag USD": df["betrag"].map(lambda x: ui.de(x, 0)), "Gewicht": df["gewicht"].map(lambda x: f"{ui.de(x, 3)} %"),
                 "Kurs": df["kurs"].map(lambda x: f"{ui.de(x, 3)} %"), "Rendite": df["y"].map(lambda x: f"{ui.de(x, 2)} %"),
                 "Spread": df["spread"].map(lambda x: f"{ui.de(x, 0, True)} bp"), "Mod. Dur.": df["D"].map(lambda x: ui.de(x, 2)),
                 "Konvexität": df["konv"].map(lambda x: ui.de(x, 1)), "Restlaufz.": df["T"].map(lambda x: f"{ui.de(x, 1)} J."),

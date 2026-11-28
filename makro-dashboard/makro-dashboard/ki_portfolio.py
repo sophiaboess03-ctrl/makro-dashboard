@@ -855,7 +855,7 @@ def _beobachten(ctx, a: dict, fred: dict, kurse: dict, bestand):
         column_config={"Übernehmen": st.column_config.CheckboxColumn("✓", width="small", help="ins Monitoring übernehmen"),
                        "Stufe": st.column_config.SelectboxColumn(options=STUFEN, width="small"),
                        "Op": st.column_config.SelectboxColumn(options=["", *OPS], width="small"),
-                       "Schwelle": st.column_config.NumberColumn(format="%.2f", help="Schwelle anpassen, bevor ihr übernehmt"),
+                       "Schwelle": st.column_config.NumberColumn(format="%.3f", help="Schwelle anpassen, bevor ihr übernehmt"),
                        "Datum": st.column_config.TextColumn(help="nur bei Terminen: JJJJ-MM-TT"),
                        "Warum": st.column_config.TextColumn(width="large"),
                        "Reaktion": st.column_config.TextColumn(width="large", help="wird im Monitoring-Fall als Hinweis angezeigt")})

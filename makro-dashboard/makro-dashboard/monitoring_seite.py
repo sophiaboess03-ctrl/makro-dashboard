@@ -444,6 +444,7 @@ def _schwellen(ctx, s):
             for i, k in enumerate(keys):
                 name, start, einheit, _ = M.SCHWELLEN[k]
                 neu[k] = cols[i % 3].number_input(f"{name} ({einheit})", value=float(s[k]), step=0.5 if abs(start) < 20 else 5.0,
+                                                  format="%.0f" if "Tag" in einheit or "Häuser" in einheit else "%.3f",
                                                   key=f"sw_{k}", help=f"Startwert {M.de(start, 1)}")
         if st.form_submit_button("Schwellen speichern", type="primary"):
             if neu["verlust_handeln"] > neu["verlust_pruefen"]:

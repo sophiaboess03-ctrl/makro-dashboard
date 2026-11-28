@@ -116,7 +116,7 @@ def seite_szenarien(ctx):
             with st.form("beschluss"):
                 start = {s: float(round(szen.loc[s, "p_mittel"] if szen.loc[s, "n"] else szen.loc[s, "p"])) for s in defs}
                 cols = st.columns(3)
-                werte_b = {s: c.number_input(defs[s]["kurz"], 0.0, 100.0, start[s], 5.0) for c, s in zip(cols, defs)}
+                werte_b = {s: c.number_input(defs[s]["kurz"], 0.0, 100.0, start[s], 5.0, format="%.3f") for c, s in zip(cols, defs)}
                 begr = st.text_area("Begründung (was hat sich geändert?)", height=80)
                 gegen = st.text_area("Stärkstes Gegenargument (Advocatus Diaboli – gegen Bestätigungsfehler)", height=60)
                 st.caption(f"Summe {ui.de(sum(werte_b.values()), 0)} % (muss 100 % sein). Startwerte = Mittel der Einzelschätzungen.")
@@ -158,7 +158,7 @@ def seite_szenarien(ctx):
         kurz = [defs[s]["kurz"] for s in defs]
         ed = st.data_editor(df.drop(columns="id"), hide_index=True, width="stretch", key="par_ed",
                             disabled=["Grösse", "Gewichtet", "Daten-Anker", "Dozentenfrage"],
-                            column_config={k: st.column_config.NumberColumn(k, format="%.2f") for k in kurz})
+                            column_config={k: st.column_config.NumberColumn(k, format="%.3f", step=0.001) for k in kurz})
         st.markdown("**Sektorwirkung** (Rendite gegenüber dem S&P 500 im Monat, PP) – bestimmt Frage 12 und 14 und die "
                     "Sektor-Orientierung in der Taktik.")
         sz = pd.DataFrame([{"Sektor": sek, **{defs[s]["kurz"]: float(defs[s]["sektoren"].get(sek, 0) or 0) for s in defs},
@@ -166,7 +166,7 @@ def seite_szenarien(ctx):
                             "Korb": "defensiv" if sek in C.DEFENSIV else "zyklisch" if sek in C.ZYKLISCH else ""}
                            for sek in C.SEKTOREN])
         ed_s = st.data_editor(sz, hide_index=True, width="stretch", key="sek_ed", disabled=["Sektor", "Gewichtet", "Korb"],
-                              column_config={k: st.column_config.NumberColumn(k, format="%.1f", step=0.5) for k in kurz})
+                              column_config={k: st.column_config.NumberColumn(k, format="%.3f", step=0.001) for k in kurz})
         st.caption(f"Defensiv minus zyklisch je Szenario: " +
                    " · ".join(f"{defs[s]['kurz']} {ui.de(SZ_def(defs[s]), 2, True)} PP" for s in defs) +
                    f" · gewichtet {ui.de(gew['param']['def_minus_zykl'], 2, True)} PP")

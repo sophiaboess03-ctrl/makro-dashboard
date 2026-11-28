@@ -680,9 +680,9 @@ def _tab_zusammensetzung(ctx, zus, as_, basis, R):
     kl["Differenz"] = kl["Unser Portfolio %"] - kl["Benchmark %"]
     c1, c2 = st.columns([1.15, 1])
     with c1:
-        anz_kl = pd.DataFrame({"Klasse": kl["Klasse"], "Unser Portfolio": kl["Unser Portfolio %"].map(lambda x: f"{ui.de(x, 1)} %"),
-                               "Benchmark": kl["Benchmark %"].map(lambda x: f"{ui.de(x, 0)} %"),
-                               "Differenz": kl["Differenz"].map(lambda x: A._pp(x, 1)),
+        anz_kl = pd.DataFrame({"Klasse": kl["Klasse"], "Unser Portfolio": kl["Unser Portfolio %"].map(lambda x: f"{ui.de(x, 3)} %"),
+                               "Benchmark": kl["Benchmark %"].map(lambda x: f"{ui.de(x, 3)} %"),
+                               "Differenz": kl["Differenz"].map(lambda x: A._pp(x, 3)),
                                "Unser Betrag": kl["Unser Betrag"].map(_usd), "Benchmark-Betrag": kl["Benchmark-Betrag"].map(_usd)})
         st.dataframe(anz_kl, hide_index=True, width="stretch")
         d_b = float(ctx.bond.get("duration") or 0)
@@ -716,8 +716,8 @@ def _tab_zusammensetzung(ctx, zus, as_, basis, R):
             u_ = zus.get("baender", {}).get(band, 0.0)
             b_ = bb.get(band, 0.0) * wb["anleihen"] / 100 * total
             if u_ or b_:
-                zeilen.append({"Laufzeit": band, "Unser Betrag": _usd(u_), "Unser Anteil gesamt": f"{ui.de(u_ / total * 100, 1)} %",
-                               "Benchmark-Betrag": _usd(b_), "Benchmark-Anteil gesamt": f"{ui.de(b_ / total * 100, 1)} %",
+                zeilen.append({"Laufzeit": band, "Unser Betrag": _usd(u_), "Unser Anteil gesamt": f"{ui.de(u_ / total * 100, 3)} %",
+                               "Benchmark-Betrag": _usd(b_), "Benchmark-Anteil gesamt": f"{ui.de(b_ / total * 100, 3)} %",
                                "Differenz": A._pp((u_ - b_) / total * 100, 1)})
         lz = pd.DataFrame(zeilen)
         st.dataframe(lz, hide_index=True, width="stretch")
@@ -735,10 +735,10 @@ def _tab_zusammensetzung(ctx, zus, as_, basis, R):
     sek = as_["sektoren"].copy()
     q = zus["aktien"] / total
     sek_anz = pd.DataFrame({
-        "Sektor": sek["sektor"], "Unser Aktienteil": sek["portfolio"].map(lambda x: f"{ui.de(x, 1)} %"),
-        "Benchmark": sek["benchmark"].map(lambda x: f"{ui.de(x, 1)} %"), "Aktiv": sek["aktiv"].map(lambda x: A._pp(x, 1)),
-        "Unser Ziel": [f"{ui.de(zl[s], 1)} %" if zl.get(s) is not None else "–" for s in sek["sektor"]],
-        "Unser Anteil gesamt": (sek["portfolio"] * q).map(lambda x: f"{ui.de(x, 1)} %"),
+        "Sektor": sek["sektor"], "Unser Aktienteil": sek["portfolio"].map(lambda x: f"{ui.de(x, 3)} %"),
+        "Benchmark": sek["benchmark"].map(lambda x: f"{ui.de(x, 3)} %"), "Aktiv": sek["aktiv"].map(lambda x: A._pp(x, 3)),
+        "Unser Ziel": [f"{ui.de(zl[s], 3)} %" if zl.get(s) is not None else "–" for s in sek["sektor"]],
+        "Unser Anteil gesamt": (sek["portfolio"] * q).map(lambda x: f"{ui.de(x, 3)} %"),
         "Benchmark gesamt": (sek["benchmark"] * wb["aktien"] / 100).map(lambda x: f"{ui.de(x, 1)} %"),
         "Titel (wir / Benchmark)": [f"{a} / {b}" for a, b in zip(sek["titel_p"], sek["titel_b"])],
         "Beitrag Active Share": sek["beitrag_as"].map(lambda x: f"{ui.de(x, 1)} Pp.")})
@@ -749,7 +749,7 @@ def _tab_zusammensetzung(ctx, zus, as_, basis, R):
         s2 = sek.sort_values("aktiv")
         fig = go.Figure(go.Bar(x=s2["aktiv"], y=s2["sektor"], orientation="h",
                                marker_color=[ui.FARBE["Grün"] if v >= 0 else ui.FARBE["Rot"] for v in s2["aktiv"]],
-                               text=[ui.de(v, 1, True) for v in s2["aktiv"]], textposition="outside"))
+                               text=[ui.de(v, 3, True) for v in s2["aktiv"]], textposition="outside"))
         fig.update_layout(height=380, margin=dict(l=8, r=8, t=26, b=8), title=dict(text="Über-/Untergewicht (Pp. Aktienteil)",
                                                                                     font=dict(size=12)), showlegend=False)
         ui.zeige(fig)
@@ -766,9 +766,9 @@ def _tab_zusammensetzung(ctx, zus, as_, basis, R):
     ])
     tb = as_["tabelle"]
     fm = lambda d: pd.DataFrame({"Ticker": d["ticker"], "Name": d["name"], "Sektor": d["sektor"],  # noqa: E731
-                                 "Wir": d["portfolio"].map(lambda x: f"{ui.de(x, 2)} %"),
-                                 "Benchmark": d["benchmark"].map(lambda x: f"{ui.de(x, 2)} %"),
-                                 "Aktiv": d["aktiv"].map(lambda x: A._pp(x, 2))})
+                                 "Wir": d["portfolio"].map(lambda x: f"{ui.de(x, 3)} %"),
+                                 "Benchmark": d["benchmark"].map(lambda x: f"{ui.de(x, 3)} %"),
+                                 "Aktiv": d["aktiv"].map(lambda x: A._pp(x, 3))})
     ueber, unter = tb[tb["aktiv"] > 0].head(12), tb[tb["aktiv"] < 0].head(12)
     c1, c2 = st.columns(2)
     c1.markdown("Übergewichte")
@@ -795,7 +795,7 @@ def _bereich_benchmark_portfolio(ctx, fred, zus, basis, R):
         ("Aufteilung", "50 / 50 / 0 %", f"Aktien {_usd(total * C.BENCHMARK['aktien'] / 100)} · Treasuries "
                                          f"{_usd(total * C.BENCHMARK['anleihen'] / 100)}"),
         ("Titel im Aktienteil", str(len(tab)), f"effektiv {ui.de(eff, 0)} · Gewichte {BM.BASIS_NAME[basis]}"),
-        ("Top 10", f"{ui.de(float(tab['Gewicht Aktienteil %'].head(10).sum()), 1)} %",
+        ("Top 10", f"{ui.de(float(tab['Gewicht Aktienteil %'].head(10).sum()), 3)} %",
          ", ".join(tab["Ticker"].head(5)) + " …"),
         ("Treasuries", f"{ui.de(ctx.bond.get('duration'), 1)} J. Duration",
          f"Rendite {ui.de(ctx.bond.get('rendite'), 2)} % · Proxy {A.NEUTRAL_PROXY}"),
@@ -835,7 +835,7 @@ def _bereich_benchmark_portfolio(ctx, fred, zus, basis, R):
     except Exception:  # noqa: BLE001
         k = {}
     tr = pd.DataFrame([{"Laufzeit": f"{T:g} J.", "Anteil Treasury-Teil": f"{ui.de(w_ * 100, 0)} %",
-                        "Anteil gesamt": f"{ui.de(w_ * C.BENCHMARK['anleihen'], 1)} %",
+                        "Anteil gesamt": f"{ui.de(w_ * C.BENCHMARK['anleihen'], 3)} %",
                         "Betrag": _usd(w_ * C.BENCHMARK["anleihen"] / 100 * total),
                         "Rendite heute": f"{ui.de(P.kurve_rendite(k, float(T)), 2)} %" if k else "–"} for T, w_ in mix.items()])
     with st.expander(f"Treasury-Teil der Benchmark ({ctx.einst.get('bond_benchmark') or C.BOND_BENCHMARK_DEFAULT})"):
@@ -852,10 +852,10 @@ def _bereich_benchmark_portfolio(ctx, fred, zus, basis, R):
         R.neue_seite()
         R.h(f"Benchmark-Portfolio mit {_usd(total)}")
         R.tabelle(pd.DataFrame({"Ticker": tab["Ticker"], "Name": tab["Name"].str[:34], "Sektor": tab["Sektor"],
-                                "Gewicht Aktien": tab["Gewicht Aktienteil %"].map(lambda x: f"{ui.de(x, 2)} %"),
+                                "Gewicht Aktien": tab["Gewicht Aktienteil %"].map(lambda x: f"{ui.de(x, 3)} %"),
                                 "Betrag": tab["Betrag USD"].map(_usd),
-                                "Unser Gewicht ges.": tab["Unser Gewicht gesamt %"].map(lambda x: f"{ui.de(x, 2)} %"),
-                                "Aktiv": tab["Aktiv Pp."].map(lambda x: A._pp(x, 2))}), max_zeilen=40)
+                                "Unser Gewicht ges.": tab["Unser Gewicht gesamt %"].map(lambda x: f"{ui.de(x, 3)} %"),
+                                "Aktiv": tab["Aktiv Pp."].map(lambda x: A._pp(x, 3))}), max_zeilen=40)
         R.text(f"Die 40 grössten von {len(tab)} Titeln. Vollständige Liste: Knopf «Benchmark-Portfolio als Excel».", klein=True)
         R.h2("Treasury-Teil")
         R.tabelle(tr)

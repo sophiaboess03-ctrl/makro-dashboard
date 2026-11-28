@@ -236,15 +236,15 @@ def erstelle(ctx, markt_tab, signale, termine_df, portfolio_info: dict | None) -
                 ("Ampeln Rot / Gelb / Grün", f"{z.get('Rot', 0)} / {z.get('Gelb', 0)} / {z.get('Grün', 0)}",
                  f"von {len(ctx.status)} Indikatoren"),
                 ("Aktive Signale", str(len(signale)), "Indikatoren, Kombis, Risiken"),
-                ("Taktik A / A / C", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %",
+                ("Taktik A / A / C", f"{ui.de(a['aktien'], 3)} / {ui.de(a['anleihen'], 3)} / {ui.de(a['cash'], 3)} %",
                  f"Duration {a['duration']:.1f} J.  -  TIPS {a['tips']:.0f} %")])
 
     _titel(pdf, "1. Taktik des Teams")
     ow = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Übergewichten"]["sektor"]) or "-"
     uw = ", ".join(a["sektoren"][a["sektoren"]["empfehlung"] == "Untergewichten"]["sektor"]) or "-"
-    _text(pdf, f"Aktien {a['aktien']:.0f} % / Treasuries {a['anleihen']:.0f} % / Cash {a['cash']:.0f} % "
-               f"(neutral {a['neutral']['aktien']:.0f} / {100 - a['neutral']['aktien'] - a['neutral'].get('cash', 0):.0f} / "
-               f"{a['neutral'].get('cash', 0):.0f}). Duration {a['duration']:.1f} J., TIPS {a['tips']:.0f} % der Anleihen.")
+    _text(pdf, f"Aktien {ui.de(a['aktien'], 3)} % / Treasuries {ui.de(a['anleihen'], 3)} % / Cash {ui.de(a['cash'], 3)} % "
+               f"(neutral {ui.de(a['neutral']['aktien'], 3)} / {ui.de(100 - a['neutral']['aktien'] - a['neutral'].get('cash', 0), 3)} / "
+               f"{ui.de(a['neutral'].get('cash', 0), 3)}). Duration {a['duration']:.1f} J., TIPS {a['tips']:.0f} % der Anleihen.")
     _text(pdf, f"Übergewichten: {ow}. Untergewichten: {uw}.")
     if a["korridor"]:
         _text(pdf, "Ausserhalb IPS-Band: " + "; ".join(a["korridor"]), fett=True)
@@ -387,9 +387,9 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
     pdf.ln(1)
     _text(pdf, ic.BEGRUENDUNG, farbe=MUTED)
     a = ctx.alloc
-    _kpis(pdf, [("Taktik Aktien / Anl. / Cash", f"{a['aktien']:.0f} / {a['anleihen']:.0f} / {a['cash']:.0f} %",
-                 f"neutral {a['neutral']['aktien']:.0f} / {100 - a['neutral']['aktien'] - a['neutral'].get('cash', 0):.0f} / "
-                 f"{a['neutral'].get('cash', 0):.0f} %"),
+    _kpis(pdf, [("Taktik Aktien / Anl. / Cash", f"{ui.de(a['aktien'], 3)} / {ui.de(a['anleihen'], 3)} / {ui.de(a['cash'], 3)} %",
+                 f"neutral {ui.de(a['neutral']['aktien'], 3)} / {ui.de(100 - a['neutral']['aktien'] - a['neutral'].get('cash', 0), 3)} / "
+                 f"{ui.de(a['neutral'].get('cash', 0), 3)} %"),
                 ("Duration", f"{ui.de(a['duration'], 1)} J.", f"TIPS {a['tips']:.0f} % der Treasuries"),
                 ("Zyklus (Team)", L.phase((ctx.zyklus_team['von'].mean() + ctx.zyklus_team['bis'].mean()) / 2)[:24],
                  f"Modell: {ctx.zyklus_modell['phase']}")])
@@ -431,8 +431,8 @@ def dossier(ctx, team: list[str], fred: dict, lade_kurse) -> bytes:
                  [[r["klasse"], str(r["ticker"]) + (f" - {r['name']}" if r["name"] and str(r["name"]) != "nan" else ""),
                    r["sektor"] if r["sektor"] and str(r["sektor"]) != "nan" else "", ui.de(r["menge"], 0),
                    ui.de(r["kurs"], 2) + (" %" if r["klasse"] == "Treasury" else ""), ui.de(r["wert"], 0),
-                   f"{ui.de(r['wert'] / total * 100, 1)} %"] for _, r in d.iterrows()] +
-                 [["Cash", "", "", "", "", ui.de(cash, 0), f"{ui.de(cash / total * 100, 1)} %"]],
+                   f"{ui.de(r['wert'] / total * 100, 3)} %"] for _, r in d.iterrows()] +
+                 [["Cash", "", "", "", "", ui.de(cash, 0), f"{ui.de(cash / total * 100, 3)} %"]],
                  (18, 52, 24, 24, 20, 25, 15))
 
     # 4 Transaktionen

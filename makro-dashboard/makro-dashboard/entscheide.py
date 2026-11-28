@@ -22,7 +22,7 @@ def snapshot(ctx) -> dict:
     rote = [r["name"] for _, r in ctx.status.iterrows() if r["ampel"] == "Rot"]
     return {
         "stand": jetzt(),
-        "empfehlung": f"{a['aktien']:.0f} % Aktien / {a['anleihen']:.0f} % Treasuries / {a['cash']:.0f} % Cash, "
+        "empfehlung": f"{ui.de(a['aktien'], 3)} % Aktien / {ui.de(a['anleihen'], 3)} % Treasuries / {ui.de(a['cash'], 3)} % Cash, "
                       f"Duration {a['duration']:.1f} J., TIPS {a['tips']:.0f} %",
         "rote_indikatoren": rote,
         "szenarien_ic": {r["name"]: round(r["p"]) for _, r in ctx.szen[ctx.szen["thema"] == "gesamt"].iterrows()},

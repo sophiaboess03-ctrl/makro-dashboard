@@ -70,17 +70,17 @@ def lese(tab: pd.DataFrame | None, monat: str) -> dict | None:
 
 
 def sektor_standard(aktien: float) -> dict:
-    """Aktiengewicht wie im S&P 500 auf die Sektoren verteilen (2 Stellen, Rundungsrest beim grössten Sektor)."""
+    """Aktiengewicht wie im S&P 500 auf die Sektoren verteilen (3 Stellen, Rundungsrest beim grössten Sektor)."""
     tot = sum(C.SP500_GEWICHT.values())
-    out = {s: round(aktien * C.SP500_GEWICHT[s] / tot, 2) for s in C.SEKTOREN}
+    out = {s: round(aktien * C.SP500_GEWICHT[s] / tot, 3) for s in C.SEKTOREN}
     gross = max(out, key=out.get)
-    out[gross] = round(out[gross] + aktien - sum(out.values()), 2)
+    out[gross] = round(out[gross] + aktien - sum(out.values()), 3)
     return out
 
 
 def sektor_aus_allokation(aktien: float, tabellen: dict) -> tuple[dict, list[str]]:
     """Sektor-Zielgewichte in % des Vermögens = Ziel der Sektorallokation (% der Aktien) × Aktiengewicht.
-    Sektoren mit Über-/Untergewicht ohne Zahl bekommen vorerst das Indexgewicht. Rundung auf 2 Stellen, Rest beim grössten Sektor."""
+    Sektoren mit Über-/Untergewicht ohne Zahl bekommen vorerst das Indexgewicht. Rundung auf 3 Stellen, Rest beim grössten Sektor."""
     import sektoren as SK
 
     sa = SK.lade_allokation(tabellen.get("sektor_allokation"))["sektoren"]
@@ -88,9 +88,9 @@ def sektor_aus_allokation(aktien: float, tabellen: dict) -> tuple[dict, list[str
     ohne = [s for s in C.SEKTOREN if ziel[s] is None]
     z = {s: (ziel[s] if ziel[s] is not None else C.SP500_GEWICHT[s]) for s in C.SEKTOREN}
     tot = sum(z.values()) or 1.0
-    out = {s: round(aktien * z[s] / tot, 2) for s in C.SEKTOREN}
+    out = {s: round(aktien * z[s] / tot, 3) for s in C.SEKTOREN}
     gross = max(out, key=out.get)
-    out[gross] = round(out[gross] + aktien - sum(out.values()), 2)
+    out[gross] = round(out[gross] + aktien - sum(out.values()), 3)
     return out, ohne
 
 
@@ -137,26 +137,26 @@ def alloc_dict(t: dict | None, monat: dict, neutral: dict, ips: dict, regeln: li
 def pruefe(werte: dict, ips: dict, erw: dict | None = None, bench_dur: float | None = None) -> list[tuple[str, str]]:
     out = []
     s = werte["aktien"] + werte["anleihen"] + werte["cash"]
-    out.append(("ok" if abs(s - 100) < 0.01 else "fehler", f"Summe Anlageklassen {ui.de(s, 2)} % (muss 100 % sein)"))
+    out.append(("ok" if abs(s - 100) < 0.0005 else "fehler", f"Summe Anlageklassen {ui.de(s, 3)} % (muss 100 % sein)"))
     for k, name in KLASSEN:
         v = werte[k]
         lo, hi = ips[f"{k}_min"], ips[f"{k}_max"]
         dlo, dhi = C.DOZENT_BAND[k]
         if not dlo <= v <= dhi:
-            out.append(("fehler", f"{name}: {ui.de(v, 2)} % ausserhalb der Dozenten-Bandbreite {dlo}–{dhi} %"))
+            out.append(("fehler", f"{name}: {ui.de(v, 3)} % ausserhalb der Dozenten-Bandbreite {dlo}–{dhi} %"))
         elif not lo <= v <= hi:
-            out.append(("fehler", f"{name}: {ui.de(v, 2)} % ausserhalb eures IPS-Bands {ui.de(lo, 0)}–{ui.de(hi, 0)} %"))
+            out.append(("fehler", f"{name}: {ui.de(v, 3)} % ausserhalb eures IPS-Bands {ui.de(lo, 0)}–{ui.de(hi, 0)} %"))
     ssum = sum(werte["sektoren"].values())
-    out.append(("ok" if abs(ssum - werte["aktien"]) < 0.015 else "fehler",
-                f"Summe Sektoren {ui.de(ssum, 2)} % (muss dem Aktiengewicht {ui.de(werte['aktien'], 2)} % entsprechen)"))
+    out.append(("ok" if abs(ssum - werte["aktien"]) < 0.0005 else "fehler",
+                f"Summe Sektoren {ui.de(ssum, 3)} % (muss dem Aktiengewicht {ui.de(werte['aktien'], 3)} % entsprechen)"))
     if werte["aktien"] > 0:
         for sek, w in werte["sektoren"].items():
             abw = w / werte["aktien"] * 100 - C.SP500_GEWICHT[sek]
             if abs(abw) > ips["sektor_abw_max"] + 1e-9:
-                out.append(("fehler", f"{sek}: {ui.de(abw, 2, True)} PP gegenüber dem S&P 500 (IPS erlaubt ±{ui.de(ips['sektor_abw_max'], 0)} PP)"))
+                out.append(("fehler", f"{sek}: {ui.de(abw, 3, True)} PP gegenüber dem S&P 500 (IPS erlaubt ±{ui.de(ips['sektor_abw_max'], 0)} PP)"))
     for sek in ips.get("aus_sektoren", []):
         if werte["sektoren"].get(sek, 0) > 0:
-            out.append(("fehler", f"{sek} ist im IPS ausgeschlossen, hat aber {ui.de(werte['sektoren'][sek], 2)} %"))
+            out.append(("fehler", f"{sek} ist im IPS ausgeschlossen, hat aber {ui.de(werte['sektoren'][sek], 3)} %"))
     if werte.get("duration") is not None and not ips["duration_min"] <= werte["duration"] <= ips["duration_max"]:
         out.append(("fehler", f"Duration {ui.de(werte['duration'], 1)} J. ausserhalb des IPS-Bands "
                               f"{ui.de(ips['duration_min'], 0)}–{ui.de(ips['duration_max'], 0)} J."))
@@ -272,16 +272,16 @@ def seite_taktik(ctx, bond: dict):
         dlo, dhi = C.DOZENT_BAND[k]
         cols[0].markdown(f"**{name}**")
         cols[1].markdown(f"{ui.de(lo, 0)}–{ui.de(hi, 0)} % · {dlo}–{dhi} %")
-        werte[k] = cols[2].number_input(name, 0.0, 100.0, step=0.5, format="%.2f", key=f"{prefix}{k}", label_visibility="collapsed")
+        werte[k] = cols[2].number_input(name, 0.0, 100.0, step=0.5, format="%.3f", key=f"{prefix}{k}", label_visibility="collapsed")
         ok = lo <= werte[k] <= hi and dlo <= werte[k] <= dhi
         cols[3].markdown(f"<span style='color:{ui.FARBE['Grün'] if ok else ui.FARBE['Rot']}; font-weight:600'>"
                          f"{'im Band' if ok else 'ausserhalb'}</span>", unsafe_allow_html=True)
         cols[4].markdown(f"<span class='klein'>{html.escape(orient[k])}</span>", unsafe_allow_html=True)
-        pdf_kl.append((name, f"{ui.de(lo, 0)}–{ui.de(hi, 0)} %", f"{ui.de(werte[k], 2)} %", "im Band" if ok else "AUSSERHALB",
+        pdf_kl.append((name, f"{ui.de(lo, 0)}–{ui.de(hi, 0)} %", f"{ui.de(werte[k], 3)} %", "im Band" if ok else "AUSSERHALB",
                        orient[k]))
     s = sum(werte.values())
-    st.markdown(f"Summe: <span style='color:{ui.FARBE['Grün'] if abs(s - 100) < 0.01 else ui.FARBE['Rot']}; font-weight:700'>"
-                f"{ui.de(s, 2)} %</span> (muss 100 % sein)", unsafe_allow_html=True)
+    st.markdown(f"Summe: <span style='color:{ui.FARBE['Grün'] if abs(s - 100) < 0.0005 else ui.FARBE['Rot']}; font-weight:700'>"
+                f"{ui.de(s, 3)} %</span> (muss 100 % sein)", unsafe_allow_html=True)
 
     st.markdown("#### Sektoren")
     rang = gew["sektoren"]
@@ -309,22 +309,22 @@ def seite_taktik(ctx, bond: dict):
     for sek in C.SEKTOREN:
         cols = st.columns([1.7, 0.8, 1.1, 0.9, 0.9, 2.4])
         cols[0].markdown(f"{C.SEKTOR_DOZENT[sek]} ({C.GICS_CODE[sek]})")
-        cols[1].markdown(ui.de(C.SP500_GEWICHT[sek], 2))
+        cols[1].markdown(ui.de(C.SP500_GEWICHT[sek], 3))
         if hand:
-            sektoren[sek] = cols[2].number_input(sek, 0.0, 100.0, step=0.05, format="%.2f", key=f"{prefix}s_{sek}",
+            sektoren[sek] = cols[2].number_input(sek, 0.0, 100.0, step=0.05, format="%.3f", key=f"{prefix}s_{sek}",
                                                  label_visibility="collapsed")
         else:
             sektoren[sek] = auto[sek]
-            cols[2].markdown(f"**{ui.de(auto[sek], 2)}**")
+            cols[2].markdown(f"**{ui.de(auto[sek], 3)}**")
         anteil = sektoren[sek] / werte["aktien"] * 100 if werte["aktien"] else 0
         aktiv = anteil - C.SP500_GEWICHT[sek]
         zu_viel = abs(aktiv) > ips["sektor_abw_max"]
-        cols[3].markdown(ui.de(anteil, 2))
+        cols[3].markdown(ui.de(anteil, 3))
         cols[4].markdown(f"<span style='color:{ui.FARBE['Rot'] if zu_viel else ui.INK if abs(aktiv) < 0.25 else ui.BLAU}; "
-                         f"font-weight:600'>{ui.de(aktiv, 2, True)} PP</span>", unsafe_allow_html=True)
+                         f"font-weight:600'>{ui.de(aktiv, 3, True)} PP</span>", unsafe_allow_html=True)
         e_sa = sa[sek]
         teile = [f"Sektorallokation: {SK.RICHTUNG_KURZ[e_sa['richtung']]}"
-                 + (f" {ui.de(e_sa['abweichung'], 1, True)} PP → {ui.de(sa_ziel[sek] * werte['aktien'] / 100, 2)} %"
+                 + (f" {ui.de(e_sa['abweichung'], 3, True)} PP → {ui.de(sa_ziel[sek] * werte['aktien'] / 100, 3)} %"
                     if sa_ziel[sek] is not None and SK._z(e_sa.get('abweichung')) is not None else ""),
                  f"Szenarien {ui.de(rang[sek], 1, True)} PP/Mt."]
         if regel_sek[sek]:
@@ -337,24 +337,24 @@ def seite_taktik(ctx, bond: dict):
             teile.append("Frage 12: unten")
         o = " · ".join(teile)
         cols[5].markdown(f"<span class='klein'>{html.escape(o)}</span>", unsafe_allow_html=True)
-        pdf_sek.append((f"{C.SEKTOR_DOZENT[sek]} ({C.GICS_CODE[sek]})", ui.de(C.SP500_GEWICHT[sek], 2), ui.de(sektoren[sek], 2),
-                        ui.de(anteil, 2), f"{ui.de(aktiv, 2, True)} PP", o))
-    if t and not hand and t["sektoren"] and any(abs(t["sektoren"].get(x, 0) - sektoren[x]) > 0.005 for x in C.SEKTOREN):
+        pdf_sek.append((f"{C.SEKTOR_DOZENT[sek]} ({C.GICS_CODE[sek]})", ui.de(C.SP500_GEWICHT[sek], 3), ui.de(sektoren[sek], 3),
+                        ui.de(anteil, 3), f"{ui.de(aktiv, 3, True)} PP", o))
+    if t and not hand and t["sektoren"] and any(abs(t["sektoren"].get(x, 0) - sektoren[x]) > 0.0005 for x in C.SEKTOREN):
         st.info("Die gespeicherte Taktik hat andere Sektorgewichte als die aktuelle Sektorallokation – «Taktik speichern», "
                 "damit sie übernommen werden.", icon=":material/sync:")
     ssum = sum(sektoren.values())
-    st.markdown(f"Summe: <span style='color:{ui.FARBE['Grün'] if abs(ssum - werte['aktien']) < 0.015 else ui.FARBE['Rot']}; "
-                f"font-weight:700'>{ui.de(ssum, 2)} %</span> (muss dem Aktiengewicht {ui.de(werte['aktien'], 2)} % entsprechen)",
+    st.markdown(f"Summe: <span style='color:{ui.FARBE['Grün'] if abs(ssum - werte['aktien']) < 0.0005 else ui.FARBE['Rot']}; "
+                f"font-weight:700'>{ui.de(ssum, 3)} %</span> (muss dem Aktiengewicht {ui.de(werte['aktien'], 3)} % entsprechen)",
                 unsafe_allow_html=True)
 
     st.markdown("#### Anleihen-Steuerung und Begründung")
     c1, c2, c3 = st.columns(3)
     dur = c1.number_input("Duration der Anleihen (J.)", 0.0, 20.0, value=float(t["duration"]) if t and t["duration"] is not None
-                          else float(round(gew["alloc"]["duration"], 1)), step=0.1, key=f"{prefix}dur",
+                          else float(round(gew["alloc"]["duration"], 3)), step=0.1, format="%.3f", key=f"{prefix}dur",
                           help=f"IPS {ui.de(ips['duration_min'], 0)}–{ui.de(ips['duration_max'], 0)} J. · Benchmark ≈ "
                                f"{ui.de(bond['duration'], 1)} J. · Szenarien gewichtet {ui.de(gew['alloc']['duration'], 1)} J.")
     tips = c2.number_input("TIPS-Anteil an den Anleihen (%)", 0.0, 100.0, value=float(t["tips"]) if t and t["tips"] is not None
-                           else float(round(gew["alloc"]["tips"])), step=5.0, key=f"{prefix}tips",
+                           else float(round(gew["alloc"]["tips"], 3)), step=5.0, format="%.3f", key=f"{prefix}tips",
                            help=f"Szenarien gewichtet {ui.de(gew['alloc']['tips'], 0)} %")
     lz = c3.text_input("Laufzeiten-Schwerpunkt", value=(t or {}).get("laufzeiten", "") or "1–7 J., nichts > 10 J.", key=f"{prefix}lz")
     st.caption(f"Orientierung: Benchmark-Duration ≈ {ui.de(bond['duration'], 1)} J. · Szenarien {ui.de(gew['alloc']['duration'], 1)} J. · "
@@ -397,8 +397,8 @@ def seite_taktik(ctx, bond: dict):
                "Meldungen mehr da sind. Jede Version bleibt in der Google-Tabelle (Blatt «taktik»).")
 
     with st.expander("Werte zum Übertragen in die Dozenten-App", icon=":material/content_copy:"):
-        st.code("\n".join([f"{n}: {ui.de(werte[k], 2)}" for k, n in KLASSEN] +
-                          [f"{C.SEKTOR_DOZENT[s]} ({C.GICS_CODE[s]}): {ui.de(sektoren[s], 2)}" for s in C.SEKTOREN]), language=None)
+        st.code("\n".join([f"{n}: {ui.de(werte[k], 3)}" for k, n in KLASSEN] +
+                          [f"{C.SEKTOR_DOZENT[s]} ({C.GICS_CODE[s]}): {ui.de(sektoren[s], 3)}" for s in C.SEKTOREN]), language=None)
 
     with st.expander("Was die Signale sagen (Orientierung)", icon=":material/info:"):
         if aktive:
@@ -417,7 +417,7 @@ def seite_taktik(ctx, bond: dict):
         st.markdown("#### Verlauf")
         st.dataframe(pd.DataFrame({"Monat": v["monat"].map(lambda i: C.MONAT_BY_ID.get(i, {}).get("name", i)),
                                    "Gespeichert": v["zeit"].str[:16].str.replace("T", " "), "Person": v["person"],
-                                   "Aktien / Anl. / Cash": [f"{ui.de(zahl(a), 1)} / {ui.de(zahl(b), 1)} / {ui.de(zahl(c), 1)}"
+                                   "Aktien / Anl. / Cash": [f"{ui.de(zahl(a), 3)} / {ui.de(zahl(b), 3)} / {ui.de(zahl(c), 3)}"
                                                            for a, b, c in zip(v["aktien"], v["anleihen"], v["cash"])],
                                    "Duration": v["duration"].map(lambda x: ui.de(zahl(x), 1)),
                                    "Begründung": v["begruendung"].str[:120]}), hide_index=True, width="stretch")

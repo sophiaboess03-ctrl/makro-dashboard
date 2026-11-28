@@ -278,7 +278,12 @@ def regel_abweichungen(sek: dict, index: dict) -> dict:
             roh = {s: v * unter / ueber if v > 0 else v for s, v in roh.items()}
     else:
         roh = {s: 0.0 for s in roh}
-    return {s: round(v, 1) for s, v in roh.items()}
+    out = {s: round(v, 3) for s, v in roh.items()}
+    rest = round(sum(out.values()), 3)
+    if rest and any(out.values()):  # Rundungsrest beim grössten Ausschlag, damit die Summe exakt 0 bleibt
+        g = max(out, key=lambda x: abs(out[x]))
+        out[g] = round(out[g] - rest, 3)
+    return out
 
 
 def ziele(sek: dict, index: dict) -> dict:
@@ -304,21 +309,21 @@ def plan_meldungen(sek: dict, index: dict, ips: dict | None = None) -> list[tupl
                 out.append((L.GELB, f"{s}: {e['richtung']} ohne Zahl – Prüfung vorerst nur nach Richtung"))
             continue
         if e["richtung"] == "Übergewicht" and a <= 0 or e["richtung"] == "Untergewicht" and a >= 0:
-            out.append((L.ROT, f"{s}: Richtung «{e['richtung']}», aber Abweichung {ui.de(a, 1, True)} Pp."))
+            out.append((L.ROT, f"{s}: Richtung «{e['richtung']}», aber Abweichung {ui.de(a, 3, True)} Pp."))
         if e["richtung"] == "Neutral" and abs(a) > 1e-9:
-            out.append((L.GELB, f"{s}: neutral, aber Abweichung {ui.de(a, 1, True)} Pp."))
+            out.append((L.GELB, f"{s}: neutral, aber Abweichung {ui.de(a, 3, True)} Pp."))
         if abs(a) > DECKEL_REL * index[s] + 1e-9:
-            out.append((L.ROT, f"{s}: {ui.de(a, 1, True)} Pp. ist mehr als ±50 % des Indexgewichts ({ui.de(DECKEL_REL * index[s], 2)} Pp.)"))
+            out.append((L.ROT, f"{s}: {ui.de(a, 3, True)} Pp. ist mehr als ±50 % des Indexgewichts ({ui.de(DECKEL_REL * index[s], 3)} Pp.)"))
         if abs(a) > DECKEL_PP + 1e-9:
-            out.append((L.ROT, f"{s}: {ui.de(a, 1, True)} Pp. über dem Deckel von ±{ui.de(DECKEL_PP, 0)} Pp."))
+            out.append((L.ROT, f"{s}: {ui.de(a, 3, True)} Pp. über dem Deckel von ±{ui.de(DECKEL_PP, 0)} Pp."))
         if ips and abs(a) > ips.get("sektor_abw_max", 99) + 1e-9:
-            out.append((L.ROT, f"{s}: {ui.de(a, 1, True)} Pp. über der IPS-Grenze ±{ui.de(ips['sektor_abw_max'], 1)} Pp."))
+            out.append((L.ROT, f"{s}: {ui.de(a, 3, True)} Pp. über der IPS-Grenze ±{ui.de(ips['sektor_abw_max'], 1)} Pp."))
     bekannt = [a for a in zahlen.values() if a is not None]
     if len(bekannt) == len(zahlen):
         summe = sum(bekannt)
-        out.append((L.GRUEN if abs(summe) < 0.05 else L.ROT,
-                    f"Summe der Abweichungen {ui.de(summe, 1, True)} Pp. (muss 0 sein) · Summe der Wetten "
-                    f"{ui.de(sum(a for a in bekannt if a > 0), 1)} Pp. über / {ui.de(-sum(a for a in bekannt if a < 0), 1)} Pp. unter"))
+        out.append((L.GRUEN if abs(summe) < 0.0005 else L.ROT,
+                    f"Summe der Abweichungen {ui.de(summe, 3, True)} Pp. (muss 0 sein) · Summe der Wetten "
+                    f"{ui.de(sum(a for a in bekannt if a > 0), 3)} Pp. über / {ui.de(-sum(a for a in bekannt if a < 0), 3)} Pp. unter"))
     return out
 
 
@@ -391,38 +396,38 @@ def pruefe_portfolio(aktien: pd.DataFrame, total: float, sek: dict, index: dict,
         if z is not None:
             diff = ist - z
             stufe = L.GRUEN if abs(diff) <= TOL_GRUEN + 1e-9 else L.GELB if abs(diff) <= TOL_GELB + 1e-9 else L.ROT
-            pruef = f"Ist − Ziel {ui.de(diff, 2, True)} Pp."
+            pruef = f"Ist − Ziel {ui.de(diff, 3, True)} Pp."
         else:
             diff = None
             ok = aktiv >= RICHTUNG_MIN if e["richtung"] == "Übergewicht" else aktiv <= -RICHTUNG_MIN
             schwach = aktiv > 0 if e["richtung"] == "Übergewicht" else aktiv < 0
             stufe = L.GRUEN if ok else L.GELB if schwach else L.ROT
-            pruef = f"nur Richtung: aktiv {ui.de(aktiv, 2, True)} Pp."
+            pruef = f"nur Richtung: aktiv {ui.de(aktiv, 3, True)} Pp."
         usd_diff = (z - ist) / 100 * ak_w if z is not None and ak_w else None
-        titel = " · ".join(f"{t} {ui.de(w / ak_w * 100, 1)} %" for t, w in zip(teil["ticker"], teil["wert"])) if ak_w else ""
+        titel = " · ".join(f"{t} {ui.de(w / ak_w * 100, 3)} %" for t, w in zip(teil["ticker"], teil["wert"])) if ak_w else ""
         zeilen.append({"Sektor": s, "Richtung": RICHTUNG_KURZ[e["richtung"]],
-                       "Abw. geplant": "–" if e.get("abweichung") is None else f"{ui.de(e['abweichung'], 1, True)} Pp.",
-                       "Index": f"{ui.de(index[s], 2)} %", "Ziel": "–" if z is None else f"{ui.de(z, 2)} %",
-                       "Ist": f"{ui.de(ist, 2)} %", "Aktiv vs. Index": f"{ui.de(aktiv, 2, True)} Pp.",
-                       "Ist − Ziel": "–" if diff is None else f"{ui.de(diff, 2, True)} Pp.",
+                       "Abw. geplant": "–" if e.get("abweichung") is None else f"{ui.de(e['abweichung'], 3, True)} Pp.",
+                       "Index": f"{ui.de(index[s], 3)} %", "Ziel": "–" if z is None else f"{ui.de(z, 3)} %",
+                       "Ist": f"{ui.de(ist, 3)} %", "Aktiv vs. Index": f"{ui.de(aktiv, 3, True)} Pp.",
+                       "Ist − Ziel": "–" if diff is None else f"{ui.de(diff, 3, True)} Pp.",
                        "Fehlt (+) / zu viel (−)": "–" if usd_diff is None else f"{ui.de(usd_diff, 0, True)} USD",
                        "Prüfung": f"● {stufe}", "Anzahl Titel": len(teil), "Titel (Anteil am Aktienteil)": titel or "–",
                        "_stufe": stufe, "_ist": ist, "_ziel": z, "_index": index[s], "_diff": diff})
         if stufe != L.GRUEN:
             meld.append((stufe, f"{s}: {pruef} ({RICHTUNG_KURZ[e['richtung']]}"
-                                + (f", Ziel {ui.de(z, 2)} %, Ist {ui.de(ist, 2)} %)" if z is not None else ")")))
+                                + (f", Ziel {ui.de(z, 3)} %, Ist {ui.de(ist, 3)} %)" if z is not None else ")")))
     unbek = aktien[aktien["sektor"] == "Unbekannt"]
     if len(unbek):
         meld.append((L.ROT, "Sektor unbekannt: " + ", ".join(unbek["ticker"].astype(str)) + " – Sektor von Hand zuordnen"))
     quote = ak_w / total * 100 if total else 0.0
     q_stufe = L.GRUEN if abs(quote - aktien_soll) <= AKTIEN_TOL + 1e-9 else L.ROT
     if q_stufe != L.GRUEN:
-        meld.insert(0, (q_stufe, f"Aktienquote {ui.de(quote, 1)} % – Soll {ui.de(aktien_soll, 1)} % ±{ui.de(AKTIEN_TOL, 0)} Pp."))
+        meld.insert(0, (q_stufe, f"Aktienquote {ui.de(quote, 3)} % – Soll {ui.de(aktien_soll, 3)} % ±{ui.de(AKTIEN_TOL, 0)} Pp."))
     titel_df = pd.DataFrame({
         "Sektor": aktien["sektor"], "Ticker": aktien["ticker"], "Name": aktien.get("name", pd.Series([""] * len(aktien))).fillna(""),
         "Marktwert USD": aktien["wert"].map(lambda x: ui.de(x, 0)),
-        "% Aktienteil": (aktien["wert"] / ak_w * 100).map(lambda x: ui.de(x, 2)) if ak_w else "–",
-        "% Gesamt": (aktien["wert"] / total * 100).map(lambda x: ui.de(x, 2)) if total else "–",
+        "% Aktienteil": (aktien["wert"] / ak_w * 100).map(lambda x: ui.de(x, 3)) if ak_w else "–",
+        "% Gesamt": (aktien["wert"] / total * 100).map(lambda x: ui.de(x, 3)) if total else "–",
         "_w": aktien["wert"]})
     reihen = {s: i for i, s in enumerate(C.SEKTOREN + ["Unbekannt"])}
     titel_df = titel_df.assign(_r=titel_df["Sektor"].map(reihen)).sort_values(["_r", "_w"], ascending=[True, False])
@@ -441,10 +446,10 @@ def zeige_pruefung(ctx, aktien: pd.DataFrame, total: float, titel: str = "Sektor
     p = pruefe_portfolio(aktien, total, sa["sektoren"], idx, soll)
     st.markdown(f"#### {titel}")
     ui.kopf_kpis([
-        ("Aktienquote", f"{ui.de(p['quote'], 1)} %", f"Soll {ui.de(soll, 1)} % ±{ui.de(AKTIEN_TOL, 0)} Pp. · "
+        ("Aktienquote", f"{ui.de(p['quote'], 3)} %", f"Soll {ui.de(soll, 3)} % ±{ui.de(AKTIEN_TOL, 0)} Pp. · "
                                                        f"{ui.badge(p['quote_stufe'], 'ok' if p['quote_stufe'] == L.GRUEN else 'ausserhalb')}"),
         ("Sektoren eingehalten", f"{p['n'][L.GRUEN]} / 11", f"{p['n'][L.GELB]} knapp · {p['n'][L.ROT]} ausserhalb"),
-        ("Summe |Ist − Ziel|", f"{ui.de(p['summe_abw'], 1)} Pp.", f"Toleranz je Sektor ±{ui.de(TOL_GRUEN, 1)} Pp. (gelb bis ±{ui.de(TOL_GELB, 0)})"),
+        ("Summe |Ist − Ziel|", f"{ui.de(p['summe_abw'], 3)} Pp.", f"Toleranz je Sektor ±{ui.de(TOL_GRUEN, 1)} Pp. (gelb bis ±{ui.de(TOL_GELB, 0)})"),
         ("Benchmark", f"Index {pd.Timestamp(ctx.sek_index['stichtag']):%d.%m.}",
          "fortgeschrieben bis " + f"{ctx.sek_index['bis']:%d.%m.}" if ctx.sek_index["fortgeschrieben"] else "Stand Stichtag"),
     ])
@@ -474,8 +479,8 @@ def zeige_pruefung(ctx, aktien: pd.DataFrame, total: float, titel: str = "Sektor
                "geprüft (mind. ±0,25 Pp.). Neutrale Sektoren müssen auf ±0,5 Pp. am Index liegen.")
     if sammler is not None:
         sammler.h(titel)
-        sammler.text(f"Aktienquote {ui.de(p['quote'], 1)} % (Soll {ui.de(soll, 1)} %) · eingehalten {p['n'][L.GRUEN]}/11 · "
-                     f"Summe |Ist − Ziel| {ui.de(p['summe_abw'], 1)} Pp.")
+        sammler.text(f"Aktienquote {ui.de(p['quote'], 3)} % (Soll {ui.de(soll, 3)} %) · eingehalten {p['n'][L.GRUEN]}/11 · "
+                     f"Summe |Ist − Ziel| {ui.de(p['summe_abw'], 3)} Pp.")
         sammler.tabelle(p["sektoren"][["Sektor", "Richtung", "Index", "Ziel", "Ist", "Ist − Ziel", "Prüfung"]].assign(
             Prüfung=lambda d: d["Prüfung"].str.replace("● ", "")), [34, 20, 22, 22, 22, 28, 32])
     return p
@@ -605,9 +610,9 @@ def seite_sektoren(ctx, kurse: dict):
     ui.kopf_kpis([
         ("Benchmark (Indexgewichte)", f"Stichtag {pd.Timestamp(info['stichtag']):%d.%m.%Y}",
          html.escape(info["quelle"][:60]) + (f" · fortgeschrieben bis {info['bis']:%d.%m.}" if info["fortgeschrieben"] else "")),
-        ("Aktienquote (Taktik)", f"{ui.de(aktien_soll, 1)} %", f"Toleranz ±{ui.de(AKTIEN_TOL, 0)} Pp. · {html.escape(ctx.alloc['quelle_txt'][:50])}"),
-        ("Aktive Wetten", f"{ui.de(sum(abs(a) for a in bekannt), 1)} Pp.",
-         f"Summe {ui.de(sum(bekannt), 1, True)} Pp. (muss 0 sein) · {len(bekannt)}/11 mit Zahl"),
+        ("Aktienquote (Taktik)", f"{ui.de(aktien_soll, 3)} %", f"Toleranz ±{ui.de(AKTIEN_TOL, 0)} Pp. · {html.escape(ctx.alloc['quelle_txt'][:50])}"),
+        ("Aktive Wetten", f"{ui.de(sum(abs(a) for a in bekannt), 3)} Pp.",
+         f"Summe {ui.de(sum(bekannt), 3, True)} Pp. (muss 0 sein) · {len(bekannt)}/11 mit Zahl"),
         ("Ausstiegs-Trigger", f"{n_aus} ausgelöst", f"{sum(1 for t in trig if t['stufe'] == L.GELB)} knapp davor · "
                                                   f"{sum(1 for t in trig if t['stufe'] != L.KONTEXT)} automatisch überwacht"),
     ])
@@ -649,7 +654,7 @@ def seite_sektoren(ctx, kurse: dict):
             ss["sa_df"], hide_index=True, width="stretch", key=f"sa_ed_{ss.get('sa_ver', 0)}", disabled=["Sektor"],
             height=40 + 35 * 11,
             column_config={"Richtung": st.column_config.SelectboxColumn(options=RICHTUNGEN, required=True),
-                           "Abweichung (Pp.)": st.column_config.NumberColumn(min_value=-10.0, max_value=10.0, step=0.1, format="%.1f"),
+                           "Abweichung (Pp.)": st.column_config.NumberColumn(min_value=-10.0, max_value=10.0, step=0.001, format="%.3f"),
                            **{SCORE_NAMEN[k]: st.column_config.NumberColumn(min_value=-2.0, max_value=2.0, step=1.0, format="%.0f")
                               for k in SCORE_GEWICHTE}})
 
@@ -667,11 +672,11 @@ def seite_sektoren(ctx, kurse: dict):
         for s in sorted(C.SEKTOREN, key=lambda x: -(entwurf[x].get("abweichung") or 0)):
             e, a, sc = entwurf[s], entwurf[s].get("abweichung"), score(entwurf[s])
             tr = trig_e[s]
-            zeilen.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 1, True)} Pp.",
-                           "Index heute": f"{ui.de(idx[s], 2)} %", "Ziel % Aktien": "–" if z_e[s] is None else f"{ui.de(z_e[s], 2)} %",
-                           "Ziel % Gesamt": "–" if z_e[s] is None else f"{ui.de(z_e[s] * aktien_soll / 100, 2)} %",
+            zeilen.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 3, True)} Pp.",
+                           "Index heute": f"{ui.de(idx[s], 3)} %", "Ziel % Aktien": "–" if z_e[s] is None else f"{ui.de(z_e[s], 3)} %",
+                           "Ziel % Gesamt": "–" if z_e[s] is None else f"{ui.de(z_e[s] * aktien_soll / 100, 3)} %",
                            "Relativ": "–" if a is None or not idx[s] else f"{ui.de(a / idx[s] * 100, 0, True)} %",
-                           "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel (Scorecard)": f"{ui.de(reg_e[s], 1, True)} Pp.",
+                           "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel (Scorecard)": f"{ui.de(reg_e[s], 3, True)} Pp.",
                            "Trigger": f"● {tr['stufe']}" if tr["stufe"] != L.KONTEXT else "Text"})
         df = pd.DataFrame(zeilen)
         st.markdown("**Ergebnis: Zielgewichte** (Ziel % Gesamt = Ziel % Aktien × Aktienquote der Taktik; geht automatisch in die Taktik)")
@@ -684,7 +689,7 @@ def seite_sektoren(ctx, kurse: dict):
                             for s in C.SEKTOREN], key=lambda x: x[1])
             fig = go.Figure(go.Bar(x=[a for _, a in werte], y=[s for s, _ in werte], orientation="h",
                                    marker_color=["#2F855A" if a > 0 else "#DD6B20" if a < 0 else "#A0A8B4" for _, a in werte],
-                                   text=[ui.de(a, 1, True) if entwurf[s]["abweichung"] is not None else "Richtung" for s, a in werte],
+                                   text=[ui.de(a, 3, True) if entwurf[s]["abweichung"] is not None else "Richtung" for s, a in werte],
                                    textposition="outside"))
             lo, hi = min(a for _, a in werte), max(a for _, a in werte)
             fig.update_layout(height=360, margin=dict(l=8, r=30, t=10, b=8), plot_bgcolor="white", showlegend=False)
@@ -715,7 +720,7 @@ def seite_sektoren(ctx, kurse: dict):
             a, sc = e.get("abweichung"), score(e)
             fehlt = e["richtung"] != "Neutral" and len(e["begruendung"]) < 20
             bearb = ss.get(f"sa_bearb_{s}", False)
-            kopf = (f"{s} · {e['richtung']}" + ("" if a is None else f" {ui.de(a, 1, True)} Pp.")
+            kopf = (f"{s} · {e['richtung']}" + ("" if a is None else f" {ui.de(a, 3, True)} Pp.")
                     + ("" if sc is None else f" · Score {ui.de(sc, 2, True)}")
                     + (" · ✎ in Bearbeitung" if bearb else "") + (" · Begründung fehlt" if fehlt else ""))
             with st.expander(kopf, expanded=bearb):
@@ -782,15 +787,15 @@ def seite_sektoren(ctx, kurse: dict):
         for s in sorted(C.SEKTOREN, key=lambda x: -(sek[x].get("abweichung") or 0)):
             e, a, sc = sek[s], sek[s].get("abweichung"), score(sek[s])
             tr = next(t for t in trig if t["sektor"] == s)
-            zp.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 1, True)} Pp.",
-                       "Index heute": f"{ui.de(idx[s], 2)} %", "Ziel % Aktien": "–" if ziel[s] is None else f"{ui.de(ziel[s], 2)} %",
-                       "Ziel % Gesamt": "–" if ziel[s] is None else f"{ui.de(ziel[s] * aktien_soll / 100, 2)} %",
+            zp.append({"Sektor": s, "Richtung": e["richtung"], "Abweichung": "–" if a is None else f"{ui.de(a, 3, True)} Pp.",
+                       "Index heute": f"{ui.de(idx[s], 3)} %", "Ziel % Aktien": "–" if ziel[s] is None else f"{ui.de(ziel[s], 3)} %",
+                       "Ziel % Gesamt": "–" if ziel[s] is None else f"{ui.de(ziel[s] * aktien_soll / 100, 3)} %",
                        "Relativ": "–" if a is None or not idx[s] else f"{ui.de(a / idx[s] * 100, 0, True)} %",
-                       "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel": f"{ui.de(reg[s], 1, True)} Pp.",
+                       "Score": "–" if sc is None else ui.de(sc, 2, True), "Regel": f"{ui.de(reg[s], 3, True)} Pp.",
                        "Trigger": tr["stufe"] if tr["stufe"] != L.KONTEXT else "Text"})
         R.h("Sektorallokation" + (" (Startwerte, noch nicht gespeichert)" if sa["quelle"] == "Georg" else ""))
         R.text(f"Index: Stichtag {info['stichtag']} ({info['quelle']})" + (f", fortgeschrieben bis {info['bis']:%d.%m.%Y}" if info["fortgeschrieben"] else "")
-               + f" · Aktienquote {ui.de(aktien_soll, 1)} %")
+               + f" · Aktienquote {ui.de(aktien_soll, 3)} %")
         R.tabelle(pd.DataFrame(zp), [26, 20, 18, 18, 18, 18, 14, 12, 20, 16])
         for s in C.SEKTOREN:
             e = sek[s]
@@ -802,10 +807,10 @@ def seite_sektoren(ctx, kurse: dict):
         st.markdown("Eine Tabelle für das ganze Dashboard: Taktik, Risiko, Portfolio und Analyse rechnen mit diesen Gewichten. "
                     "Zwischen zwei Stichtagen schreibt die App die Gewichte mit den Kursen der SPDR-Sektor-ETFs fort "
                     "(neues Gewicht ∝ altes Gewicht × (1 + Sektorrendite)).")
-        zeilen = [{"Sektor": s, "ETF": C.SEKTOR_ETF[s], f"Stichtag {pd.Timestamp(info['stichtag']):%d.%m.}": f"{ui.de(info['basis'][s], 2)} %",
+        zeilen = [{"Sektor": s, "ETF": C.SEKTOR_ETF[s], f"Stichtag {pd.Timestamp(info['stichtag']):%d.%m.}": f"{ui.de(info['basis'][s], 3)} %",
                    "Rendite seit Stichtag": "–" if s not in info["rendite"] else f"{ui.de(info['rendite'][s] * 100, 1, True)} %",
-                   "Heute (fortgeschrieben)": f"{ui.de(idx[s], 2)} %", "Veränderung": f"{ui.de(idx[s] - info['basis'][s], 2, True)} Pp.",
-                   "Dozenten-App (fest)": f"{ui.de(C.SP500_GEWICHT_DOZENT[s], 2)} %"} for s in C.SEKTOREN]
+                   "Heute (fortgeschrieben)": f"{ui.de(idx[s], 3)} %", "Veränderung": f"{ui.de(idx[s] - info['basis'][s], 3, True)} Pp.",
+                   "Dozenten-App (fest)": f"{ui.de(C.SP500_GEWICHT_DOZENT[s], 3)} %"} for s in C.SEKTOREN]
         st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
         if info["index_rendite"] is not None:
             st.caption(f"S&P 500 (aus Sektoren) seit Stichtag ≈ {ui.de(info['index_rendite'] * 100, 1, True)} %. "
@@ -817,17 +822,17 @@ def seite_sektoren(ctx, kurse: dict):
             k1, k2 = st.columns([1, 2])
             datum = k1.date_input("Stichtag", value=pd.Timestamp.today().date(), format="DD.MM.YYYY")
             quelle = k2.text_input("Quelle (Pflicht)", placeholder="z. B. LSEG-Datei der Gruppe, Stand 30.11.2026 Schluss")
-            ed_i = st.data_editor(pd.DataFrame({"Sektor": C.SEKTOREN, "Gewicht %": [round(idx[s], 2) for s in C.SEKTOREN]}),
+            ed_i = st.data_editor(pd.DataFrame({"Sektor": C.SEKTOREN, "Gewicht %": [round(idx[s], 3) for s in C.SEKTOREN]}),
                                   hide_index=True, disabled=["Sektor"], key="si_ed",
                                   column_config={"Gewicht %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0,
-                                                                                             step=0.01, format="%.2f")})
+                                                                                             step=0.001, format="%.3f")})
             los_i = st.form_submit_button("Stichtag speichern", type="primary", icon=":material/save:", disabled=ctx.nur_lesen)
         if los_i:
             summe = float(ed_i["Gewicht %"].fillna(0).sum())
             if not quelle.strip():
                 st.error("Bitte die Quelle angeben.")
             elif not 98.5 <= summe <= 101.5:
-                st.error(f"Summe {ui.de(summe, 2)} % – sie muss ungefähr 100 % sein.")
+                st.error(f"Summe {ui.de(summe, 3)} % – sie muss ungefähr 100 % sein.")
             else:
                 z = jetzt()
                 ctx.speichern("sektor_index", [dict(zeit=z, person=ctx.person, stichtag=f"{datum:%Y-%m-%d}", sektor=r["Sektor"],
@@ -837,7 +842,7 @@ def seite_sektoren(ctx, kurse: dict):
         if liste:
             st.markdown("#### Gespeicherte Stichtage")
             st.dataframe(pd.DataFrame([{"Stichtag": x["stichtag"], "Quelle": x["quelle"], "Von": x["person"],
-                                        **{s: ui.de(x["gewichte"].get(s), 2) for s in C.SEKTOREN}} for x in liste]),
+                                        **{s: ui.de(x["gewichte"].get(s), 3) for s in C.SEKTOREN}} for x in liste]),
                          hide_index=True, width="stretch")
         R.h("Indexgewichte")
         R.tabelle(pd.DataFrame(zeilen), [28, 12, 22, 26, 28, 24, 26])
@@ -863,7 +868,7 @@ def seite_sektoren(ctx, kurse: dict):
             ss["sa_szen"] = pd.DataFrame({"Sektor": C.SEKTOREN, **{n: [float(r.get(s, 0)) for s in C.SEKTOREN]
                                                                     for n, r in SZEN_INDEX.items()}})
         ed_s = st.data_editor(ss["sa_szen"], hide_index=True, width="stretch", disabled=["Sektor"], key="sa_szen_ed",
-                              column_config={n: st.column_config.NumberColumn(f"{n} (Kurs %)", step=0.5, format="%.1f")
+                              column_config={n: st.column_config.NumberColumn(f"{n} (Kurs %)", step=0.001, format="%.3f")
                                              for n in SZEN_INDEX})
         st.caption("Kursannahmen bis zum Kauftag nach Georgs Kapitel 8.3 (B passt zum Bull-, D zum Bear-Szenario des IC); "
                    "Werte für die «übrigen Sektoren» sind ergänzte Annahmen und hier änderbar. Keine Prognose.")
@@ -874,23 +879,23 @@ def seite_sektoren(ctx, kurse: dict):
             gew_s[n], idx_r[n] = g, r
             abw_fest[n] = {s: fest[s] - g[s] for s in C.SEKTOREN}
         st.markdown("**Indexgewichte am Kauftag je Szenario**")
-        st.dataframe(pd.DataFrame([{"Sektor": s, "Heute": f"{ui.de(idx[s], 2)} %",
-                                    **{n.split(" ")[0]: f"{ui.de(gew_s[n][s], 2)} %" for n in SZEN_INDEX},
-                                    "Bandbreite": f"{ui.de(min(gew_s[n][s] for n in SZEN_INDEX), 1)}–{ui.de(max(gew_s[n][s] for n in SZEN_INDEX), 1)} %"}
+        st.dataframe(pd.DataFrame([{"Sektor": s, "Heute": f"{ui.de(idx[s], 3)} %",
+                                    **{n.split(" ")[0]: f"{ui.de(gew_s[n][s], 3)} %" for n in SZEN_INDEX},
+                                    "Bandbreite": f"{ui.de(min(gew_s[n][s] for n in SZEN_INDEX), 3)}–{ui.de(max(gew_s[n][s] for n in SZEN_INDEX), 3)} %"}
                                    for s in C.SEKTOREN] +
                                   [{"Sektor": "Index (Kurs)", "Heute": "", **{n.split(" ")[0]: f"{ui.de(idx_r[n], 1, True)} %" for n in SZEN_INDEX},
                                     "Bandbreite": ""}]), hide_index=True, width="stretch")
         st.markdown("**Abweichung zum Index am Kauftag, wenn wir die heutigen Zielzahlen fest kaufen**")
         plan = {s: sek[s].get("abweichung") or 0.0 for s in C.SEKTOREN}
-        zeilen_a = [{"Sektor": s, "Geplant": f"{ui.de(plan[s], 1, True)}",
-                     **{n.split(" ")[0]: f"{ui.de(abw_fest[n][s], 2, True)}" for n in SZEN_INDEX}} for s in C.SEKTOREN]
-        zeilen_a.append({"Sektor": "Summe |Abweichungen|", "Geplant": ui.de(sum(abs(v) for v in plan.values()), 1),
-                         **{n.split(" ")[0]: ui.de(sum(abs(v) for v in abw_fest[n].values()), 1) for n in SZEN_INDEX}})
+        zeilen_a = [{"Sektor": s, "Geplant": f"{ui.de(plan[s], 3, True)}",
+                     **{n.split(" ")[0]: f"{ui.de(abw_fest[n][s], 3, True)}" for n in SZEN_INDEX}} for s in C.SEKTOREN]
+        zeilen_a.append({"Sektor": "Summe |Abweichungen|", "Geplant": ui.de(sum(abs(v) for v in plan.values()), 3),
+                         **{n.split(" ")[0]: ui.de(sum(abs(v) for v in abw_fest[n].values()), 3) for n in SZEN_INDEX}})
         st.dataframe(pd.DataFrame(zeilen_a), hide_index=True, width="stretch")
         it = {n: abw_fest[n]["IT"] for n in SZEN_INDEX}
         st.caption("In Pp. des Aktienteils. Mit «Index am Stichtag + Abweichung» wäre die Abweichung in jedem Szenario gleich "
-                   f"der Spalte «Geplant». Grösste ungewollte Wette bei festen Zahlen: IT von {ui.de(min(it.values()), 1, True)} "
-                   f"bis {ui.de(max(it.values()), 1, True)} Pp.")
+                   f"der Spalte «Geplant». Grösste ungewollte Wette bei festen Zahlen: IT von {ui.de(min(it.values()), 3, True)} "
+                   f"bis {ui.de(max(it.values()), 3, True)} Pp.")
         R.h("Szenarien bis Kauftag (feste Zahlen)")
         R.tabelle(pd.DataFrame(zeilen_a), [44, 22, 22, 22, 22, 22])
 

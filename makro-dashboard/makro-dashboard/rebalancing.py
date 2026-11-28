@@ -186,17 +186,17 @@ def diagnose(ctx, B: dict, Z: dict, tol: dict) -> list[dict]:
         lo, hi = ips[f"{k}_min"], ips[f"{k}_max"]
         d = ist[k] - Z[k]
         if not lo - 1e-9 <= ist[k] <= hi + 1e-9:
-            add("Pflicht (IPS)", f"{name} ausserhalb des IPS-Bands", f"{_d(ist[k], 2)} %", f"{lo:g}–{hi:g} %",
-                f"{name} liegen ausserhalb des IPS-Bands.", f"auf die Taktik {_d(Z[k], 1)} % zurückführen")
+            add("Pflicht (IPS)", f"{name} ausserhalb des IPS-Bands", f"{_d(ist[k], 3)} %", f"{lo:g}–{hi:g} %",
+                f"{name} liegen ausserhalb des IPS-Bands.", f"auf die Taktik {_d(Z[k], 3)} % zurückführen")
         elif abs(d) > float(ips.get("rebal_toleranz") or 5) + 1e-9:
-            add("Pflicht (IPS)", f"{name}: Rebalancing-Toleranz überschritten", f"{_d(ist[k], 2)} %", f"{_d(Z[k], 1)} % ± {_d(ips.get('rebal_toleranz'), 1)}",
-                "Die IPS-Regel verlangt ein Rebalancing.", f"auf {_d(Z[k], 1)} % zurückführen")
+            add("Pflicht (IPS)", f"{name}: Rebalancing-Toleranz überschritten", f"{_d(ist[k], 3)} %", f"{_d(Z[k], 3)} % ± {_d(ips.get('rebal_toleranz'), 1)}",
+                "Die IPS-Regel verlangt ein Rebalancing.", f"auf {_d(Z[k], 3)} % zurückführen")
         elif abs(d) > tol["klasse"] + 1e-9:
-            add("Taktik", f"{name} weicht von der Taktik ab", f"{_d(ist[k], 2)} %", f"{_d(Z[k], 1)} % ± {_d(tol['klasse'], 1)}",
-                f"Abweichung {_d(d, 2, True)} Pp. – über der Toleranz, aber noch im IPS-Band.", "zurück auf die Taktik")
+            add("Taktik", f"{name} weicht von der Taktik ab", f"{_d(ist[k], 3)} %", f"{_d(Z[k], 3)} % ± {_d(tol['klasse'], 1)}",
+                f"Abweichung {_d(d, 3, True)} Pp. – über der Toleranz, aber noch im IPS-Band.", "zurück auf die Taktik")
         elif abs(d) > 0.5:
-            add("Hinweis", f"{name} leicht neben der Taktik", f"{_d(ist[k], 2)} %", f"{_d(Z[k], 1)} %",
-                f"Abweichung {_d(d, 2, True)} Pp. – innerhalb der Toleranz.", "kein Handel nötig")
+            add("Hinweis", f"{name} leicht neben der Taktik", f"{_d(ist[k], 3)} %", f"{_d(Z[k], 3)} %",
+                f"Abweichung {_d(d, 3, True)} Pp. – innerhalb der Toleranz.", "kein Handel nötig")
     if B["cash"] < -1:
         add("Pflicht (IPS)", "Cash negativ", f"{_d(B['cash'], 0)} USD", "≥ 0", "Mehr gekauft als Geld vorhanden.", "verkaufen")
     if B["kupons"] + B["zins"] > 0.001 * total:
@@ -224,17 +224,17 @@ def diagnose(ctx, B: dict, Z: dict, tol: dict) -> list[dict]:
             ziel_s = Z["sektoren"][s]
             akt_bm = ist_s - Z["bm_sek"].get(s, 0.0)
             if smax and abs(akt_bm) > smax + 1e-9:
-                add("Pflicht (IPS)", f"{s}: Sektorabweichung über dem IPS", f"{_d(ist_s, 2)} %",
-                    f"Benchmark {_d(Z['bm_sek'].get(s), 2)} % ± {_d(smax, 1)}", f"Aktiv {_d(akt_bm, 2, True)} Pp. gegen die Benchmark.",
-                    f"Richtung Ziel {_d(ziel_s, 2)} %")
+                add("Pflicht (IPS)", f"{s}: Sektorabweichung über dem IPS", f"{_d(ist_s, 3)} %",
+                    f"Benchmark {_d(Z['bm_sek'].get(s), 3)} % ± {_d(smax, 1)}", f"Aktiv {_d(akt_bm, 3, True)} Pp. gegen die Benchmark.",
+                    f"Richtung Ziel {_d(ziel_s, 3)} %")
             elif abs(ist_s - ziel_s) > tol["sektor"] + 1e-9:
-                add("Sektoren", f"{s} neben dem Sektorziel", f"{_d(ist_s, 2)} %", f"{_d(ziel_s, 2)} % ± {_d(tol['sektor'], 1)}",
-                    f"Ist − Ziel {_d(ist_s - ziel_s, 2, True)} Pp. (Kursbewegung oder neues Indexgewicht).", "Titel im Sektor pro rata anpassen")
+                add("Sektoren", f"{s} neben dem Sektorziel", f"{_d(ist_s, 3)} %", f"{_d(ziel_s, 3)} % ± {_d(tol['sektor'], 1)}",
+                    f"Ist − Ziel {_d(ist_s - ziel_s, 3, True)} Pp. (Kursbewegung oder neues Indexgewicht).", "Titel im Sektor pro rata anpassen")
             elif abs(ist_s - ziel_s) > 0.5:
-                add("Hinweis", f"{s} knapp neben dem Ziel", f"{_d(ist_s, 2)} %", f"{_d(ziel_s, 2)} %",
-                    f"Ist − Ziel {_d(ist_s - ziel_s, 2, True)} Pp. – innerhalb der Toleranz.", "beobachten")
+                add("Hinweis", f"{s} knapp neben dem Ziel", f"{_d(ist_s, 3)} %", f"{_d(ziel_s, 3)} %",
+                    f"Ist − Ziel {_d(ist_s - ziel_s, 3, True)} Pp. – innerhalb der Toleranz.", "beobachten")
             if sw[s] <= 0 and ziel_s > 0.5:
-                add("Sektoren", f"{s}: kein Titel im Bestand", "0 %", f"{_d(ziel_s, 2)} %",
+                add("Sektoren", f"{s}: kein Titel im Bestand", "0 %", f"{_d(ziel_s, 3)} %",
                     "Das Sektorziel ist ohne Titel nicht erreichbar.", "Titel kaufen (Vorschlag: grösste Indextitel)")
     # Titel
     tmax = ips.get("titel_max")
@@ -249,14 +249,14 @@ def diagnose(ctx, B: dict, Z: dict, tol: dict) -> list[dict]:
     for _, r in ak.iterrows():
         g = r["wert"] / total * 100
         if tmax and g > tmax + 1e-9:
-            add("Pflicht (IPS)", f"{r['ticker']} über dem Titel-Maximum", f"{_d(g, 2)} %", f"≤ {_d(tmax, 1)} %",
+            add("Pflicht (IPS)", f"{r['ticker']} über dem Titel-Maximum", f"{_d(g, 3)} %", f"≤ {_d(tmax, 1)} %",
                 "Klumpenrisiko laut IPS.", f"auf {_d(tmax - 0.1, 1)} % kürzen, Rest im Sektor verteilen")
         elif tmax and g > tmax - 0.5:
-            add("Hinweis", f"{r['ticker']} nahe am Titel-Maximum", f"{_d(g, 2)} %", f"≤ {_d(tmax, 1)} %", "Frühwarnung.", "beobachten")
+            add("Hinweis", f"{r['ticker']} nahe am Titel-Maximum", f"{_d(g, 3)} %", f"≤ {_d(tmax, 1)} %", "Frühwarnung.", "beobachten")
         if im_index and r["ticker"] not in im_index:
-            add("Pflicht (IPS)", f"{r['ticker']} nicht im S&P 500", f"{_d(g, 2)} %", "nur S&P-500-Titel", "Mandat der Plattform.", "verkaufen")
+            add("Pflicht (IPS)", f"{r['ticker']} nicht im S&P 500", f"{_d(g, 3)} %", "nur S&P-500-Titel", "Mandat der Plattform.", "verkaufen")
         if r["ticker"] in aus_t or r["sektor"] in aus_s:
-            add("Pflicht (IPS)", f"{r['ticker']} laut IPS ausgeschlossen", f"{_d(g, 2)} %", "ausgeschlossen", "Ausschluss im IPS.", "verkaufen")
+            add("Pflicht (IPS)", f"{r['ticker']} laut IPS ausgeschlossen", f"{_d(g, 3)} %", "ausgeschlossen", "Ausschluss im IPS.", "verkaufen")
     nmin = ips.get("aktien_anzahl_min")
     if nmin and len(ak) < nmin:
         add("Pflicht (IPS)", "Zu wenige Aktien", str(len(ak)), f"≥ {_d(nmin, 0)}", "Mindestzahl laut IPS.", "Titel ergänzen")
@@ -438,14 +438,14 @@ def plan(ctx, B: dict, Z: dict, methode: str, tol: dict, opt: dict, analyse_eing
             frei = c_rest - Z["cash"]          # zu viel Cash → in die Klassen mit Abstand zum Ziel bzw. pro rata Taktik
             z_kl["aktien"] += frei * Z["aktien"] / (Z["aktien"] + Z["anleihen"])
             z_kl["anleihen"] += frei * Z["anleihen"] / (Z["aktien"] + Z["anleihen"])
-            grund("_info", f"Cash {_d(c_rest, 2)} % lag ausserhalb der Toleranz – auf die Taktik ({_d(Z['cash'], 1)} %) gebracht.")
+            grund("_info", f"Cash {_d(c_rest, 3)} % lag ausserhalb der Toleranz – auf die Taktik ({_d(Z['cash'], 3)} %) gebracht.")
         elif methode == "pflicht" and not lo_c <= c_rest <= hi_c:
             frei = c_rest - min(max(Z["cash"], lo_c + PUFFER), hi_c - PUFFER)
             z_kl["aktien"] += frei * Z["aktien"] / (Z["aktien"] + Z["anleihen"])
             z_kl["anleihen"] += frei * Z["anleihen"] / (Z["aktien"] + Z["anleihen"])
         E_neu, T_neu = z_kl["aktien"] / 100 * total, z_kl["anleihen"] / 100 * total
-        kl_grund = {"aktien": f"Aktienquote {_d(ist['aktien'], 2)} → {_d(z_kl['aktien'], 2)} %",
-                    "anleihen": f"Treasury-Quote {_d(ist['anleihen'], 2)} → {_d(z_kl['anleihen'], 2)} %"}
+        kl_grund = {"aktien": f"Aktienquote {_d(ist['aktien'], 3)} → {_d(z_kl['aktien'], 3)} %",
+                    "anleihen": f"Treasury-Quote {_d(ist['anleihen'], 3)} → {_d(z_kl['anleihen'], 3)} %"}
         # 2) Sektoren
         sw = _sektor_werte(ak)
         ist_s = {s: (sw[s] / aw * 100 if aw else 0.0) for s in C.SEKTOREN}
@@ -527,7 +527,7 @@ def plan(ctx, B: dict, Z: dict, methode: str, tol: dict, opt: dict, analyse_eing
                     if werte[t] > tmax_usd + 1 and v <= tmax_usd + 1:
                         grund(t, "über dem Titel-Maximum → gekürzt")
                     if s in fest and abs(soll - ist_sum) > 1:
-                        grund(t, f"{s}: Sektor {_d(ist_s.get(s), 2)} → {_d(anteil[s], 2)} % des Aktienteils")
+                        grund(t, f"{s}: Sektor {_d(ist_s.get(s), 3)} → {_d(anteil[s], 3)} % des Aktienteils")
                     if abs(z_kl["aktien"] - ist["aktien"]) > 1e-9:
                         grund(t, kl_grund["aktien"])
                     if not gruende.get(t):
@@ -684,14 +684,14 @@ def vergleich_tabelle(ctx, V: dict, Z: dict) -> pd.DataFrame:
     def m(x, k):
         return V[x]["m"].get(k)
     z = [
-        ("Aktien", f"{_d(V['vorher']['aktien'], 2)} %", f"{_d(V['nachher']['aktien'], 2)} %", f"Taktik {_d(Z['aktien'], 1)} % · IPS {ips['aktien_min']:g}–{ips['aktien_max']:g}"),
-        ("Treasuries", f"{_d(V['vorher']['treas'], 2)} %", f"{_d(V['nachher']['treas'], 2)} %", f"Taktik {_d(Z['anleihen'], 1)} % · IPS {ips['anleihen_min']:g}–{ips['anleihen_max']:g}"),
-        ("Cash", f"{_d(V['vorher']['cash_pct'], 2)} %", f"{_d(V['nachher']['cash_pct'], 2)} %", f"Taktik {_d(Z['cash'], 1)} % · IPS {ips['cash_min']:g}–{ips['cash_max']:g}"),
+        ("Aktien", f"{_d(V['vorher']['aktien'], 3)} %", f"{_d(V['nachher']['aktien'], 3)} %", f"Taktik {_d(Z['aktien'], 3)} % · IPS {ips['aktien_min']:g}–{ips['aktien_max']:g}"),
+        ("Treasuries", f"{_d(V['vorher']['treas'], 3)} %", f"{_d(V['nachher']['treas'], 3)} %", f"Taktik {_d(Z['anleihen'], 3)} % · IPS {ips['anleihen_min']:g}–{ips['anleihen_max']:g}"),
+        ("Cash", f"{_d(V['vorher']['cash_pct'], 3)} %", f"{_d(V['nachher']['cash_pct'], 3)} %", f"Taktik {_d(Z['cash'], 3)} % · IPS {ips['cash_min']:g}–{ips['cash_max']:g}"),
         ("Duration Treasuries", f"{_d(V['vorher']['dur'], 2)} J.", f"{_d(V['nachher']['dur'], 2)} J.", f"Taktik {_d(Z['duration'], 1)} J. · IPS {_d(ips['duration_min'], 0)}–{_d(ips['duration_max'], 0)}"),
         ("Sektoren im Ziel", f"{V['vorher']['sek']['n'][L.GRUEN]} / 11", f"{V['nachher']['sek']['n'][L.GRUEN]} / 11", "±0,5 Pp. grün"),
-        ("Σ |Ist − Ziel| Sektoren", f"{_d(V['vorher']['sek']['summe_abw'], 2)} Pp.", f"{_d(V['nachher']['sek']['summe_abw'], 2)} Pp.", "kleiner = näher am Plan"),
-        ("Grösster Titel", f"{V['vorher']['gross'][0]} {_d(V['vorher']['gross'][1], 2)} %" if V["vorher"]["gross"] else "–",
-         f"{V['nachher']['gross'][0]} {_d(V['nachher']['gross'][1], 2)} %" if V["nachher"]["gross"] else "–", f"IPS ≤ {_d(ips.get('titel_max'), 1)} %"),
+        ("Σ |Ist − Ziel| Sektoren", f"{_d(V['vorher']['sek']['summe_abw'], 3)} Pp.", f"{_d(V['nachher']['sek']['summe_abw'], 3)} Pp.", "kleiner = näher am Plan"),
+        ("Grösster Titel", f"{V['vorher']['gross'][0]} {_d(V['vorher']['gross'][1], 3)} %" if V["vorher"]["gross"] else "–",
+         f"{V['nachher']['gross'][0]} {_d(V['nachher']['gross'][1], 3)} %" if V["nachher"]["gross"] else "–", f"IPS ≤ {_d(ips.get('titel_max'), 1)} %"),
         ("Anzahl Aktien", str(V["vorher"]["n"]), str(V["nachher"]["n"]), f"IPS ≥ {_d(ips.get('aktien_anzahl_min'), 0)}"),
         ("Active Share Aktien", f"{_d(ka('vorher', 'active_share'), 1)} %", f"{_d(ka('nachher', 'active_share'), 1)} %",
          f"IPS {_d(ips.get('active_share_min'), 0)}–{_d(ips.get('active_share_max'), 0)} %"),
@@ -737,8 +737,8 @@ def report(ctx, B: dict, Z: dict, monat_id: str, diag: list[dict], pl: dict, V: 
     R.h("1. Ausgangslage")
     R.kpis([
         ("Portfoliowert", f"{ui.de(B['total'], 0)} USD", f"Start {ui.de(B['kapital'], 0)} USD · {ui.de((B['total'] / B['kapital'] - 1) * 100, 2, True)} %"),
-        ("Aktien / Treasuries / Cash", f"{_d(V['vorher']['aktien'], 1)} / {_d(V['vorher']['treas'], 1)} / {_d(V['vorher']['cash_pct'], 1)} %" if V else "–",
-         f"Ziel {_d(Z['aktien'], 1)} / {_d(Z['anleihen'], 1)} / {_d(Z['cash'], 1)} %"),
+        ("Aktien / Treasuries / Cash", f"{_d(V['vorher']['aktien'], 3)} / {_d(V['vorher']['treas'], 3)} / {_d(V['vorher']['cash_pct'], 3)} %" if V else "–",
+         f"Ziel {_d(Z['aktien'], 3)} / {_d(Z['anleihen'], 3)} / {_d(Z['cash'], 3)} %"),
         ("Duration", f"{_d(duration(B['tr']), 2)} J.", f"Ziel {_d(Z['duration'], 1)} J."),
         ("Kupons + Zins auf Cash", f"{ui.de(B['kupons'] + B['zins'], 0)} USD", "seit Kauf, liegen als Cash"),
     ])
@@ -752,7 +752,7 @@ def report(ctx, B: dict, Z: dict, monat_id: str, diag: list[dict], pl: dict, V: 
         ("Methode", METHODEN.get(pl.get("methode"), "").split(" (")[0], "Empfehlung der App: "
          + ({"keins": "kein Rebalancing"}.get(emp) or METHODEN.get(emp, emp).split(" (")[0])),
         ("Trades", str(int((df["delta_menge"] != 0).sum())),
-         f"Umschlag {ui.de(df['delta_wert'].abs().sum() / 2 / pl['total'] * 100, 1)} % · Cash danach {ui.de(pl['cash_nach'] / pl['total'] * 100, 2)} %"),
+         f"Umschlag {ui.de(df['delta_wert'].abs().sum() / 2 / pl['total'] * 100, 1)} % · Cash danach {ui.de(pl['cash_nach'] / pl['total'] * 100, 3)} %"),
         ("IPS-Prüfungen verletzt", f"{V['vorher']['n_gap'].get(L.ROT, '–')} → {V['nachher']['n_gap'].get(L.ROT, '–')}" if V else "–",
          f"Sektoren im Ziel {V['vorher']['sek']['n'][L.GRUEN]} → {V['nachher']['sek']['n'][L.GRUEN]} von 11" if V else ""),
     ])
@@ -772,7 +772,7 @@ def report(ctx, B: dict, Z: dict, monat_id: str, diag: list[dict], pl: dict, V: 
     opt = pl.get("opt") or {}
     R.text(f"Gewählt: {METHODEN.get(pl.get('methode'), pl.get('methode'))}. Toleranzen: Anlageklassen ±{_d(tol.get('klasse'), 1)} Pp., "
            f"Sektoren ±{_d(tol.get('sektor'), 1)} Pp. des Aktienteils, Duration ±{_d(tol.get('duration'), 1)} J. · Mindest-Handelsgrösse "
-           f"{_d(opt.get('min_trade'), 2)} % des Portfolios · Sektoren ohne Titel: {'grösste Indextitel kaufen' if opt.get('neue_titel', True) else 'nicht auffüllen'}.")
+           f"{_d(opt.get('min_trade'), 3)} % des Portfolios · Sektoren ohne Titel: {'grösste Indextitel kaufen' if opt.get('neue_titel', True) else 'nicht auffüllen'}.")
     R.text(REGELN_TEXT, klein=True)
     for i_ in pl.get("info", []):
         R.text(f"Hinweis: {i_}", klein=True)
@@ -801,7 +801,7 @@ def report(ctx, B: dict, Z: dict, monat_id: str, diag: list[dict], pl: dict, V: 
             "Kurs": t["kurs"].map(lambda x: ui.de(x, 2)), "Betrag USD": t["delta_wert"].map(lambda x: ui.de(x, 0, True)),
             "Grund": t["grund"], **({"Begründung": t["begruendung"]} if mit_b else {})}),
             breiten=[16, 22, 26, 20, 20, 22, 18, 24, 120] + ([50] if mit_b else []), max_zeilen=300)
-    R.text(f"Cash danach {ui.de(pl['cash_nach'], 0)} USD ({_d(pl['cash_nach'] / pl['total'] * 100, 2)} %). Stück ganz, Nominal auf 100 USD "
+    R.text(f"Cash danach {ui.de(pl['cash_nach'], 0)} USD ({_d(pl['cash_nach'] / pl['total'] * 100, 3)} %). Stück ganz, Nominal auf 100 USD "
            "abgerundet; Verkäufe werden vor den Käufen gebucht.", klein=True)
     if V and V["nachher"]["gap"]:
         R.neue_seite()
@@ -912,11 +912,11 @@ def seite_rebalancing(ctx, fred: dict, lade_kurse, team: list[str] | None = None
             "- **Duration:** Anleihen altern (≈ −0,08 J. pro Monat); Abweichung von der Taktik über eine Umschichtung kurz ↔ lang.\n"
             "- **Februar (letzter Monat):** unbeabsichtigte Wetten abbauen, Tracking Error bewusst steuern.")
         k1, k2, k3, k4 = st.columns(4)
-        tol = dict(klasse=k1.number_input("Toleranz Anlageklassen (Pp.)", 0.25, 10.0, float(s.get("taktik_tol", 2.0)), 0.25, key="rb_tk",
+        tol = dict(klasse=k1.number_input("Toleranz Anlageklassen (Pp.)", 0.25, 10.0, float(s.get("taktik_tol", 2.0)), 0.25, format="%.3f", key="rb_tk",
                                           help="Standard = Monitoring «Abweichung von der Taktik: Prüfen ab»; IPS-Pflicht ab Rebalancing-Toleranz"),
-                   sektor=k2.number_input("Toleranz Sektoren (Pp. Aktienteil)", 0.1, 5.0, float(s.get("sektor_tol", 1.0)), 0.1, key="rb_ts"),
-                   duration=k3.number_input("Toleranz Duration (J.)", 0.1, 3.0, float(s.get("duration_tol", 1.0)), 0.1, key="rb_td"))
-        min_trade = k4.number_input("Mindest-Handelsgrösse (% Portfolio)", 0.0, 1.0, 0.02, 0.01, format="%.2f", key="rb_min",
+                   sektor=k2.number_input("Toleranz Sektoren (Pp. Aktienteil)", 0.1, 5.0, float(s.get("sektor_tol", 1.0)), 0.1, format="%.3f", key="rb_ts"),
+                   duration=k3.number_input("Toleranz Duration (J.)", 0.1, 3.0, float(s.get("duration_tol", 1.0)), 0.1, format="%.3f", key="rb_td"))
+        min_trade = k4.number_input("Mindest-Handelsgrösse (% Portfolio)", 0.0, 1.0, 0.02, 0.01, format="%.3f", key="rb_min",
                                     help="Trades darunter werden weggelassen (ausser Verkäufe auf 0). 0,02 % = 2'000 USD bei 10 Mio.")
     tol = dict(klasse=ss.get("rb_tk", float(s.get("taktik_tol", 2.0))), sektor=ss.get("rb_ts", float(s.get("sektor_tol", 1.0))),
                duration=ss.get("rb_td", float(s.get("duration_tol", 1.0))))
@@ -930,8 +930,8 @@ def seite_rebalancing(ctx, fred: dict, lade_kurse, team: list[str] | None = None
     n_p = sum(1 for d in diag if d["prio"] == "Pflicht (IPS)")
     ui.kopf_kpis([
         ("Portfoliowert", f"{ui.de(total, 0)} USD", f"{ui.de((total / B['kapital'] - 1) * 100, 2, True)} % seit Start · Bewertung {B['datum']:%d.%m.%Y}"),
-        ("Aktien / Treasuries / Cash", f"{ist[0]:.1f} / {ist[1]:.1f} / {ist[2]:.1f} %".replace(".", ","),
-         f"Ziel {_d(Z['aktien'], 1)} / {_d(Z['anleihen'], 1)} / {_d(Z['cash'], 1)} %"),
+        ("Aktien / Treasuries / Cash", f"{_d(ist[0], 3)} / {_d(ist[1], 3)} / {_d(ist[2], 3)} %",
+         f"Ziel {_d(Z['aktien'], 3)} / {_d(Z['anleihen'], 3)} / {_d(Z['cash'], 3)} %"),
         ("Pflicht-Auslöser (IPS)", f"<span style='color:{ui.FARBE[L.ROT] if n_p else ui.FARBE[L.GRUEN]}'>{n_p}</span>",
          f"{sum(1 for d in diag if d['prio'] in ('Taktik', 'Sektoren', 'Titel', 'Anleihen', 'Cash'))} weitere über der Toleranz"),
         ("Empfehlung", {"keins": "kein Rebalancing"}.get(emp, METHODEN.get(emp, emp)).split(" (")[0], emp_txt[:110]),
@@ -987,7 +987,7 @@ def seite_rebalancing(ctx, fred: dict, lade_kurse, team: list[str] | None = None
                "andere rechnet die App. Kurse in der Vorschau = letzter Schlusskurs bzw. Modellkurs; gebucht wird zum Eröffnungskurs.")
     ed = st.data_editor(ansicht, hide_index=True, width="stretch", key=f"rb_ed_{abs(hash(ver)) % 10**8}",
                         disabled=["Art", "Klasse", "Titel", "Sektor", "Ist", "Ist %", "Ziel %", "Δ", "Kurs (Vorschau)", "Betrag USD", "Grund"],
-                        column_config={"Ist %": st.column_config.NumberColumn(format="%.2f"), "Ziel %": st.column_config.NumberColumn(format="%.2f"),
+                        column_config={"Ist %": st.column_config.NumberColumn(format="%.3f"), "Ziel %": st.column_config.NumberColumn(format="%.3f"),
                                        "Ist": st.column_config.NumberColumn(format="%.0f"),
                                        "Ziel Stück/Nominal": st.column_config.NumberColumn(min_value=0.0, format="%.0f"),
                                        "Δ": st.column_config.NumberColumn(format="%+.0f"),
@@ -1021,7 +1021,7 @@ def seite_rebalancing(ctx, fred: dict, lade_kurse, team: list[str] | None = None
         ("Käufe", f"{ui.de(t_.loc[t_['delta_wert'] > 0, 'delta_wert'].sum(), 0)} USD",
          f"Umschlag {ui.de(t_['delta_wert'].abs().sum() / 2 / total * 100, 1)} % des Portfolios"),
         ("Cash danach", f"<span style='color:{ui.FARBE[L.ROT] if pl['cash_nach'] < 0 else 'inherit'}'>{ui.de(pl['cash_nach'], 0)} USD</span>",
-         f"{_d(pl['cash_nach'] / total * 100, 2)} % · Ziel {_d(Z['cash'], 1)} %"),
+         f"{_d(pl['cash_nach'] / total * 100, 3)} % · Ziel {_d(Z['cash'], 3)} %"),
     ])
 
     # --- 3 Vorher / Nachher --------------------------------------------------------------------
@@ -1154,8 +1154,8 @@ def _buchen(ctx, B, Z, monat, diag, pl, V, doku, bk, datum, kinfo):
                                      * np.where(t["klasse"] == "Treasury", 0.01, 1)).sum()), 0),
                kauf=round(float((t["delta_menge"].clip(lower=0) * t["kurs_buchung"].fillna(t["kurs"])
                                  * np.where(t["klasse"] == "Treasury", 0.01, 1)).sum()), 0),
-               vorher=f"{_d(V['vorher']['aktien'], 1)}/{_d(V['vorher']['treas'], 1)}/{_d(V['vorher']['cash_pct'], 1)}" if V else "",
-               nachher=f"{_d(V['nachher']['aktien'], 1)}/{_d(V['nachher']['treas'], 1)}/{_d(V['nachher']['cash_pct'], 1)}" if V else "",
+               vorher=f"{_d(V['vorher']['aktien'], 3)}/{_d(V['vorher']['treas'], 3)}/{_d(V['vorher']['cash_pct'], 3)}" if V else "",
+               nachher=f"{_d(V['nachher']['aktien'], 3)}/{_d(V['nachher']['treas'], 3)}/{_d(V['nachher']['cash_pct'], 3)}" if V else "",
                ips_rot_vorher=V["vorher"]["n_gap"].get(L.ROT) if V else None, ips_rot_nachher=V["nachher"]["n_gap"].get(L.ROT) if V else None,
                report=name, datei_id=datei_id, entscheid=f"rb{batch}")
     try:
