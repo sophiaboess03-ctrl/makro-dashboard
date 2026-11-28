@@ -22,6 +22,7 @@ SEITEN_BEREICHE = {
     "gesamtbild": "Gesamtbild",
     "ic": "Investment Committee",
     "portfolio": "Portfolio",
+    "benchmark": "Benchmark-Vergleich",
     "unternehmen": "Unternehmen",
     "analyse": "Analyse",
     "maerkte": "Märkte heute",

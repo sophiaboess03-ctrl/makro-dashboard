@@ -348,7 +348,8 @@ def seite_portfolio(ctx, fred: dict, lade_kurse, markt_tab: pd.DataFrame | None)
                               legend=dict(orientation="h", y=-0.15))
             fig.update_yaxes(title="Index (Start = 100)", gridcolor="#EEF0F3")
             ui.zeige(fig)
-            st.caption("Portfolio inkl. Cash und vereinfachter Kuponerträge; S&P 500 als Kursindex ohne Dividenden.")
+            st.caption("Portfolio inkl. Cash und vereinfachter Kuponerträge; S&P 500 als Kursindex ohne Dividenden. "
+                       "Vergleich mit dem Benchmark-Portfolio des Dozenten: Seite «Benchmark-Vergleich».")
         else:
             st.caption("Der Verlauf erscheint nach der ersten Transaktion.")
 
@@ -522,7 +523,8 @@ def _performance(ctx, tx, kurse, fred, kapital, lade_kurse):
     except Exception as ex:  # noqa: BLE001
         st.caption(f"IPS-Abgleich nicht möglich: {type(ex).__name__}")
     st.caption("Mehr Details (Einzeltitel, Korrelationen, Benchmark & Active Share, Was-wäre-wenn) auf der Seite «Analyse» mit "
-               "«Neu → Aus dem aktuellen Bestand».")
+               "«Neu → Aus dem aktuellen Bestand». Unser Portfolio direkt neben dem Benchmark-Portfolio (Wert in USD, Mehrrendite "
+               "und woher sie kommt, Titel für Titel): Seite «Benchmark-Vergleich» (Überblick).")
 
 
 def _cash_zins_bereich(cz: pd.DataFrame, cash: float, fred: dict, ctx):

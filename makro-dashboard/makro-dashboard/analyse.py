@@ -1702,8 +1702,9 @@ def _treasury_bereich():
                                         "Treasuries %, die Liste neu übernehmen.")
 
 
-def _sektor_bereich(ctx):
-    """Sektorgewichtung des aktiven Analyseportfolios: automatisch gerechnet, im Formular anpassbar."""
+def _sektor_bereich(ctx, eigene_ansicht: bool = False):
+    """Sektorgewichtung des aktiven Analyseportfolios: automatisch gerechnet, im Formular anpassbar.
+    eigene_ansicht (Update 18): als Ansicht «Sektorgewichte anpassen» oben in der Analyse – mit Grafik und Titelliste."""
     import sektoren as SK
 
     ss = st.session_state
@@ -1715,10 +1716,19 @@ def _sektor_bereich(ctx):
     except Exception:  # noqa: BLE001
         ziele_sa = {}
     ziele = {s: (ziele_sa.get(s) if ziele_sa.get(s) is not None else index.get(s)) for s in C.SEKTOREN}
-    with st.expander("Sektorgewichtung dieses Portfolios – automatisch gerechnet, anpassbar", icon=":material/donut_small:",
-                     expanded=bool(ss.get("an_sek_vorschlag"))):
+    if eigene_ansicht:
+        rahmen = st.container(border=True)
+    else:
+        rahmen = st.expander("Sektorgewichte anpassen – Aktien werden automatisch umgerechnet (auch als eigene Ansicht oben)",
+                             icon=":material/donut_small:", expanded=bool(ss.get("an_sek_vorschlag")))
+    with rahmen:
+        if eigene_ansicht:
+            st.markdown("**Sektorgewichte anpassen** · für das oben gewählte Analyseportfolio. «Neu %» eintippen und "
+                        "«Sektorgewichte anwenden» – die Aktien des Sektors werden im gleichen Verhältnis grösser bzw. kleiner "
+                        "(ganze Stücke). Danach oben «Speichern».")
         if not ist:
-            st.caption("Sobald Aktien mit Betrag eingetragen (und übernommen) sind, erscheint hier die Sektorgewichtung.")
+            st.caption("Sobald Aktien mit Betrag eingetragen (und übernommen) sind, erscheint hier die Sektorgewichtung"
+                       + (" – Titel in der Ansicht «Portfolio bearbeiten & analysieren» eintragen." if eigene_ansicht else "."))
             return
         vs = ss.get("an_sek_vorschlag")
         if vs and vs.get("ver") != ss.get("an_ak_ver", 0):
@@ -1782,6 +1792,56 @@ def _sektor_bereich(ctx):
         st.caption("Wirkt auf die übernommene Eingabe oben – offene Änderungen in der Aktien-Tabelle zuerst übernehmen. "
                    + (f"Ohne Titel: {', '.join(f'{s} (Ziel {ui.de(ziele[s], 1)} %)' for s in fehlen)} – dafür oben Titel "
                       "hinzufügen." if fehlen else "Alle Sektoren mit Zielgewicht sind vertreten."))
+    if eigene_ansicht:
+        _sektor_ansicht_extra(ctx, df, ist, summe, index, ziele_sa)
+
+
+def _sektor_ansicht_extra(ctx, df: pd.DataFrame, ist: dict, summe: float, index: dict, ziele_sa: dict):
+    """Ansicht «Sektorgewichte anpassen»: Grafik Ist / Ziel / Benchmark und die Titel je Sektor (zeigt die Wirkung sofort)."""
+    try:
+        import benchmark as BM
+
+        bm = BM.sektor_gewichte("gueltig")
+    except Exception:  # noqa: BLE001
+        bm = {}
+    b = budget(st.session_state)
+    sek = [s for s in C.SEKTOREN if s in ist or (ziele_sa.get(s) or 0) > 0 or (bm.get(s) or 0) > 0]
+    fig = go.Figure([
+        go.Bar(name="Ist (dieses Portfolio)", x=sek, y=[ist.get(s, 0.0) for s in sek], marker_color=ui.BLAU,
+               text=[ui.de(ist.get(s, 0.0), 1) for s in sek], textposition="outside"),
+        go.Bar(name="Ziel (Sektorallokation)", x=sek, y=[ziele_sa.get(s) for s in sek], marker_color="#94A3B8"),
+        go.Bar(name="Benchmark (Dozent)", x=sek, y=[bm.get(s) if bm else index.get(s) for s in sek], marker_color=BENCH_FARBE)])
+    fig.update_layout(barmode="group", height=330, margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", y=-0.2))
+    fig.update_yaxes(ticksuffix=" %")
+    ui.zeige(fig)
+    ui.kopf_kpis([
+        ("Aktien investiert", f"{ui.de(summe, 0)} USD", f"Aktienbudget {ui.de(b['budget_a'], 0)} USD · Rest {ui.de(b['rest_a'], 0)} USD"),
+        ("Sektoren vertreten", f"{len([s for s in ist if s in C.SEKTOREN])} / {len(C.SEKTOREN)}",
+         "fehlt: " + (", ".join(s for s in C.SEKTOREN if s not in ist) or "keiner")),
+        ("Σ |Ist − Ziel|", f"{ui.de(sum(abs(ist.get(s, 0.0) - ziele_sa[s]) for s in C.SEKTOREN if ziele_sa.get(s) is not None), 1)} Pp.",
+         "über alle Sektoren mit Zielzahl"),
+        ("Sektor-Active-Share", f"{ui.de(sum(abs(ist.get(s, 0.0) - (bm.get(s) or 0)) for s in C.SEKTOREN) / 2, 1)} %" if bm else "–",
+         "½ Σ |Ist − Benchmark| – Untergrenze des Active Share"),
+    ])
+    st.markdown("**Titel je Sektor** · so sieht der Aktienteil aus (ändert sich mit «Sektorgewichte anwenden»)")
+    zeilen = []
+    for t, s, k, m, b_ in zip(df["Ticker"], df["Sektor"], df["Kurs USD"], df["Menge"], df["Betrag USD"]):
+        v = _num(b_) or 0.0
+        if _txt(t).strip() and v > 0:
+            zeilen.append({"Sektor": _sektor_von(s), "Ticker": _txt(t).strip(), "Stück": _num(m), "Kurs USD": _num(k), "Betrag USD": v,
+                           "% Aktienteil": v / summe * 100 if summe else None,
+                           "% Gesamt": v / b["kapital"] * 100 if b["kapital"] else None})
+    if zeilen:
+        t_df = pd.DataFrame(zeilen)
+        reihe = {s: i for i, s in enumerate(C.SEKTOREN + [UNBEKANNT])}
+        t_df = t_df.assign(_o=t_df["Sektor"].map(lambda s: reihe.get(s, 99))).sort_values(["_o", "Betrag USD"], ascending=[True, False])
+        st.dataframe(t_df.drop(columns="_o"), hide_index=True, width="stretch", height=420, column_config={
+            "Stück": st.column_config.NumberColumn(format="%,.0f"), "Kurs USD": st.column_config.NumberColumn(format="%.2f"),
+            "Betrag USD": st.column_config.NumberColumn(format="%,.0f"),
+            "% Aktienteil": st.column_config.NumberColumn(format="%.2f %%"), "% Gesamt": st.column_config.NumberColumn(format="%.2f %%")})
+    st.caption("Titel hinzufügen oder entfernen in «Portfolio bearbeiten & analysieren». Änderungen bleiben beim Wechsel der Ansicht "
+               "erhalten; gespeichert wird mit «Speichern» oben (neue Version des Analyseportfolios). Für eine Variante zuerst "
+               "«Neu → Kopie des aktiven Portfolios».")
 
 
 def _ak_aenderung(key: str):
@@ -2818,11 +2878,25 @@ def seite_analyse(ctx, fred: dict, lade_kurse):
         ss.update(an_p_ak=float(ctx.alloc["aktien"]), an_p_tr=float(ctx.alloc["anleihen"]), an_p_ca=float(ctx.alloc["cash"]))
     ss.setdefault("an_bezug", GESAMT)
 
-    ansicht = st.segmented_control("Ansicht", ["bearbeiten", "anleihen", "vergleich"], default="bearbeiten", key="an_ansicht",
+    ansicht = st.segmented_control("Ansicht", ["bearbeiten", "sektoren", "anleihen", "vergleich"], default="bearbeiten",
+                                   key="an_ansicht",
                                    format_func=lambda x: {"bearbeiten": "Portfolio bearbeiten & analysieren",
+                                                          "sektoren": "Sektorgewichte anpassen",
                                                           "anleihen": "Anleihen & Cash",
                                                           "vergleich": "Portfolios vergleichen"}[x],
                                    label_visibility="collapsed") or "bearbeiten"
+    if ansicht == "sektoren":       # Update 18: Sektorgewichte eines Analyseportfolios als eigene Ansicht (Wunsch Sophy 28.11.)
+        _portfolio_leiste(ctx, tab, kapital_std, ctx.alloc, gs, fred, lade_kurse)
+        for k_ in ("an_meldung", "an_meldung_info"):
+            if m := ss.pop(k_, None):
+                (st.warning if k_ == "an_meldung" else st.info)(m)
+        for m_ in ss.pop("an_budget_meld", []):
+            st.info(m_, icon=":material/tune:")
+        _sektor_bereich(ctx, eigene_ansicht=True)
+        for k in WIDGET_KEYS:
+            if k in ss:
+                ss["_" + k] = ss[k]
+        return
     if ansicht == "anleihen":       # Update 12: frühere Seite «Anleihen & Duration» + Zins auf Cash, für das aktive Portfolio
         import anleihen as AN
 

@@ -32,6 +32,7 @@ import export
 import ic
 import analyse
 import benchmark as benchmark_mod
+import benchmark_vergleich
 import anleihen
 import dateien
 import dozent
@@ -454,6 +455,8 @@ seiten = {
     "Überblick": [st.Page(_doks(_seite_gesamtbild, "gesamtbild"), title="Gesamtbild", icon=M("dashboard"), url_path="gesamtbild", default=True),
                   st.Page(_doks(lambda: ic.seite_ic(ctx, markt_tab, TEAM), "ic"), title="Investment Committee", icon=M("gavel"), url_path="ic"),
                   st.Page(_doks(_seite_portfolio, "portfolio"), title="Portfolio", icon=M("account_balance_wallet"), url_path="portfolio"),
+                  st.Page(_doks(lambda: benchmark_vergleich.seite_benchmark(ctx, fred, markt.lade_yahoo), "benchmark"),
+                          title="Benchmark-Vergleich", icon=M("compare_arrows"), url_path="benchmark"),
                   st.Page(_doks(lambda: unternehmen_seite.seite_unternehmen(ctx, fred, markt.lade_yahoo), "unternehmen"),
                           title="Unternehmen", icon=M("domain"), url_path="unternehmen"),
                   st.Page(_doks(lambda: analyse.seite_analyse(ctx, fred, markt.lade_yahoo), "analyse"), title="Analyse",
